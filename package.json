@@ -1,0 +1,63 @@
+{
+  "name": "pdf-editor",
+  "version": "1.0.0",
+  "description": "PDF 编辑器 - 基于 Electron 的完整标注编辑器",
+  "main": "out/main/index.js",
+  "author": "",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "predev": "node scripts/sync-pdfjs-assets.mjs",
+    "dev": "electron-vite dev",
+    "prebuild": "node scripts/sync-pdfjs-assets.mjs",
+    "build": "electron-vite build",
+    "typecheck": "vue-tsc --noEmit",
+    "dist": "npm run build && electron-builder",
+    "samples": "node scripts/make-samples.mjs && node scripts/make-outline-sample.mjs && node scripts/make-encrypted-sample.mjs && node scripts/make-encrypted-sample.mjs test123 sample-encrypted-pw.pdf"
+  },
+  "dependencies": {
+    "@pdf-lib/fontkit": "^1.1.1",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^6.3.289"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.4",
+    "@vitejs/plugin-vue": "^6.0.9",
+    "electron": "^44.5.1",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.0.0",
+    "vue": "^3.5.43",
+    "vue-tsc": "^3.3.11"
+  },
+  "build": {
+    "appId": "com.locale.pdfeditor",
+    "productName": "PDF编辑器",
+    "directories": {
+      "output": "release",
+      "buildResources": "resources"
+    },
+    "files": [
+      "out/**"
+    ],
+    "extraResources": [
+      {
+        "from": "resources",
+        "to": "resources"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "resources/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true
+    }
+  }
+}

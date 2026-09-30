@@ -1,0 +1,78 @@
+:root {
+  --toolbar-bg: #2b2f3a;
+  --toolbar-fg: #d8dde8;
+  --toolbar-fg-dim: #8b93a5;
+  --toolbar-hover: #3a4050;
+  --toolbar-active: #4a5570;
+  --panel-bg: #232733;
+  --panel-border: #3a4050;
+  --viewer-bg: #4a4f5c;
+  --accent: #4a8fe7;
+  --danger: #e05c5c;
+  --page-shadow: 0 2px 12px rgba(0, 0, 0, 0.45);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Microsoft YaHei', 'PingFang SC', 'Segoe UI', sans-serif;
+  font-size: 13px;
+  color: #d8dde8;
+  background: #1e222b;
+  overflow: hidden;
+  user-select: none;
+}
+
+button {
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--toolbar-fg);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: var(--toolbar-hover);
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+button.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+input,
+select,
+textarea {
+  font-family: inherit;
+  font-size: 13px;
+  color: #e6e9f0;
+  background: #1a1d25;
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+  padding: 3px 6px;
+  outline: none;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--accent);
+}

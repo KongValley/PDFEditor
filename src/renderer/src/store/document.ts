@@ -1,0 +1,176 @@
+import { markRaw, reactive } from 'vue'
+import { loadPdfDocument, type PDFDocumentProxy, type PDFPageProxy } from '../lib/pdfjs'
+import { loadOutline } from '../lib/outline'
+import type { FormFieldInfo, FormValue, OpenResult, OutlineNode, SidecarData } from '@shared/types'
+
+export interface PageBox {
+  w: number
+  h: number
+}
+
+interface DocState {
+  docId: string | null
+  filePath: string | null
+  pdfDoc: PDFDocumentProxy | null
+  loading: boolean
+  loadError: string | null
+  pageCount: number
+  pageBoxes: PageBox[]
+  currentPage: number
+  scale: number
+  rotationView: number
+  encrypted: boolean
+  sidecar: SidecarData | null
+  /** 表单字段值(字段全名 → 值) */
+  formValues: Record<string, FormValue>
+  /** 文档内 AcroForm 字段(用于表单覆盖层) */
+  formFields: FormFieldInfo[]
+  /** 文档大纲(书签) */
+  outline: OutlineNode[]
+}
+
+export const docState = reactive<DocState>({
+  docId: null,
+  filePath: null,
+  pdfDoc: null,
+  loading: false,
+  loadError: null,
+  pageCount: 0,
+  pageBoxes: [],
+  currentPage: 1,
+  scale: 1,
+  rotationView: 0,
+  encrypted: false,
+  sidecar: null,
+  formValues: {},
+  formFields: [],
+  outline: []
+})
+
+let pageCache = new Map<number, PDFPageProxy>()
+
+export async function getPage(pageNumber: number): Promise<PDFPageProxy> {
+  const cached = pageCache.get(pageNumber)
+  if (cached) return cached
+  const doc = docState.pdfDoc
+  if (!doc) throw new Error('文档未打开')
+  const page = await doc.getPage(pageNumber)
+  pageCache.set(pageNumber, page)
+  return page
+}
+
+export function hasDocument(): boolean {
+  return docState.pdfDoc !== null
+}
+
+/** 每页显示尺寸(CSS px,含视图旋转与缩放) */
+export function pageDisplaySize(index: number): { w: number; h: number } {
+  const box = docState.pageBoxes[index]
+  if (!box) return { w: 0, h: 0 }
+  const rotated = docState.rotationView % 180 !== 0
+  const w = rotated ? box.h : box.w
+  const h = rotated ? box.w : box.h
+  return { w: Math.round(w * docState.scale), h: Math.round(h * docState.scale) }
+}
+
+async function fillPageBoxes(pdfDoc: PDFDocumentProxy): Promise<PageBox[]> {
+  const boxes: PageBox[] = new Array(pdfDoc.numPages)
+  const total = pdfDoc.numPages
+  for (let start = 1; start <= total; start += 32) {
+    const numbers: number[] = []
+    for (let n = start; n < Math.min(start + 32, total + 1); n++) numbers.push(n)
+    await Promise.all(
+      numbers.map(async (n) => {
+        const page = await pdfDoc.getPage(n)
+        const view = page.view
+        const width = view[2] - view[0]
+        const height = view[3] - view[1]
+        const rotate = (((page.rotate % 360) + 360) % 360)
+        const swapped = rotate === 90 || rotate === 270
+        boxes[n - 1] = swapped ? { w: height, h: width } : { w: width, h: height }
+        pageCache.set(n, page)
+      })
+    )
+  }
+  return boxes
+}
+
+export interface OpenOptions {
+  onPassword?: (updatePassword: (password: string | Error) => void, reason: number) => void
+}
+
+export async function openByPath(path: string, options: OpenOptions = {}): Promise<boolean> {
+  docState.loading = true
+  docState.loadError = null
+  try {
+    const result = (await window.pdfAPI.invoke('doc:open', path)) as OpenResult
+    if (!result.ok || !result.buffer || !result.docId || !result.pageCount) {
+      docState.loadError = result.errorMessage ?? '打开文件失败'
+      return false
+    }
+
+    const pdfDoc = await loadPdfDocument(result.buffer, { onPassword: options.onPassword })
+
+    pageCache = new Map()
+    docState.docId = result.docId
+    docState.filePath = result.path ?? path
+    docState.pdfDoc = markRaw(pdfDoc)
+    docState.pageCount = pdfDoc.numPages
+    docState.currentPage = 1
+    docState.rotationView = 0
+    docState.encrypted = result.encrypted ?? false
+    docState.sidecar = result.sidecar ?? null
+    docState.formValues = result.sidecar?.formValues ? { ...result.sidecar.formValues } : {}
+    docState.loadError = null
+
+    const boxes = await fillPageBoxes(pdfDoc)
+    docState.pageBoxes = boxes
+
+    // 表单字段:sidecar 值优先,其次用文档中的现有值作为初始值
+    docState.formFields = (await window.pdfAPI.invoke('form:getFields', result.docId)) as FormFieldInfo[]
+    const values: Record<string, FormValue> = {}
+    for (const field of docState.formFields) {
+      if (field.value !== undefined) values[field.fullName] = field.value
+    }
+    docState.formValues = { ...values, ...(result.sidecar?.formValues ?? {}) }
+
+    docState.outline = await loadOutline(pdfDoc)
+    return true
+  } catch (err) {
+    docState.loadError = err instanceof Error ? err.message : String(err)
+    return false
+  } finally {
+    docState.loading = false
+  }
+}
+
+/** 页面操作后:以新 buffer 重开 pdf.js 文档(保持缩放与视图旋转) */
+export async function reloadDocument(buffer: ArrayBuffer): Promise<void> {
+  const pdfDoc = await loadPdfDocument(buffer)
+  const previous = docState.pdfDoc
+  pageCache = new Map()
+  docState.pdfDoc = markRaw(pdfDoc)
+  docState.pageCount = pdfDoc.numPages
+  docState.pageBoxes = await fillPageBoxes(pdfDoc)
+  docState.currentPage = Math.min(Math.max(docState.currentPage, 1), pdfDoc.numPages)
+  if (previous) void previous.cleanup()
+}
+
+export function closeDocument(): void {
+  const doc = docState.pdfDoc
+  if (doc) void doc.cleanup()
+  pageCache = new Map()
+  docState.docId = null
+  docState.filePath = null
+  docState.pdfDoc = null
+  docState.pageCount = 0
+  docState.pageBoxes = []
+  docState.currentPage = 1
+  docState.rotationView = 0
+  docState.encrypted = false
+  docState.sidecar = null
+  docState.formValues = {}
+  docState.formFields = []
+  docState.outline = []
+  docState.loadError = null
+}

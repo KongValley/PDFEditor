@@ -1,0 +1,10 @@
+node_modules/
+out/
+release/
+tmp/
+samples/
+src/renderer/public/cmaps/
+src/renderer/public/standard_fonts/
+src/renderer/public/iccs/
+src/renderer/public/wasm/
+*.log
