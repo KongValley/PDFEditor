@@ -1,0 +1,35 @@
+name: 打包发布
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  dist:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    env:
+      ELECTRON_MIRROR: https://github.com/electron/electron/releases/download/v
+      ELECTRON_BUILDER_BINARIES_MIRROR: https://github.com/electron-userland/electron-builder-binaries/releases/download/
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run dist
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/Win7-32位/*.exe
+            release/Win10-64位/*.exe
