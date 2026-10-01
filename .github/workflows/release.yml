@@ -33,9 +33,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create $env:GITHUB_REF_NAME --title $env:GITHUB_REF_NAME --generate-notes release/Win7-32位/*.exe release/Win10-64位/*.exe
+          gh release create $env:GITHUB_REF_NAME --title $env:GITHUB_REF_NAME --generate-notes release/Win7-32位/*.exe release/Win10-64位/*.exe release/Win10-32位/*.exe release/Win7-64位/*.exe
           if ($LASTEXITCODE -ne 0) {
             # tag 已存在 Release(重复触发/重跑):改为增量上传
-            gh release upload $env:GITHUB_REF_NAME release/Win7-32位/*.exe release/Win10-64位/*.exe --clobber
+            gh release upload $env:GITHUB_REF_NAME release/Win7-32位/*.exe release/Win10-64位/*.exe release/Win10-32位/*.exe release/Win7-64位/*.exe --clobber
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }

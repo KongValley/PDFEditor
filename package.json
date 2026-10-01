@@ -13,9 +13,11 @@
     "build": "electron-vite build",
     "typecheck": "vue-tsc --noEmit",
     "smoke": "node scripts/run-smokes.mjs",
-    "dist:win7": "npm run build && node scripts/package-win.mjs ia32",
-    "dist:win10": "npm run build && node scripts/package-win.mjs x64",
-    "dist": "npm run dist:win7 && npm run dist:win10",
+    "dist:win7-32": "npm run build && node scripts/package-win.mjs win7-ia32",
+    "dist:win10-64": "npm run build && node scripts/package-win.mjs win10-x64",
+    "dist:win10-32": "npm run build && node scripts/package-win.mjs win10-ia32",
+    "dist:win7-64": "npm run build && node scripts/package-win.mjs win7-x64",
+    "dist": "npm run dist:win7-32 && npm run dist:win10-64 && npm run dist:win10-32 && npm run dist:win7-64",
     "samples": "node scripts/make-samples.mjs && node scripts/make-outline-sample.mjs && node scripts/make-encrypted-sample.mjs && node scripts/make-encrypted-sample.mjs test123 sample-encrypted-pw.pdf && node scripts/make-big-sample.mjs"
   },
   "dependencies": {

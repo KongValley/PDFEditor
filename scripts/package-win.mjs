@@ -1,21 +1,29 @@
-// 单架构打包:node scripts/package-win.mjs <ia32|x64>
-// ia32 → release/Win7-32位/,x64 → release/Win10-64位/,各含安装包(NSIS)与便携版,文件名自明。
+// 单架构打包:node scripts/package-win.mjs <win7-ia32|win10-x64|win10-ia32|win7-x64>
+// 各组合 → release/<中文目录>/,含安装包(NSIS)与便携版,文件名自明。
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const arch = process.argv[2]
-if (arch !== 'ia32' && arch !== 'x64') {
-  console.error('用法: node scripts/package-win.mjs <ia32|x64>')
+// os → 打包目录名(中文,内网分发直观);arch → electron 架构 + 文件名后缀
+const combos = {
+  'win7-ia32': { os: 'Win7', arch: 'ia32' },
+  'win10-x64': { os: 'Win10', arch: 'x64' },
+  'win10-ia32': { os: 'Win10', arch: 'ia32' },
+  'win7-x64': { os: 'Win7', arch: 'x64' }
+}
+const combo = process.argv[2]
+if (!(combo in combos)) {
+  console.error(`用法: node scripts/package-win.mjs <${Object.keys(combos).join('|')}>`)
   process.exit(1)
 }
+const { os, arch } = combos[combo]
+const label = `${os}-${arch === 'ia32' ? '32位' : '64位'}`
+const archLabel = combo
 
 const root = path.resolve(fileURLToPath(new URL('..', import.meta.url)))
 const pkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'))
 const releaseDir = path.join(root, 'release')
-const label = arch === 'ia32' ? 'Win7-32位' : 'Win10-64位'
-const archLabel = arch === 'ia32' ? 'win7-ia32' : 'win10-x64'
 const outDir = path.join(releaseDir, label)
 
 // 只清本架构目录 + release 根目录的 exe/blockmap(保证识别与命名无歧义);
