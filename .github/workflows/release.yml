@@ -28,8 +28,8 @@ jobs:
 
       - run: npm run dist -- --publish never
 
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            release/Win7-32位/*.exe
-            release/Win10-64位/*.exe
+      - name: 发布到 GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create $env:GITHUB_REF_NAME --title $env:GITHUB_REF_NAME --generate-notes release/Win7-32位/*.exe release/Win10-64位/*.exe
