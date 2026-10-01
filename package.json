@@ -13,7 +13,9 @@
     "build": "electron-vite build",
     "typecheck": "vue-tsc --noEmit",
     "smoke": "node scripts/run-smokes.mjs",
-    "dist": "npm run build && electron-builder",
+    "dist:win7": "npm run build && node scripts/package-win.mjs ia32",
+    "dist:win10": "npm run build && node scripts/package-win.mjs x64",
+    "dist": "npm run dist:win7 && npm run dist:win10",
     "samples": "node scripts/make-samples.mjs && node scripts/make-outline-sample.mjs && node scripts/make-encrypted-sample.mjs && node scripts/make-encrypted-sample.mjs test123 sample-encrypted-pw.pdf && node scripts/make-big-sample.mjs"
   },
   "dependencies": {
@@ -50,16 +52,7 @@
       }
     ],
     "win": {
-      "target": [
-        {
-          "target": "nsis",
-          "arch": ["ia32", "x64"]
-        },
-        {
-          "target": "portable",
-          "arch": ["ia32", "x64"]
-        }
-      ],
+      "target": ["nsis", "portable"],
       "icon": "resources/icon.png"
     },
     "nsis": {
