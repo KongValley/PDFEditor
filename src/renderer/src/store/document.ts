@@ -102,6 +102,14 @@ export function cachedPageCount(): number {
   return pageCache.size
 }
 
+/** 累计释放的文档数(验证 openByPath 每次切换都 cleanup 旧文档) */
+let cleanupCount = 0
+
+/** 测试 API 只读出口:把计数器包成函数,拿到调用时的当前值 */
+export function docCleanupCount(): number {
+  return cleanupCount
+}
+
 /** 可见页 pin 规模(低内存策略验证用) */
 export function pinnedPageCounts(): { viewer: number; thumbs: number } {
   return { viewer: viewerPinned.size, thumbs: thumbPinned.size }
@@ -159,7 +167,15 @@ export async function openByPath(path: string, options: OpenOptions = {}): Promi
     pageCache = new Map()
     docState.docId = result.docId
     docState.filePath = result.path ?? path
+    // 释放上一份文档的 worker 资源(与 reloadDocument 一致),避免反复打开后 worker 侧内存单调增长
+    if (docState.pdfDoc) {
+      docState.pdfDoc.cleanup()
+      cleanupCount++
+    }
     docState.pdfDoc = markRaw(pdfDoc)
+    // 旧文档的可见/pin 页号残留会让新文档的同号页被豁免回收,换文档时一并清空
+    viewerPinned.clear()
+    thumbPinned.clear()
     docState.pageCount = pdfDoc.numPages
     docState.currentPage = 1
     docState.rotationView = 0
