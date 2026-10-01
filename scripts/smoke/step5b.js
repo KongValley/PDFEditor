@@ -7,8 +7,7 @@ const check = (name, cond, extra) => {
   if (!cond) throw new Error(`断言失败: ${name} ${extra === undefined ? '' : JSON.stringify(extra)}`)
 }
 
-const root = 'F:/DeepSeek工作区/pdf编辑器'
-await t.openPath(`${root}/samples/sample-encrypted.pdf`)
+await t.openPath(`${__smokeRoot}/samples/sample-encrypted.pdf`)
 await sleep(1500)
 
 check('识别为加密文档', t.docState.encrypted === true, t.docState.encrypted)
@@ -29,7 +28,7 @@ t.addAnnotation(
 const save = await window.pdfAPI.invoke('save:saveAs', {
   docId: t.docState.docId,
   defaultPath: 'saved-encrypted.pdf',
-  targetPath: `${root}/tmp/saved-encrypted.pdf`,
+  targetPath: `${__smokeRoot}/tmp/saved-encrypted.pdf`,
   annotations: t.exportAnnotations(),
   formValues: {}
 })

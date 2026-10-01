@@ -7,8 +7,7 @@ const check = (name, cond, extra) => {
   if (!cond) throw new Error(`断言失败: ${name} ${extra === undefined ? '' : JSON.stringify(extra)}`)
 }
 
-const root = 'F:/DeepSeek工作区/pdf编辑器'
-const openPromise = t.openPath(`${root}/samples/sample-encrypted-pw.pdf`)
+const openPromise = t.openPath(`${__smokeRoot}/samples/sample-encrypted-pw.pdf`)
 await sleep(1200)
 
 const dialog = document.querySelector('.mask .dialog')

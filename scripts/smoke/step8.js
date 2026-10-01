@@ -10,8 +10,7 @@ const fire = (target, type, x, y) => {
   target.dispatchEvent(new PointerEvent(type, { clientX: x, clientY: y, bubbles: true, cancelable: true }))
 }
 
-const root = 'F:/DeepSeek工作区/pdf编辑器'
-await t.openPath(`${root}/samples/sample-zh.pdf`)
+await t.openPath(`${__smokeRoot}/samples/sample-zh.pdf`)
 await sleep(1500)
 
 // 1) 交互:高亮拖拽
@@ -26,7 +25,7 @@ await sleep(150)
 check('高亮已创建', t.annotState.items.length === 1, t.annotState.items.length)
 
 // 2) 程序化补齐其余类型(含图片)
-const info = await window.pdfAPI.invoke('img:getByPath', `${root}/resources/icon.png`)
+const info = await window.pdfAPI.invoke('img:getByPath', `${__smokeRoot}/resources/icon.png`)
 check('图片导入成功', !!info.imgId, info.error ?? null)
 t.annotState.imageUrls[info.imgId] = info.dataUrl
 
@@ -123,7 +122,7 @@ check('渲染 10 个图形', wrap.querySelectorAll('.ann-layer > g.shape').lengt
 const save = await window.pdfAPI.invoke('save:saveAs', {
   docId: t.docState.docId,
   defaultPath: 'e2e.pdf',
-  targetPath: `${root}/tmp/e2e.pdf`,
+  targetPath: `${__smokeRoot}/tmp/e2e.pdf`,
   annotations: t.exportAnnotations(),
   formValues: {},
   writeSidecar: true
@@ -131,7 +130,7 @@ const save = await window.pdfAPI.invoke('save:saveAs', {
 check('保存成功', save.ok === true && save.mode === 'pdf', save)
 check('无保存告警', !save.warnings || save.warnings.length === 0, save.warnings)
 
-await t.openPath(`${root}/tmp/e2e.pdf`)
+await t.openPath(`${__smokeRoot}/tmp/e2e.pdf`)
 await sleep(1500)
 check('sidecar 恢复 10 条注释', t.annotState.items.length === 10, t.annotState.items.length)
 const imageRestored = t.annotState.items.find((a) => a.kind === 'image')
@@ -141,14 +140,14 @@ check('图片注释 dataUrl 已恢复', !!t.annotState.imageUrls[imageRestored.i
 const save2 = await window.pdfAPI.invoke('save:saveAs', {
   docId: t.docState.docId,
   defaultPath: 'e2e-baked.pdf',
-  targetPath: `${root}/tmp/e2e-baked.pdf`,
+  targetPath: `${__smokeRoot}/tmp/e2e-baked.pdf`,
   annotations: t.exportAnnotations(),
   formValues: {},
   writeSidecar: false
 })
 check('二次保存成功', save2.ok === true, save2)
 
-await t.openPath(`${root}/tmp/e2e-baked.pdf`)
+await t.openPath(`${__smokeRoot}/tmp/e2e-baked.pdf`)
 await sleep(1500)
 check('无 sidecar 时注释为空', t.annotState.items.length === 0, t.annotState.items.length)
 

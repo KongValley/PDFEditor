@@ -7,8 +7,7 @@ const check = (name, cond, extra) => {
   if (!cond) throw new Error(`断言失败: ${name} ${extra === undefined ? '' : JSON.stringify(extra)}`)
 }
 
-const root = 'F:/DeepSeek工作区/pdf编辑器'
-await t.openPath(`${root}/tmp/50pages.pdf`)
+await t.openPath(`${__smokeRoot}/tmp/50pages.pdf`)
 await sleep(2000)
 check('50 页文档已打开', t.docState.pageCount === 50, t.docState.pageCount)
 

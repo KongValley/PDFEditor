@@ -40,7 +40,8 @@ for (const script of scripts) {
       ...process.env,
       PDF_EDITOR_SMOKE: '1',
       PDF_EDITOR_SMOKE_SCRIPT: join('scripts', 'smoke', script),
-      PDF_EDITOR_SMOKE_OUT: outFile
+      PDF_EDITOR_SMOKE_OUT: outFile,
+      PDF_EDITOR_SMOKE_ROOT: root
     },
     stdio: 'ignore'
   })

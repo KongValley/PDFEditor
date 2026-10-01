@@ -11,7 +11,7 @@ function fire(target, type, x, y) {
   target.dispatchEvent(new PointerEvent(type, { clientX: x, clientY: y, bubbles: true, cancelable: true }))
 }
 
-await t.openPath('F:/DeepSeek工作区/pdf编辑器/samples/sample-zh.pdf')
+await t.openPath(`${__smokeRoot}/samples/sample-zh.pdf`)
 await sleep(1500)
 
 const wrap = document.querySelector('[data-page="1"]')

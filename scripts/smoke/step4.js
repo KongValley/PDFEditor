@@ -9,8 +9,7 @@ const check = (name, cond, extra) => {
 
 window.confirm = () => true // 冒烟模式自动确认
 
-const root = 'F:/DeepSeek工作区/pdf编辑器'
-await t.openPath(`${root}/samples/sample-zh.pdf`)
+await t.openPath(`${__smokeRoot}/samples/sample-zh.pdf`)
 await sleep(1500)
 check('初始页数 3', t.docState.pageCount === 3, t.docState.pageCount)
 
@@ -53,17 +52,17 @@ const blankBox = t.docState.pageBoxes[1]
 check('空白页尺寸等于参考页', Math.round(blankBox.w) === 595 && Math.round(blankBox.h) === 842, blankBox)
 
 // 4) 合并另一个 PDF(直接传路径,绕过文件对话框)
-await t.mergePdfs([`${root}/samples/sample-rotated.pdf`])
+await t.mergePdfs([`${__smokeRoot}/samples/sample-rotated.pdf`])
 await sleep(800)
 check('合并后页数 5', t.docState.pageCount === 5, t.docState.pageCount)
 
 // 5) 拆分导出所选页(直接传目标路径,绕过对话框)
-await t.exportPages([0, 1], `${root}/tmp/export-pages.pdf`)
+await t.exportPages([0, 1], `${__smokeRoot}/tmp/export-pages.pdf`)
 await sleep(600)
 
 return {
   pageCount: t.docState.pageCount,
   annotationPage: t.annotState.items[0]?.page,
-  exported: `${root}/tmp/export-pages.pdf`,
+  exported: `${__smokeRoot}/tmp/export-pages.pdf`,
   pageBoxes: t.docState.pageBoxes.map((b) => `${Math.round(b.w)}x${Math.round(b.h)}`)
 }

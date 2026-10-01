@@ -7,8 +7,7 @@ const check = (name, cond, extra) => {
   if (!cond) throw new Error(`断言失败: ${name} ${extra === undefined ? '' : JSON.stringify(extra)}`)
 }
 
-const root = 'F:/DeepSeek工作区/pdf编辑器'
-await t.openPath(`${root}/samples/sample-outline.pdf`)
+await t.openPath(`${__smokeRoot}/samples/sample-outline.pdf`)
 await sleep(1500)
 
 const outline = t.docState.outline

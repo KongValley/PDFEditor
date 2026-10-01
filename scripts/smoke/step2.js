@@ -8,7 +8,7 @@ const check = (name, cond, extra) => {
   return true
 }
 
-await t.openPath('F:/DeepSeek工作区/pdf编辑器/samples/sample-zh.pdf')
+await t.openPath(`${__smokeRoot}/samples/sample-zh.pdf`)
 await sleep(1500)
 
 check('pageCount', t.docState.pageCount === 3, t.docState.pageCount)

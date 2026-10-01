@@ -7,8 +7,7 @@ const check = (name, cond, extra) => {
   if (!cond) throw new Error(`断言失败: ${name} ${extra === undefined ? '' : JSON.stringify(extra)}`)
 }
 
-const root = 'F:/DeepSeek工作区/pdf编辑器'
-await t.openPath(`${root}/samples/sample-form.pdf`)
+await t.openPath(`${__smokeRoot}/samples/sample-form.pdf`)
 await sleep(1800)
 
 const fields = t.docState.formFields
@@ -37,7 +36,7 @@ check('表单值已记录', t.docState.formValues['name'] === '张三' && t.docS
 const save = await window.pdfAPI.invoke('save:saveAs', {
   docId: t.docState.docId,
   defaultPath: 'saved-form.pdf',
-  targetPath: `${root}/tmp/saved-form.pdf`,
+  targetPath: `${__smokeRoot}/tmp/saved-form.pdf`,
   annotations: [],
   formValues: { ...t.docState.formValues },
   writeSidecar: false
@@ -45,7 +44,7 @@ const save = await window.pdfAPI.invoke('save:saveAs', {
 check('保存成功', save.ok === true, save)
 
 // 重新打开保存后的文件:字段值应从 PDF 本身读出
-await t.openPath(`${root}/tmp/saved-form.pdf`)
+await t.openPath(`${__smokeRoot}/tmp/saved-form.pdf`)
 await sleep(1800)
 const restored = t.docState.formFields
 const restoredName = restored.find((f) => f.name === 'name')

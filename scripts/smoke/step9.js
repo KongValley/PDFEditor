@@ -10,8 +10,6 @@ const fire = (target, type, x, y) => {
   target.dispatchEvent(new PointerEvent(type, { clientX: x, clientY: y, bubbles: true, cancelable: true }))
 }
 
-const root = 'F:/DeepSeek工作区/pdf编辑器'
-
 // 工具栏布局:两行且无横向滚动条
 const toolbarEl = document.querySelector('.toolbar')
 check('工具栏为两行', document.querySelectorAll('.toolbar-row').length === 2, document.querySelectorAll('.toolbar-row').length)
@@ -21,7 +19,7 @@ check(
   { scrollWidth: toolbarEl.scrollWidth, clientWidth: toolbarEl.clientWidth }
 )
 
-await t.openPath(`${root}/samples/sample-zh.pdf`)
+await t.openPath(`${__smokeRoot}/samples/sample-zh.pdf`)
 await sleep(1500)
 
 const wrap = document.querySelector('[data-page="1"]')

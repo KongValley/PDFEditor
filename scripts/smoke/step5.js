@@ -10,12 +10,11 @@ const fire = (target, type, x, y) => {
   target.dispatchEvent(new PointerEvent(type, { clientX: x, clientY: y, bubbles: true, cancelable: true }))
 }
 
-const root = 'F:/DeepSeek工作区/pdf编辑器'
 const out = {}
 
 /* ---------- A. 中文文档:交互标注 + 保存 + 往返恢复 ---------- */
 
-await t.openPath(`${root}/samples/sample-zh.pdf`)
+await t.openPath(`${__smokeRoot}/samples/sample-zh.pdf`)
 await sleep(1500)
 
 const wrap = document.querySelector('[data-page="1"]')
@@ -90,7 +89,7 @@ check('保存前注释数', beforeSave === 5, beforeSave)
 const save1 = await window.pdfAPI.invoke('save:saveAs', {
   docId: t.docState.docId,
   defaultPath: 'saved-zh.pdf',
-  targetPath: `${root}/tmp/saved-zh.pdf`,
+  targetPath: `${__smokeRoot}/tmp/saved-zh.pdf`,
   annotations: t.exportAnnotations(),
   formValues: {}
 })
@@ -98,14 +97,14 @@ check('保存成功', save1.ok === true && save1.mode === 'pdf', save1)
 out.save1 = { mode: save1.mode, warnings: save1.warnings }
 
 // 重开保存后的文件:sidecar 应恢复全部注释
-await t.openPath(`${root}/tmp/saved-zh.pdf`)
+await t.openPath(`${__smokeRoot}/tmp/saved-zh.pdf`)
 await sleep(1500)
 check('重开后注释恢复', t.annotState.items.length === 5, t.annotState.items.length)
 out.restoredKinds = t.annotState.items.map((a) => a.kind)
 
 /* ---------- B. /Rotate 90 页:视觉位置往返(像素校验) ---------- */
 
-await t.openPath(`${root}/samples/sample-rotated.pdf`)
+await t.openPath(`${__smokeRoot}/samples/sample-rotated.pdf`)
 await sleep(1200)
 t.ui.tool = 'select'
 t.scrollToPage(2)
@@ -134,7 +133,7 @@ out.screenRect = { x: fromX - rect2.left, y: fromY - rect2.top, w: toX - fromX, 
 const save2 = await window.pdfAPI.invoke('save:saveAs', {
   docId: t.docState.docId,
   defaultPath: 'saved-rotated.pdf',
-  targetPath: `${root}/tmp/saved-rotated.pdf`,
+  targetPath: `${__smokeRoot}/tmp/saved-rotated.pdf`,
   annotations: t.exportAnnotations(),
   formValues: {},
   writeSidecar: false
@@ -143,7 +142,7 @@ check('旋转页保存成功', save2.ok === true, save2)
 await sleep(300)
 
 // 重开保存后的文件(无 sidecar → 只显示 PDF 内已烘焙的内容)
-await t.openPath(`${root}/tmp/saved-rotated.pdf`)
+await t.openPath(`${__smokeRoot}/tmp/saved-rotated.pdf`)
 await sleep(1200)
 check('无 sidecar 时不恢复注释', t.annotState.items.length === 0, t.annotState.items.length)
 t.scrollToPage(2)

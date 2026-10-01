@@ -47,7 +47,9 @@ export async function runSmoke(win: BrowserWindow): Promise<void> {
     const timeout = new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => reject(new Error(`冒烟脚本超时(${timeoutMs}ms)`)), timeoutMs)
     })
-    const run = win.webContents.executeJavaScript(`(async () => {\n${code}\n})()`, true)
+    // 仓库根目录由主进程注入(渲染进程拿不到 process.env),供脚本内拼接 fixtures 路径
+    const rootEnv = `const __smokeRoot = ${JSON.stringify(process.env['PDF_EDITOR_SMOKE_ROOT'] ?? '')};\n`
+    const run = win.webContents.executeJavaScript(`(async () => {\n${rootEnv}\n${code}\n})()`, true)
     const result = await Promise.race([run, timeout])
     clearTimeout(timer)
 
