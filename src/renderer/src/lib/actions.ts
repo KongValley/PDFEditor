@@ -93,7 +93,7 @@ export async function exportCurrentPageImage(): Promise<void> {
     canvas.height = Math.floor(viewport.height)
     const ctx = canvas.getContext('2d')
     if (!ctx) return
-    await page.render({ canvas, canvasContext: ctx, viewport }).promise
+    await page.render({ canvasContext: ctx, viewport }).promise
     const dataUrl = canvas.toDataURL('image/png')
     const stem = docState.filePath?.split(/[\\/]/).pop()?.replace(/\.pdf$/i, '') ?? 'document'
     const result = (await window.pdfAPI.invoke('app:saveImage', {

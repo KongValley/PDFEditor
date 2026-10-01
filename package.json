@@ -12,28 +12,30 @@
     "prebuild": "node scripts/sync-pdfjs-assets.mjs",
     "build": "electron-vite build",
     "typecheck": "vue-tsc --noEmit",
+    "smoke": "node scripts/run-smokes.mjs",
     "dist": "npm run build && electron-builder",
-    "samples": "node scripts/make-samples.mjs && node scripts/make-outline-sample.mjs && node scripts/make-encrypted-sample.mjs && node scripts/make-encrypted-sample.mjs test123 sample-encrypted-pw.pdf"
+    "samples": "node scripts/make-samples.mjs && node scripts/make-outline-sample.mjs && node scripts/make-encrypted-sample.mjs && node scripts/make-encrypted-sample.mjs test123 sample-encrypted-pw.pdf && node scripts/make-big-sample.mjs"
   },
   "dependencies": {
     "@pdf-lib/fontkit": "^1.1.1",
     "pdf-lib": "^1.17.1",
-    "pdfjs-dist": "^6.3.289"
+    "pdfjs-dist": "3.11.174"
   },
   "devDependencies": {
     "@types/node": "^22.20.4",
-    "@vitejs/plugin-vue": "^6.0.9",
-    "electron": "^44.5.1",
+    "@vitejs/plugin-vue": "5.2.4",
+    "electron": "22.3.27",
     "electron-builder": "^26.15.3",
-    "electron-vite": "^5.0.0",
+    "electron-vite": "2.3.0",
     "typescript": "^5.9.3",
-    "vite": "^7.0.0",
-    "vue": "^3.5.43",
-    "vue-tsc": "^3.3.11"
+    "vite": "5.4.21",
+    "vue": "3.4.38",
+    "vue-tsc": "2.2.12"
   },
   "build": {
     "appId": "com.locale.pdfeditor",
     "productName": "PDF编辑器",
+    "npmRebuild": false,
     "directories": {
       "output": "release",
       "buildResources": "resources"
@@ -49,8 +51,14 @@
     ],
     "win": {
       "target": [
-        "nsis",
-        "portable"
+        {
+          "target": "nsis",
+          "arch": ["ia32", "x64"]
+        },
+        {
+          "target": "portable",
+          "arch": ["ia32", "x64"]
+        }
       ],
       "icon": "resources/icon.png"
     },

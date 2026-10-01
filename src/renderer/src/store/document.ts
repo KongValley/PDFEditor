@@ -1,6 +1,7 @@
 import { markRaw, reactive } from 'vue'
 import { loadPdfDocument, type PDFDocumentProxy, type PDFPageProxy } from '../lib/pdfjs'
 import { loadOutline } from '../lib/outline'
+import { discoverFormFields } from '../lib/forms'
 import type { FormFieldInfo, FormValue, OpenResult, OutlineNode, SidecarData } from '@shared/types'
 
 export interface PageBox {
@@ -49,6 +50,38 @@ export const docState = reactive<DocState>({
 
 let pageCache = new Map<number, PDFPageProxy>()
 
+/** 页缓存上限:32 位/低内存机器上避免 PageProxy 无限累积 */
+const PAGE_CACHE_LIMIT = 12
+
+const viewerPinned = new Set<number>()
+const thumbPinned = new Set<number>()
+
+/** 视口(主视图)当前可见页,回收时跳过 */
+export function pinViewerPages(pages: Iterable<number>): void {
+  viewerPinned.clear()
+  for (const page of pages) viewerPinned.add(page)
+}
+
+/** 缩略图栏当前可见页,回收时跳过 */
+export function pinThumbPages(pages: Iterable<number>): void {
+  thumbPinned.clear()
+  for (const page of pages) thumbPinned.add(page)
+}
+
+function evictPages(): void {
+  if (pageCache.size <= PAGE_CACHE_LIMIT) return
+  const keepFrom = docState.currentPage - 2
+  const keepTo = docState.currentPage + 2
+  // 只回收不可见页:可见页(主视图 ±2 与缩略图可见项)一旦被回收,渲染会被打断且不会自动重渲染
+  for (const [pageNumber, page] of pageCache) {
+    if (pageCache.size <= PAGE_CACHE_LIMIT) return
+    if (pageNumber >= keepFrom && pageNumber <= keepTo) continue
+    if (viewerPinned.has(pageNumber) || thumbPinned.has(pageNumber)) continue
+    page.cleanup()
+    pageCache.delete(pageNumber)
+  }
+}
+
 export async function getPage(pageNumber: number): Promise<PDFPageProxy> {
   const cached = pageCache.get(pageNumber)
   if (cached) return cached
@@ -56,11 +89,22 @@ export async function getPage(pageNumber: number): Promise<PDFPageProxy> {
   if (!doc) throw new Error('文档未打开')
   const page = await doc.getPage(pageNumber)
   pageCache.set(pageNumber, page)
+  evictPages()
   return page
 }
 
 export function hasDocument(): boolean {
   return docState.pdfDoc !== null
+}
+
+/** 当前缓存的 PageProxy 数量(低内存策略验证用) */
+export function cachedPageCount(): number {
+  return pageCache.size
+}
+
+/** 可见页 pin 规模(低内存策略验证用) */
+export function pinnedPageCounts(): { viewer: number; thumbs: number } {
+  return { viewer: viewerPinned.size, thumbs: thumbPinned.size }
 }
 
 /** 每页显示尺寸(CSS px,含视图旋转与缩放) */
@@ -88,7 +132,8 @@ async function fillPageBoxes(pdfDoc: PDFDocumentProxy): Promise<PageBox[]> {
         const rotate = (((page.rotate % 360) + 360) % 360)
         const swapped = rotate === 90 || rotate === 270
         boxes[n - 1] = swapped ? { w: height, h: width } : { w: width, h: height }
-        pageCache.set(n, page)
+        // 只取尺寸,不驻留 PageProxy(低内存:渲染时再按需 getPage)
+        page.cleanup()
       })
     )
   }
@@ -127,7 +172,7 @@ export async function openByPath(path: string, options: OpenOptions = {}): Promi
     docState.pageBoxes = boxes
 
     // 表单字段:sidecar 值优先,其次用文档中的现有值作为初始值
-    docState.formFields = (await window.pdfAPI.invoke('form:getFields', result.docId)) as FormFieldInfo[]
+    docState.formFields = await discoverFormFields(pdfDoc)
     const values: Record<string, FormValue> = {}
     for (const field of docState.formFields) {
       if (field.value !== undefined) values[field.fullName] = field.value

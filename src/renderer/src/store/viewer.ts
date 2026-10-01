@@ -49,7 +49,8 @@ export function computeCurrentPage(): number {
 }
 
 export function zoomAt(newScale: number, clientY?: number): void {
-  const clamped = Math.min(Math.max(newScale, 0.25), 6)
+  // 上限 4 倍:再放大单页位图会超过 30MB(低内存机器上不可接受)
+  const clamped = Math.min(Math.max(newScale, 0.25), 4)
   fitMode = 'none'
   if (!container || clamped === docState.scale) {
     docState.scale = clamped
@@ -84,7 +85,7 @@ export function fitWidth(): void {
   const avail = container.clientWidth - VIEWER_PADDING * 2
   if (w <= 0 || avail <= 0) return
   fitMode = 'width'
-  docState.scale = Math.min(Math.max(avail / w, 0.25), 6)
+  docState.scale = Math.min(Math.max(avail / w, 0.25), 4)
 }
 
 export function fitPage(): void {
@@ -95,7 +96,7 @@ export function fitPage(): void {
   const availH = container.clientHeight - VIEWER_PADDING * 2
   if (w <= 0 || h <= 0) return
   fitMode = 'page'
-  docState.scale = Math.min(Math.max(Math.min(availW / w, availH / h), 0.25), 6)
+  docState.scale = Math.min(Math.max(Math.min(availW / w, availH / h), 0.25), 4)
 }
 
 export function rotateView(delta: number): void {

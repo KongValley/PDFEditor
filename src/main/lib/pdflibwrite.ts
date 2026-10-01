@@ -44,21 +44,20 @@ function hexToRgb(hex: string): { r: number; g: number; b: number } {
   }
 }
 
-let cjkFontBytes: Buffer | null | undefined
-
+/**
+ * 读取中文字体字节(约 10MB)。
+ * 不做模块级缓存:低内存机器上常驻 10MB 不划算,保存是低频操作,按需读盘即可。
+ */
 function loadCjkFontBytes(): Buffer | null {
-  if (cjkFontBytes !== undefined) return cjkFontBytes
-  cjkFontBytes = null
   for (const path of CJK_FONT_CANDIDATES) {
     try {
       if (!existsSync(path)) continue
-      cjkFontBytes = readFileSync(path)
-      break
+      return readFileSync(path)
     } catch {
       // 继续尝试下一个候选字体
     }
   }
-  return cjkFontBytes
+  return null
 }
 
 async function embedCjkFont(doc: PDFDocument, warnings: string[]): Promise<PDFFont | null> {

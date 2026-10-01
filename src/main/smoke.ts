@@ -42,8 +42,11 @@ export async function runSmoke(win: BrowserWindow): Promise<void> {
     if (!scriptPath) throw new Error('缺少 PDF_EDITOR_SMOKE_SCRIPT')
     const code = readFileSync(scriptPath, 'utf8')
 
-    const { promise: timeout, reject: rejectTimeout } = Promise.withResolvers<never>()
-    const timer = setTimeout(() => rejectTimeout(new Error(`冒烟脚本超时(${timeoutMs}ms)`)), timeoutMs)
+    // Electron 22 的 Node 16 无 Promise.withResolvers,使用执行器形式
+    let timer: NodeJS.Timeout | undefined
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error(`冒烟脚本超时(${timeoutMs}ms)`)), timeoutMs)
+    })
     const run = win.webContents.executeJavaScript(`(async () => {\n${code}\n})()`, true)
     const result = await Promise.race([run, timeout])
     clearTimeout(timer)

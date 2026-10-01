@@ -13,6 +13,17 @@ export interface DocEntry {
 
 const docs = new Map<string, DocEntry>()
 
+/** 主进程文档缓存上限(低内存机器:避免多开文档累积整份 buffer) */
+const MAX_DOCS = 3
+
+function evictDocs(): void {
+  while (docs.size > MAX_DOCS) {
+    const oldest = docs.keys().next().value
+    if (oldest === undefined) break
+    docs.delete(oldest)
+  }
+}
+
 export function getDocEntry(docId: string): DocEntry | undefined {
   return docs.get(docId)
 }
@@ -70,6 +81,7 @@ export async function openDocument(filePath: string): Promise<OpenResult> {
 
   const docId = randomUUID()
   docs.set(docId, { path: filePath, buffer, encrypted, pageCount })
+  evictDocs()
   return {
     ok: true,
     docId,

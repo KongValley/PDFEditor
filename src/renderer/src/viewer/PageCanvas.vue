@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { PDFPageProxy, PageViewport, RenderTask, TextLayer as PdfTextLayer } from 'pdfjs-dist'
+import type { PDFPageProxy, PageViewport, RenderTask, TextLayerRenderTask } from 'pdfjs-dist'
 import type { Rect } from '@shared/types'
 import { docState, getPage, pageDisplaySize } from '../store/document'
 import { searchState } from '../store/search'
@@ -21,7 +21,7 @@ const rendered = ref(false)
 const viewport = ref<PageViewport | null>(null)
 
 let renderTask: RenderTask | null = null
-let textLayer: PdfTextLayer | null = null
+let textLayer: TextLayerRenderTask | null = null
 let seq = 0
 
 const size = computed(() => pageDisplaySize(props.pageNumber - 1))
@@ -43,15 +43,17 @@ async function renderTextLayer(page: PDFPageProxy, vp: PageViewport): Promise<vo
   if (!el) return
   textLayer?.cancel()
   el.replaceChildren()
-  el.style.setProperty('--total-scale-factor', String(vp.scale))
-  const layer = new pdfjs.TextLayer({
+  // pdf.js v3 文本层按 --scale-factor 计算字号(必须与 viewport.scale 一致)
+  el.style.setProperty('--scale-factor', String(vp.scale))
+  // pdf.js v3 无 TextLayer 类,使用 renderTextLayer(返回带 promise/cancel 的任务)
+  const task = pdfjs.renderTextLayer({
     textContentSource: page.streamTextContent(),
     container: el,
     viewport: vp
   })
-  textLayer = layer
+  textLayer = task
   try {
-    await layer.render()
+    await task.promise
   } catch (err) {
     console.warn('文本层渲染失败:', err)
   }
@@ -68,7 +70,7 @@ async function renderPage(): Promise<void> {
   const vp = info.viewport
   const ctx = canvas.getContext('2d')
   if (!ctx) return
-  const dpr = Math.min(window.devicePixelRatio || 1, 2)
+  const dpr = 1 // 低内存优先:统一按 1 倍位图渲染(内网机多为普通 DPI 屏)
   canvas.width = Math.floor(vp.width * dpr)
   canvas.height = Math.floor(vp.height * dpr)
   canvas.style.width = `${vp.width}px`
@@ -76,7 +78,6 @@ async function renderPage(): Promise<void> {
 
   renderTask?.cancel()
   renderTask = page.render({
-    canvas,
     canvasContext: ctx,
     viewport: vp,
     transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : undefined

@@ -3,7 +3,7 @@
 import { readFileSync, existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs'
+import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.js'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const args = process.argv.slice(2)

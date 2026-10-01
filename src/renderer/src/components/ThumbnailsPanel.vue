@@ -1,16 +1,17 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import PageThumb from './PageThumb.vue'
-import { docState } from '../store/document'
+import { docState, pinThumbPages } from '../store/document'
 import { scrollToPage } from '../store/viewer'
 import { deletePages, exportPages, insertBlankPage, mergePdfs, rotatePages } from '../lib/actions'
 
-const THUMB_WIDTH = 104
+const THUMB_WIDTH = 84
 
 const containerEl = ref<HTMLElement | null>(null)
 const visibleThumbs = reactive(new Set<number>())
 const selected = ref<Set<number>>(new Set())
 let observer: IntersectionObserver | null = null
+let resizeObserver: ResizeObserver | null = null
 
 const items = computed(() =>
   docState.pageBoxes.map((box, index) => {
@@ -41,6 +42,12 @@ function setupObserver(): void {
   observer?.disconnect()
   const root = containerEl.value
   if (!root) return
+  const sample = root.querySelector<HTMLElement>('[data-thumb]')
+  // 首次布局尚未生效时缩略图高度为 0,会被整批判为可见;等下一帧再建观察器
+  if (sample && sample.getBoundingClientRect().height === 0) {
+    requestAnimationFrame(() => setupObserver())
+    return
+  }
   observer = new IntersectionObserver(
     (entries) => {
       for (const entry of entries) {
@@ -49,8 +56,9 @@ function setupObserver(): void {
         if (entry.isIntersecting) visibleThumbs.add(pageNumber)
         else visibleThumbs.delete(pageNumber)
       }
+      pinThumbPages(visibleThumbs)
     },
-    { root, rootMargin: '300px 0px' }
+    { root, rootMargin: '150px 0px' }
   )
   for (const el of root.querySelectorAll<HTMLElement>('[data-thumb]')) observer.observe(el)
 }
@@ -81,10 +89,20 @@ async function onExport(): Promise<void> {
 
 onMounted(() => {
   setupObserver()
+  const root = containerEl.value
+  if (root && typeof ResizeObserver !== 'undefined') {
+    resizeObserver = new ResizeObserver(() => {
+      visibleThumbs.clear()
+      pinThumbPages(visibleThumbs)
+      setupObserver()
+    })
+    resizeObserver.observe(root)
+  }
 })
 
 onBeforeUnmount(() => {
   observer?.disconnect()
+  resizeObserver?.disconnect()
 })
 
 watch(

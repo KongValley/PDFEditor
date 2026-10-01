@@ -5,7 +5,6 @@ import { fileURLToPath } from 'node:url'
 import { openDocument, getDocEntry, sidecarPathFor } from './lib/pdfio'
 import { applyPageOp } from './lib/docops'
 import { getImageBuffer, importImage, readImageBuffer, type ImageImport } from './lib/images'
-import { getFormFields } from './lib/forms'
 import { writeAnnotations } from './lib/pdflibwrite'
 import type {
   Annotation,
@@ -23,6 +22,20 @@ function resolveRendererAsset(url: string): string {
   return join(rendererRoot, url.replace(/^\.?\//, ''))
 }
 
+/** 各 IPC handler 的返回结构均含 ok/error,失败时统一返回该形状 */
+type OkResult = { ok: boolean; error?: string }
+
+/** 统一兜底:pdf-lib/文件系统异常不应让 IPC 静默 reject(用户会看到"点了没反应") */
+async function guard<T extends OkResult>(run: () => Promise<T> | T): Promise<T> {
+  try {
+    return await run()
+  } catch (err) {
+    console.error('[ipc] 处理失败:', err)
+    // 失败结果结构上对所有 OkResult 子类型都成立(ok/error 均为其字段),此处断言安全
+    return { ok: false, error: err instanceof Error ? err.message : String(err) } as T
+  }
+}
+
 export function registerIpc(getWindow: () => BrowserWindow | null): void {
   ipcMain.handle('app:chooseFile', async (_e, multi: boolean): Promise<ChooseFileResult> => {
     const options: OpenDialogOptions = {
@@ -38,7 +51,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   ipcMain.handle('doc:open', async (_e, filePath: string) => openDocument(filePath))
 
   ipcMain.handle('pageops:apply', async (_e, payload: { docId: string; op: PageOp }) => {
-    return applyPageOp(payload.docId, payload.op)
+    return guard(() => applyPageOp(payload.docId, payload.op))
   })
 
   ipcMain.handle(
@@ -52,11 +65,13 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       }
       const result = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options)
       if (result.canceled || !result.filePath) return { ok: false, error: 'canceled' }
-      return applyPageOp(payload.docId, {
-        kind: 'export',
-        pages: payload.pages,
-        targetPath: result.filePath
-      })
+      return guard(() =>
+        applyPageOp(payload.docId, {
+          kind: 'export',
+          pages: payload.pages,
+          targetPath: result.filePath ?? ''
+        })
+      )
     }
   )
 
@@ -75,49 +90,47 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
         writeSidecar?: boolean
       }
     ): Promise<SaveResult> => {
-      const entry = getDocEntry(payload.docId)
-      if (!entry) return { ok: false, error: '文档未打开' }
+      return guard<SaveResult>(async () => {
+        const entry = getDocEntry(payload.docId)
+        if (!entry) return { ok: false, error: '文档未打开' }
 
-      let targetPath = payload.targetPath ?? ''
-      if (!targetPath) {
-        const win = getWindow()
-        const options = {
-          title: '保存 PDF',
-          defaultPath: payload.defaultPath,
-          filters: [{ name: 'PDF 文件', extensions: ['pdf'] }]
+        let targetPath = payload.targetPath ?? ''
+        if (!targetPath) {
+          const win = getWindow()
+          const options = {
+            title: '保存 PDF',
+            defaultPath: payload.defaultPath,
+            filters: [{ name: 'PDF 文件', extensions: ['pdf'] }]
+          }
+          const result = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options)
+          if (result.canceled || !result.filePath) return { ok: false, canceled: true }
+          targetPath = result.filePath
         }
-        const result = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options)
-        if (result.canceled || !result.filePath) return { ok: false, canceled: true }
-        targetPath = result.filePath
-      }
 
-      const sidecar: SidecarData = {
-        version: 1,
-        annotations: payload.annotations,
-        formValues: payload.formValues
-      }
-      const writeSidecar = payload.writeSidecar !== false
+        const sidecar: SidecarData = {
+          version: 1,
+          annotations: payload.annotations,
+          formValues: payload.formValues
+        }
+        const writeSidecar = payload.writeSidecar !== false
 
-      // 加密文档:无法解密重写,只保存 sidecar
-      if (entry.encrypted) {
+        // 加密文档:无法解密重写,只保存 sidecar
+        if (entry.encrypted) {
+          if (writeSidecar) await writeFile(sidecarPathFor(targetPath), JSON.stringify(sidecar, null, 2), 'utf8')
+          return { ok: true, mode: 'sidecar', savedPath: targetPath }
+        }
+
+        const { bytes, warnings } = await writeAnnotations(entry.buffer, {
+          annotations: payload.annotations,
+          formValues: payload.formValues,
+          resolveImage: async (imgId, refPath) => getImageBuffer(imgId) ?? (await readImageBuffer(refPath))
+        })
+        await writeFile(targetPath, bytes)
         if (writeSidecar) await writeFile(sidecarPathFor(targetPath), JSON.stringify(sidecar, null, 2), 'utf8')
-        return { ok: true, mode: 'sidecar', savedPath: targetPath }
-      }
-
-      const { bytes, warnings } = await writeAnnotations(entry.buffer, {
-        annotations: payload.annotations,
-        formValues: payload.formValues,
-        resolveImage: async (imgId, refPath) => getImageBuffer(imgId) ?? (await readImageBuffer(refPath))
+        return { ok: true, mode: 'pdf', savedPath: targetPath, warnings }
       })
-      await writeFile(targetPath, bytes)
-      if (writeSidecar) await writeFile(sidecarPathFor(targetPath), JSON.stringify(sidecar, null, 2), 'utf8')
-      return { ok: true, mode: 'pdf', savedPath: targetPath, warnings }
     }
   )
-
-  ipcMain.handle('form:getFields', async (_e, docId: string) => {
-    return getFormFields(docId)
-  })
 
   ipcMain.handle('app:readWorkerScript', async (_e, url: string): Promise<string> => {
     const path = resolveRendererAsset(url)

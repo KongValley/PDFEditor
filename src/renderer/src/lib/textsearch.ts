@@ -90,6 +90,8 @@ export async function searchDocument(query: string, limit = 200): Promise<Search
   const needle = query.toLowerCase()
   if (!needle.trim()) return results
   for (let pageNumber = 1; pageNumber <= docState.pageCount; pageNumber++) {
+    // 每 16 页让出主线程,避免大文档搜索时界面卡死
+    if (pageNumber % 16 === 0) await new Promise((resolve) => setTimeout(resolve, 0))
     const index = await getPageIndex(pageNumber)
     const haystack = index.text.toLowerCase()
     let from = 0

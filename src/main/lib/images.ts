@@ -5,6 +5,17 @@ import type { ImageInfo } from '@shared/types'
 
 const images = new Map<string, Buffer>()
 
+/** 图片内存缓存上限(未命中时按 refPath 重新读盘) */
+const MAX_IMAGES = 20
+
+function evictImages(): void {
+  while (images.size > MAX_IMAGES) {
+    const oldest = images.keys().next().value
+    if (oldest === undefined) break
+    images.delete(oldest)
+  }
+}
+
 export type ImageImport = ImageInfo | { error: string }
 
 function mimeOf(buffer: Buffer): string | null {
@@ -26,6 +37,7 @@ export async function importImage(refPath: string): Promise<ImageImport> {
   const size = nativeImage.createFromBuffer(buffer).getSize()
   const imgId = randomUUID()
   images.set(imgId, buffer)
+  evictImages()
   return {
     imgId,
     refPath,

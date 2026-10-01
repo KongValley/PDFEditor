@@ -108,6 +108,7 @@ export function removeAnnotation(id: string): void {
   if (!ann) return
   pushCommand({ type: 'remove', ann: { ...ann } })
   if (ui.selectedAnnotationId === id) ui.selectedAnnotationId = null
+  pruneImageUrls()
 }
 
 export function removeSelected(): void {
@@ -142,6 +143,7 @@ export function undo(): void {
   if (!cmd) return
   applyInverse(cmd)
   redoStack.push(cmd)
+  pruneImageUrls()
 }
 
 export function redo(): void {
@@ -149,6 +151,7 @@ export function redo(): void {
   if (!cmd) return
   applyForward(cmd)
   undoStack.push(cmd)
+  pruneImageUrls()
 }
 
 export function annotationsForPage(pageNumber: number): Annotation[] {
@@ -167,8 +170,15 @@ export function setImageUrl(imgId: string, dataUrl: string): void {
   annotState.imageUrls[imgId] = dataUrl
 }
 
-export function imageUrlFor(imgId: string): string {
-  return annotState.imageUrls[imgId] ?? ''
+/** 清理不再被任何注释引用的图片 dataUrl(低内存:大图 base64 可达数 MB) */
+function pruneImageUrls(): void {
+  const used = new Set<string>()
+  for (const ann of annotState.items) {
+    if (ann.kind === 'image') used.add(ann.imgId)
+  }
+  for (const imgId of Object.keys(annotState.imageUrls)) {
+    if (!used.has(imgId)) delete annotState.imageUrls[imgId]
+  }
 }
 
 /** 打开文档 / 恢复 sidecar 时重置(清空历史) */
@@ -177,6 +187,7 @@ export function resetAnnotations(items: Annotation[] = []): void {
   undoStack.length = 0
   redoStack.length = 0
   ui.selectedAnnotationId = null
+  pruneImageUrls()
 }
 
 /** 保存用:序列化快照 */

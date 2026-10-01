@@ -1,6 +1,6 @@
 import * as pdfjs from 'pdfjs-dist'
 import type { PDFDocumentProxy, PDFPageProxy, PageViewport } from 'pdfjs-dist'
-import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
+import workerUrl from 'pdfjs-dist/build/pdf.worker.min.js?url'
 
 export { pdfjs }
 export type { PDFDocumentProxy, PDFPageProxy, PageViewport }
@@ -24,11 +24,9 @@ export async function loadPdfDocument(
     data,
     cMapUrl: `${assetBase}cmaps/`,
     cMapPacked: true,
-    standardFontDataUrl: `${assetBase}standard_fonts/`,
-    iccUrl: `${assetBase}iccs/`,
-    wasmUrl: `${assetBase}wasm/`
+    standardFontDataUrl: `${assetBase}standard_fonts/`
   })
-  // pdf.js v6 起 onPassword 挂在 loadingTask 上(不再是 getDocument 参数)
+  // pdf.js 的密码回调挂在 loadingTask 上(v3/v6 一致)
   if (options.onPassword) task.onPassword = options.onPassword
   return task.promise
 }

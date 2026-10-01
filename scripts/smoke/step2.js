@@ -50,7 +50,7 @@ t.docState.rotationView = 0
 await sleep(600)
 
 const thumbSizes = [...document.querySelectorAll('.thumb-canvas')].map((c) => `${c.width}x${c.height}`)
-check('thumbnails rendered', thumbSizes.every((s) => s.startsWith('104x')), thumbSizes)
+check('thumbnails rendered', thumbSizes.every((s) => s.startsWith('84x')), thumbSizes)
 
 return {
   pageCount: t.docState.pageCount,

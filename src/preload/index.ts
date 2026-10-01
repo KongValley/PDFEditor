@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, webUtils } from 'electron'
+import { contextBridge, ipcRenderer } from 'electron'
 import type { PdfAPI } from '@shared/api'
 
 const api: PdfAPI = {
@@ -10,7 +10,8 @@ const api: PdfAPI = {
       ipcRenderer.removeListener(channel, listener)
     }
   },
-  getPathForFile: (file) => webUtils.getPathForFile(file)
+  // Electron 22 上 File.path 可用(webUtils 需 Electron 32+)
+  getPathForFile: (file) => file.path
 }
 
 contextBridge.exposeInMainWorld('pdfAPI', api)

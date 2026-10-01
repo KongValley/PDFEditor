@@ -108,7 +108,7 @@ out.restoredKinds = t.annotState.items.map((a) => a.kind)
 await t.openPath(`${root}/samples/sample-rotated.pdf`)
 await sleep(1200)
 t.ui.tool = 'select'
-t.docState.currentPage = 2
+t.scrollToPage(2)
 await sleep(900)
 
 const wrap2 = document.querySelector('[data-page="2"]')
@@ -146,7 +146,7 @@ await sleep(300)
 await t.openPath(`${root}/tmp/saved-rotated.pdf`)
 await sleep(1200)
 check('无 sidecar 时不恢复注释', t.annotState.items.length === 0, t.annotState.items.length)
-t.docState.currentPage = 2
+t.scrollToPage(2)
 await sleep(1200)
 
 const wrap2b = document.querySelector('[data-page="2"]')
