@@ -36,7 +36,7 @@ const env = {
 
 const child = spawn(
   process.execPath,
-  [path.join(root, 'node_modules/electron-builder/cli.js'), '--win', 'nsis', 'portable', `--${arch}`],
+  [path.join(root, 'node_modules/electron-builder/cli.js'), '--win', 'nsis', 'portable', `--${arch}`, '--publish', 'never'],
   { cwd: root, env }
 )
 let log = ''
