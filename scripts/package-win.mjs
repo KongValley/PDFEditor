@@ -13,9 +13,9 @@ if (arch !== 'ia32' && arch !== 'x64') {
 
 const root = path.resolve(fileURLToPath(new URL('..', import.meta.url)))
 const pkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'))
-const productName = pkg.build?.productName ?? pkg.name
 const releaseDir = path.join(root, 'release')
 const label = arch === 'ia32' ? 'Win7-32位' : 'Win10-64位'
+const archLabel = arch === 'ia32' ? 'win7-ia32' : 'win10-x64'
 const outDir = path.join(releaseDir, label)
 
 // 只清本架构目录 + release 根目录的 exe/blockmap(保证识别与命名无歧义);
@@ -71,8 +71,9 @@ if (!artifacts.nsis || !artifacts.portable || !existsSync(artifacts.nsis) || !ex
   process.exit(1)
 }
 
-const nsisName = `${productName}-安装包-${pkg.version}-${label}.exe`
-const portableName = `${productName}-便携版-${pkg.version}-${label}.exe`
+// 产物文件名用 ASCII:GitHub Release 资产名不接受中文
+const nsisName = `pdf-editor-setup-${pkg.version}-${archLabel}.exe`
+const portableName = `pdf-editor-portable-${pkg.version}-${archLabel}.exe`
 mkdirSync(outDir, { recursive: true })
 renameSync(artifacts.nsis, path.join(outDir, nsisName))
 renameSync(artifacts.portable, path.join(outDir, portableName))

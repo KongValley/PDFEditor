@@ -87,7 +87,7 @@ function createWindow(): void {
   if (process.env['ELECTRON_RENDERER_URL']) {
     void mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
-    void mainWindow.loadURL('app://bundle/index.html')
+    void mainWindow.loadURL('app://./index.html')
   }
 }
 
