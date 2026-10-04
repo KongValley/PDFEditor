@@ -10,10 +10,10 @@ import {
   insertBlankPage,
   mergePdfs,
   rotatePages,
-  splitPages
+  splitPdfs
 } from '../lib/actions'
 import { requestPagesRange, showToast, type PagesAction } from '../store/ui'
-import { parsePageRange, splitPageSegments } from '@shared/text'
+import { parsePageRange } from '@shared/text'
 
 const THUMB_WIDTH = 84
 
@@ -88,9 +88,6 @@ async function onRangeAction(action: PagesAction): Promise<void> {
     case 'extract':
       await extractPages(pages)
       break
-    case 'split':
-      await splitPages(splitPageSegments(pages))
-      break
     case 'export':
       if (result.format === 'png') {
         await exportPagesAsImages(pages, result.mode ?? 'each', result.direction)
@@ -111,6 +108,10 @@ async function onInsertBlank(): Promise<void> {
 
 async function onMerge(): Promise<void> {
   await mergePdfs()
+}
+
+async function onSplit(): Promise<void> {
+  await splitPdfs()
 }
 
 onMounted(() => {
@@ -147,7 +148,7 @@ watch(
     <div class="pages-toolbar">
       <button title="按页码范围删除页面" @click="onRangeAction('delete')">删除</button>
       <button title="按页码范围提取为新 PDF" @click="onRangeAction('extract')">提取</button>
-      <button title="按范围每段拆分出一个 PDF" @click="onRangeAction('split')">拆分</button>
+      <button title="批量拆分 PDF 页面" @click="onSplit">拆分</button>
       <button title="按范围导出(PDF / PNG多图 / 长图)" @click="onRangeAction('export')">导出</button>
       <button title="左旋 90°(选中页或当前页)" @click="onRotate(-90)">左旋</button>
       <button title="右旋 90°(选中页或当前页)" @click="onRotate(90)">右旋</button>
@@ -199,7 +200,7 @@ watch(
 
 .pages-toolbar {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 2px;
   padding: 6px;
   border-bottom: 1px solid var(--panel-border);

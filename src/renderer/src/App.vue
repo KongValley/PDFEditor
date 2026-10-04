@@ -6,6 +6,7 @@ import ThumbnailsPanel from './components/ThumbnailsPanel.vue'
 import RightPanel from './components/RightPanel.vue'
 import PasswordDialog from './components/PasswordDialog.vue'
 import MergeDialog from './components/MergeDialog.vue'
+import SplitDialog from './components/SplitDialog.vue'
 import PagesRangeDialog from './components/PagesRangeDialog.vue'
 import PdfViewer from './viewer/PdfViewer.vue'
 import { docState } from './store/document'
@@ -73,6 +74,7 @@ const fileName = computed(() => docState.filePath?.split(/[\\/]/).pop() ?? '')
     <PasswordDialog />
     <MergeDialog />
     <PagesRangeDialog />
+    <SplitDialog />
     <div v-if="ui.toast" class="toast" :class="ui.toast.kind">{{ ui.toast.text }}</div>
   </div>
 </template>

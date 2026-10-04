@@ -62,7 +62,7 @@ check('页数读取:加密报错', typeof counts[1].error === 'string', counts[1
 check('页数读取:缺失报错', typeof counts[2].error === 'string', counts[2])
 
 const rotated = `${__smokeRoot}/samples/sample-rotated.pdf`
-await t.mergePdfs([rotated], [{ path: rotated, pages: [0] }], `${__smokeRoot}/tmp/merge-out.pdf`)
+await t.mergePdfs([{ path: rotated, pages: [0] }], `${__smokeRoot}/tmp/merge-out.pdf`)
 await sleep(900)
 check('合并后页数 4(仅第 1 页)', t.docState.pageCount === 4, t.docState.pageCount)
 check('编辑器切到合并结果', (t.docState.filePath ?? '').endsWith('merge-out.pdf'), t.docState.filePath)

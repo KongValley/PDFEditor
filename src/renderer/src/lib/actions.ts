@@ -4,11 +4,19 @@ import type {
   ImageInfo,
   PageOp,
   PageOpResult,
-  SaveResult
+  SaveResult,
+  SplitTaskResult
 } from '@shared/types'
 import { docState, getPage, openByPath, reloadDocument } from '../store/document'
 import { annotState, applyPageMap, exportAnnotations, resetAnnotations, setImageUrl } from '../store/annotations'
-import { requestMergeSpecs, requestPassword, showToast, type MergeFileEntry } from '../store/ui'
+import {
+  requestMergeWork,
+  requestPassword,
+  requestSplitWork,
+  showToast,
+  type MergeRequest,
+  type PdfFileEntry
+} from '../store/ui'
 import { getPageViewport } from './pdfjs'
 
 /** 从 sidecar 恢复注释与图片缓存 */
@@ -105,6 +113,7 @@ export async function exportCurrentPageImage(): Promise<void> {
     const stem = docState.filePath?.split(/[\\/]/).pop()?.replace(/\.pdf$/i, '') ?? 'document'
     const result = (await window.pdfAPI.invoke('app:saveImage', {
       defaultName: `${stem}-第${pageNumber}页.png`,
+      dir: docState.filePath ? dirOf(docState.filePath) : undefined,
       dataUrl
     })) as SaveResult
     if (result.ok) showToast(`已导出图片:${result.savedPath ?? ''}`)
@@ -145,77 +154,78 @@ export async function insertBlankPage(afterIndex: number): Promise<void> {
   if (await runPageOp({ kind: 'insertBlank', afterIndex })) showToast('已插入空白页')
 }
 
-export async function mergePdfs(
-  paths?: string[],
-  specs?: AppendFileSpec[],
-  targetPath?: string
-): Promise<void> {
+/** 对话框「+ 添加文件」:选 PDF、去重、读页数;返回可加入列表的条目 */
+export async function pickPdfFileEntries(existingPaths: string[]): Promise<PdfFileEntry[]> {
+  const result = (await window.pdfAPI.invoke('app:chooseFile', true)) as ChooseFileResult
+  if (result.canceled || result.paths.length === 0) return []
+  const fresh = result.paths.filter((path) => !existingPaths.includes(path))
+  if (fresh.length === 0) return []
+  const counts = (await window.pdfAPI.invoke('pdf:pageCounts', fresh)) as Array<{
+    path: string
+    pageCount?: number
+    error?: string
+  }>
+  const entries: PdfFileEntry[] = []
+  let skipped = 0
+  for (const count of counts) {
+    if (typeof count.pageCount === 'number') {
+      entries.push({ path: count.path, name: baseName(count.path), pageCount: count.pageCount })
+    } else {
+      skipped++
+    }
+  }
+  if (skipped > 0) showToast(`已跳过 ${skipped} 个无法读取或加密的文件`, 'error')
+  return entries
+}
+
+export async function mergePdfs(specs?: AppendFileSpec[], targetPath?: string): Promise<void> {
   const docId = docState.docId
-  if (!docId) {
+  const filePath = docState.filePath
+  if (!docId || !filePath) {
     showToast('请先打开 PDF 文件', 'error')
     return
   }
-  let files = paths ?? []
-  if (files.length === 0) {
-    const result = (await window.pdfAPI.invoke('app:chooseFile', true)) as ChooseFileResult
-    if (result.canceled || result.paths.length === 0) return
-    files = result.paths
+  let files = specs ?? null
+  let request: MergeRequest | null = null
+  if (!files) {
+    request = await requestMergeWork({
+      path: filePath,
+      name: baseName(filePath),
+      pageCount: docState.pageCount,
+      defaultName: `${fileStem()}-合并`
+    })
+    if (!request) return
+    files = request.files
   }
 
-  let mergeSpecs = specs ?? null
-  if (!mergeSpecs) {
-    const counts = (await window.pdfAPI.invoke('pdf:pageCounts', files)) as Array<{
-      path: string
-      pageCount?: number
-      error?: string
-    }>
-    const readable: MergeFileEntry[] = []
-    for (const count of counts) {
-      if (typeof count.pageCount !== 'number') continue
-      readable.push({
-        path: count.path,
-        name: count.path.split(/[\\/]/).pop() ?? count.path,
-        pageCount: count.pageCount
-      })
-    }
-    if (readable.length === 0) {
-      showToast('没有可合并的文件', 'error')
-      return
-    }
-    const skipped = counts.length - readable.length
-    if (skipped > 0) showToast(`已跳过 ${skipped} 个无法读取的文件`, 'error')
-    mergeSpecs = await requestMergeSpecs(readable)
-    if (!mergeSpecs) return
+  if (!(await runPageOp({ kind: 'append', files }))) return
+
+  let target = targetPath
+  if (!target) {
+    const unique = (await window.pdfAPI.invoke('app:uniquePath', {
+      dir: request?.outputDir ?? dirOf(filePath),
+      name: `${request?.outputName.trim() || `${fileStem()}-合并`}.pdf`
+    })) as { path: string }
+    target = unique.path
   }
-
-  if (!(await runPageOp({ kind: 'append', files: mergeSpecs }))) return
-
   const result = (await window.pdfAPI.invoke('save:saveAs', {
     docId,
-    defaultPath: mergeOutputDefaultPath(),
-    targetPath,
+    defaultPath: target,
+    targetPath: target,
     annotations: exportAnnotations(),
     formValues: { ...docState.formValues }
   })) as SaveResult
-  if (result.canceled) {
-    showToast('合并已在编辑器中生效,未另存(可手动保存)')
-    return
-  }
   if (!result.ok) {
     showToast(result.error ?? '输出失败', 'error')
     return
   }
-  if (result.savedPath) docState.filePath = result.savedPath
-  showToast(`已合并 ${mergeSpecs.length} 个文件并输出:${result.savedPath ?? ''}`)
-}
-
-/** 合并输出默认路径:当前文档同目录下的 <文件名>-合并.pdf */
-function mergeOutputDefaultPath(): string {
-  const filePath = docState.filePath
-  if (!filePath) return '合并结果.pdf'
-  const sepIndex = Math.max(filePath.lastIndexOf('\\'), filePath.lastIndexOf('/'))
-  const dir = sepIndex >= 0 ? filePath.slice(0, sepIndex + 1) : ''
-  return `${dir}${fileStem()}-合并.pdf`
+  const savedPath = result.savedPath ?? target
+  docState.filePath = savedPath
+  showToast(`已合并 ${files.length} 个文件并输出:${savedPath}`)
+  if (request?.autoOpen) {
+    const opened = (await window.pdfAPI.invoke('app:openFolder', savedPath)) as { ok: boolean }
+    if (!opened.ok) showToast('打开输出目录失败', 'error')
+  }
 }
 
 export async function exportPages(pages: number[], targetPath?: string): Promise<void> {
@@ -252,27 +262,56 @@ export async function extractPages(pages: number[]): Promise<void> {
   else if (result.error !== 'canceled') showToast(result.error ?? '提取失败', 'error')
 }
 
-/** 拆分:每段各存为一个 PDF(每段一次保存对话框) */
-export async function splitPages(segments: number[][]): Promise<void> {
-  if (segments.length === 0) return
-  let done = 0
-  for (const pages of segments) {
-    const result = (await window.pdfAPI.invoke('pageops:export', {
-      docId: docState.docId,
-      pages,
-      defaultName: `${fileStem()}-拆-${pages.length}页.pdf`
-    })) as PageOpResult
-    if (!result.ok) {
-      if (result.error !== 'canceled') showToast(result.error ?? '拆分失败', 'error')
-      break
-    }
-    done++
+/** 批量拆分:对话框收集任务,一次性输出到目录 */
+export async function splitPdfs(): Promise<void> {
+  const docId = docState.docId
+  const filePath = docState.filePath
+  if (!docId || !filePath) {
+    showToast('请先打开 PDF 文件', 'error')
+    return
   }
-  if (done > 0) showToast(`已拆分为 ${done} 个文件`)
+  const request = await requestSplitWork({
+    docId,
+    path: filePath,
+    name: baseName(filePath),
+    pageCount: docState.pageCount
+  })
+  if (!request) return
+  const results = (await window.pdfAPI.invoke('pdf:splitTasks', {
+    tasks: request.tasks,
+    outputDir: request.outputDir
+  })) as SplitTaskResult[]
+  const okResults = results.filter((result) => result.ok)
+  const failCount = results.length - okResults.length
+  const fileCount = okResults.reduce((sum, result) => sum + (result.outputs?.length ?? 0), 0)
+  if (failCount > 0) {
+    const firstFail = results.find((result) => !result.ok)
+    console.warn('[split] 失败任务:', results.filter((result) => !result.ok))
+    showToast(
+      `拆分完成:成功 ${okResults.length} 个,失败 ${failCount} 个(如 ${baseName(firstFail?.path ?? '')}:${firstFail?.error ?? '未知错误'})`,
+      'error'
+    )
+  } else {
+    showToast(`拆分完成:输出 ${fileCount} 个文件`)
+  }
+  const firstOutput = okResults[0]?.outputs?.[0]
+  if (request.autoOpen && firstOutput) {
+    const opened = (await window.pdfAPI.invoke('app:openFolder', firstOutput)) as { ok: boolean }
+    if (!opened.ok) showToast('打开输出目录失败', 'error')
+  }
 }
 
 function fileStem(): string {
   return docState.filePath?.split(/[\\/]/).pop()?.replace(/\.pdf$/i, '') ?? 'document'
+}
+
+function baseName(p: string): string {
+  return p.split(/[\\/]/).pop() ?? p
+}
+
+function dirOf(p: string): string {
+  const index = Math.max(p.lastIndexOf('\\'), p.lastIndexOf('/'))
+  return index >= 0 ? p.slice(0, index) : ''
 }
 
 /** 渲染单页到离屏 canvas(scale=2,与 exportCurrentPageImage 一致) */
@@ -321,6 +360,7 @@ export async function exportPagesAsImages(
       }
       const result = (await window.pdfAPI.invoke('app:saveImage', {
         defaultName: `${fileStem()}-长图.png`,
+        dir: docState.filePath ? dirOf(docState.filePath) : undefined,
         dataUrl: out.toDataURL('image/png')
       })) as SaveResult
       if (result.ok) showToast(`已导出长图:${result.savedPath ?? ''}`)

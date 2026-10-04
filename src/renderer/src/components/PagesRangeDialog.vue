@@ -12,7 +12,6 @@ import {
 const TITLES: Record<PagesAction, string> = {
   extract: '提取页面',
   delete: '删除页面',
-  split: '拆分页面',
   export: '导出页面'
 }
 

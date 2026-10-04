@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { PDFDocument } from 'pdf-lib'
 import type { OpenResult, SidecarData } from '@shared/types'
@@ -57,6 +58,17 @@ export function readSidecar(pdfPath: string): SidecarData | null {
 
 export function toArrayBuffer(buffer: Buffer): ArrayBuffer {
   return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer
+}
+
+/** 同名文件自动改名:目标已存在时依次尝试 <stem>-1<ext>、<stem>-2<ext>…(与导出多图逻辑一致) */
+export function uniqueFilePath(dir: string, fileName: string): string {
+  const dot = fileName.lastIndexOf('.')
+  const stem = dot <= 0 ? fileName : fileName.slice(0, dot)
+  const ext = dot <= 0 ? '' : fileName.slice(dot)
+  let target = join(dir, fileName)
+  let n = 1
+  while (existsSync(target)) target = join(dir, `${stem}-${n++}${ext}`)
+  return target
 }
 
 /** 读取任意 PDF 的页数(不进入文档缓存);加密或损坏返回 error */

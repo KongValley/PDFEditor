@@ -1,7 +1,8 @@
-import { readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { basename, dirname, join } from 'node:path'
 import { PDFDocument, degrees } from 'pdf-lib'
-import { getDocEntry, setDocBuffer, toArrayBuffer } from './pdfio'
-import type { PageOp, PageOpResult } from '@shared/types'
+import { getDocEntry, setDocBuffer, toArrayBuffer, uniqueFilePath } from './pdfio'
+import type { PageOp, PageOpResult, SplitTask, SplitTaskResult } from '@shared/types'
 
 function identityMap(count: number): number[] {
   return Array.from({ length: count }, (_, i) => i)
@@ -67,6 +68,7 @@ export async function applyPageOp(docId: string, op: PageOp): Promise<PageOpResu
       const indices = op.pages.filter((i) => i >= 0 && i < oldCount)
       const copied = await out.copyPages(doc, indices)
       for (const page of copied) out.addPage(page)
+      await mkdir(dirname(op.targetPath), { recursive: true })
       await writeFile(op.targetPath, await out.save({ useObjectStreams: false }))
       return { ok: true, savedPath: op.targetPath }
     }
@@ -81,4 +83,63 @@ export async function applyPageOp(docId: string, op: PageOp): Promise<PageOpResu
     pageCount: doc.getPageCount(),
     pageMap
   }
+}
+
+/** 批量拆分:每任务独立处理,失败不中断其它任务 */
+export async function splitPdfTasks(tasks: SplitTask[], outputDir: string | null): Promise<SplitTaskResult[]> {
+  const results: SplitTaskResult[] = []
+  for (const task of tasks) {
+    const entry = task.docId ? getDocEntry(task.docId) : undefined
+    let bytes: Buffer
+    try {
+      bytes = entry?.buffer ?? (await readFile(task.path))
+    } catch (err) {
+      results.push({ path: task.path, ok: false, error: `无法读取文件:${(err as Error).message}` })
+      continue
+    }
+    let src: PDFDocument
+    try {
+      src = await PDFDocument.load(bytes)
+    } catch {
+      results.push({ path: task.path, ok: false, error: '无法解析 PDF(加密或损坏)' })
+      continue
+    }
+    const count = src.getPageCount()
+    let chunks: number[][]
+    if (task.mode === 'maxPages') {
+      const start = Math.min(Math.max(task.start, 1), Math.max(count, 1))
+      const end = Math.min(Math.max(task.end, start), count)
+      const pages: number[] = []
+      for (let p = start; p <= end; p++) pages.push(p - 1)
+      const size = Math.max(1, Math.floor(task.pagesPerFile))
+      chunks = []
+      for (let i = 0; i < pages.length; i += size) chunks.push(pages.slice(i, i + size))
+    } else {
+      chunks = task.ranges
+        .map((range) => range.filter((p) => p >= 0 && p < count))
+        .filter((range) => range.length > 0)
+    }
+    if (chunks.length === 0) {
+      results.push({ path: task.path, ok: false, error: '未指定要拆分的页面' })
+      continue
+    }
+    try {
+      const destDir = outputDir ?? dirname(task.path)
+      await mkdir(destDir, { recursive: true })
+      const stem = basename(task.path).replace(/\.pdf$/i, '') || 'document'
+      const outputs: string[] = []
+      for (const [i, chunk] of chunks.entries()) {
+        const out = await PDFDocument.create()
+        const copied = await out.copyPages(src, chunk)
+        for (const page of copied) out.addPage(page)
+        const target = uniqueFilePath(destDir, `${stem}-${i + 1}.pdf`)
+        await writeFile(target, await out.save({ useObjectStreams: false }))
+        outputs.push(target)
+      }
+      results.push({ path: task.path, ok: true, outputs })
+    } catch (err) {
+      results.push({ path: task.path, ok: false, error: `拆分失败:${(err as Error).message}` })
+    }
+  }
+  return results
 }

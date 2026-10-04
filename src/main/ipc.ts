@@ -1,10 +1,10 @@
-import { app, dialog, ipcMain, type BrowserWindow, type OpenDialogOptions } from 'electron'
+import { app, dialog, ipcMain, shell, type BrowserWindow, type OpenDialogOptions } from 'electron'
 import { existsSync } from 'node:fs'
-import { readFile, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { openDocument, getDocEntry, readPdfPageCount, sidecarPathFor } from './lib/pdfio'
-import { applyPageOp } from './lib/docops'
+import { openDocument, getDocEntry, readPdfPageCount, sidecarPathFor, uniqueFilePath } from './lib/pdfio'
+import { applyPageOp, splitPdfTasks } from './lib/docops'
 import { getImageBuffer, importImage, readImageBuffer, type ImageImport } from './lib/images'
 import { writeAnnotations } from './lib/pdflibwrite'
 import type {
@@ -14,7 +14,9 @@ import type {
   PageOp,
   PageOpResult,
   SaveResult,
-  SidecarData
+  SidecarData,
+  SplitTask,
+  SplitTaskResult
 } from '@shared/types'
 
 function resolveRendererAsset(url: string): string {
@@ -58,6 +60,41 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     }
   )
 
+  ipcMain.handle(
+    'pdf:splitTasks',
+    async (_e, payload: { tasks: SplitTask[]; outputDir: string | null }): Promise<SplitTaskResult[]> =>
+      splitPdfTasks(payload.tasks, payload.outputDir)
+  )
+
+  ipcMain.handle('app:chooseDir', async (): Promise<{ canceled: boolean; dir: string }> => {
+    const win = getWindow()
+    const options: OpenDialogOptions = {
+      title: '选择输出目录',
+      properties: ['openDirectory', 'createDirectory']
+    }
+    const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
+    if (result.canceled || result.filePaths.length === 0) return { canceled: true, dir: '' }
+    return { canceled: false, dir: result.filePaths[0] }
+  })
+
+  ipcMain.handle('app:openFolder', async (_e, filePath: string): Promise<{ ok: boolean }> => {
+    const dir = dirname(filePath)
+    if (!existsSync(dir)) {
+      console.warn('[openFolder] 目录不存在:', dir)
+      return { ok: false }
+    }
+    const error = await shell.openPath(dir)
+    if (error) console.warn('[openFolder]', error)
+    return { ok: !error }
+  })
+
+  ipcMain.handle(
+    'app:uniquePath',
+    async (_e, payload: { dir: string; name: string }): Promise<{ path: string }> => ({
+      path: uniqueFilePath(payload.dir, payload.name)
+    })
+  )
+
   ipcMain.handle('pageops:apply', async (_e, payload: { docId: string; op: PageOp }) => {
     return guard(() => applyPageOp(payload.docId, payload.op))
   })
@@ -66,9 +103,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     'pageops:export',
     async (_e, payload: { docId: string; pages: number[]; defaultName: string }): Promise<PageOpResult> => {
       const win = getWindow()
+      const entry = getDocEntry(payload.docId)
       const options = {
         title: '拆分导出所选页面',
-        defaultPath: payload.defaultName,
+        defaultPath: entry ? uniqueFilePath(dirname(entry.path), payload.defaultName) : payload.defaultName,
         filters: [{ name: 'PDF 文件', extensions: ['pdf'] }]
       }
       const result = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options)
@@ -114,6 +152,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
           if (result.canceled || !result.filePath) return { ok: false, canceled: true }
           targetPath = result.filePath
         }
+
+        await mkdir(dirname(targetPath), { recursive: true })
 
         const sidecar: SidecarData = {
           version: 1,
@@ -163,11 +203,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
 
   ipcMain.handle(
     'app:saveImage',
-    async (_e, payload: { defaultName: string; dataUrl: string }): Promise<SaveResult> => {
+    async (_e, payload: { defaultName: string; dataUrl: string; dir?: string }): Promise<SaveResult> => {
       const win = getWindow()
       const options = {
         title: '导出图片',
-        defaultPath: payload.defaultName,
+        defaultPath: payload.dir ? uniqueFilePath(payload.dir, payload.defaultName) : payload.defaultName,
         filters: [{ name: 'PNG 图片', extensions: ['png'] }]
       }
       const result = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options)

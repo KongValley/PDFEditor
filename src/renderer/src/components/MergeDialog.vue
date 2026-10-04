@@ -1,72 +1,199 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch, type ComponentPublicInstance } from 'vue'
-import { mergeDialogState, submitMergeSpecs } from '../store/ui'
-import { parsePageRange } from '@shared/text'
+import { computed, nextTick, ref, watch } from 'vue'
+import { mergeDialogState, submitMergeWork, type MergeRow } from '../store/ui'
+import { pickPdfFileEntries } from '../lib/actions'
 
-const inputs = ref<string[]>([])
-const inputEls = ref<(HTMLInputElement | null)[]>([])
+const nameInput = ref<HTMLInputElement | null>(null)
 
 watch(
   () => mergeDialogState.open,
   async (open) => {
     if (!open) return
-    inputs.value = mergeDialogState.files.map(() => '')
-    inputEls.value = []
     await nextTick()
-    inputEls.value[0]?.focus()
+    nameInput.value?.focus()
   }
 )
 
-const rows = computed(() =>
-  mergeDialogState.files.map((entry, i) => {
-    const text = (inputs.value[i] ?? '').trim()
-    const pages = text === '' ? null : parsePageRange(text, entry.pageCount)
-    return { ok: text === '' || pages !== null, pages }
-  })
-)
+function startInt(row: MergeRow): number {
+  return /^\d+$/.test(row.start.trim()) ? Number(row.start) : Number.NaN
+}
 
-const allValid = computed(() => rows.value.every((row) => row.ok))
+function endInt(row: MergeRow): number {
+  return /^\d+$/.test(row.end.trim()) ? Number(row.end) : Number.NaN
+}
 
-function setInputRef(el: Element | ComponentPublicInstance | null, index: number): void {
-  inputEls.value[index] = el as HTMLInputElement | null
+function startBad(row: MergeRow): boolean {
+  const value = startInt(row)
+  return Number.isNaN(value) || value < 1 || value > row.pageCount
+}
+
+function endBad(row: MergeRow): boolean {
+  if (startBad(row)) return true
+  const value = endInt(row)
+  return Number.isNaN(value) || value < 1 || value > row.pageCount || value < startInt(row)
+}
+
+const outputNameBad = computed(() => {
+  const name = mergeDialogState.outputName.trim()
+  return name === '' || /[\\/:*?"<>|]/.test(name)
+})
+
+const totalPages = computed(() => {
+  let total = 0
+  for (const row of mergeDialogState.rows) {
+    if (!startBad(row) && !endBad(row)) total += endInt(row) - startInt(row) + 1
+  }
+  return total
+})
+
+const selectedCount = computed(() => mergeDialogState.rows.filter((row) => row.selected).length)
+
+const allValid = computed(() => mergeDialogState.rows.every((row) => !startBad(row) && !endBad(row)))
+
+const canMerge = computed(() => mergeDialogState.rows.length >= 2 && allValid.value && !outputNameBad.value)
+
+async function addFiles(): Promise<void> {
+  const entries = await pickPdfFileEntries(mergeDialogState.rows.map((row) => row.path))
+  for (const entry of entries) {
+    mergeDialogState.rows.push({
+      kind: 'file',
+      path: entry.path,
+      name: entry.name,
+      pageCount: entry.pageCount,
+      start: '1',
+      end: String(entry.pageCount),
+      selected: false
+    })
+  }
+}
+
+function clearSelected(): void {
+  mergeDialogState.rows = mergeDialogState.rows.filter((row) => row.kind === 'current' || !row.selected)
+}
+
+function moveRow(index: number, delta: number): void {
+  const rows = mergeDialogState.rows
+  const target = index + delta
+  if (index <= 0 || target <= 0 || target >= rows.length) return
+  const row = rows[index]
+  rows[index] = rows[target]
+  rows[target] = row
+}
+
+function removeRow(index: number): void {
+  if (mergeDialogState.rows[index]?.kind !== 'file') return
+  mergeDialogState.rows.splice(index, 1)
+}
+
+async function onDirChange(event: Event): Promise<void> {
+  const select = event.target as HTMLSelectElement
+  if (select.value === '__choose__') {
+    const result = (await window.pdfAPI.invoke('app:chooseDir')) as { canceled: boolean; dir: string }
+    if (!result.canceled && result.dir) {
+      mergeDialogState.outputDir = result.dir
+    } else {
+      select.value = mergeDialogState.outputDir ?? ''
+    }
+    return
+  }
+  mergeDialogState.outputDir = select.value === '' ? null : select.value
 }
 
 function confirm(): void {
-  if (!allValid.value) return
-  submitMergeSpecs(
-    mergeDialogState.files.map((file, i) => ({ path: file.path, pages: rows.value[i].pages }))
-  )
+  if (!canMerge.value) return
+  submitMergeWork({
+    files: mergeDialogState.rows
+      .filter((row) => row.kind === 'file')
+      .map((row) => {
+        const pages: number[] = []
+        for (let p = startInt(row); p <= endInt(row); p++) pages.push(p - 1)
+        return { path: row.path, pages }
+      }),
+    outputName: mergeDialogState.outputName.trim(),
+    outputDir: mergeDialogState.outputDir,
+    autoOpen: mergeDialogState.autoOpen
+  })
 }
 
 function cancel(): void {
-  submitMergeSpecs(null)
+  submitMergeWork(null)
 }
 </script>
 
 <template>
   <div v-if="mergeDialogState.open" class="mask">
-    <div class="dialog">
+    <div class="dialog" @keydown.esc="cancel">
       <div class="title">合并页面</div>
-      <div class="message">依次追加到当前文档末尾;留空 = 全部页</div>
-      <div class="file-list">
-        <div v-for="(file, i) in mergeDialogState.files" :key="i" class="file-row">
-          <div class="file-info">
-            <span class="file-name" :title="file.path">{{ file.name }}</span>
-            <span class="file-pages">共 {{ file.pageCount }} 页</span>
+      <div class="head grid-row">
+        <span></span>
+        <span>名称</span>
+        <span>页数</span>
+        <span>输出范围</span>
+        <span>操作</span>
+      </div>
+      <div class="list">
+        <div v-for="(row, i) in mergeDialogState.rows" :key="i" class="row-wrap">
+          <div class="grid-row">
+            <input v-model="row.selected" type="checkbox" :disabled="row.kind === 'current'" />
+            <span class="file-name" :title="row.path">{{ row.name }}</span>
+            <span>{{ row.pageCount }}</span>
+            <div class="range">
+              <input
+                v-model="row.start"
+                class="num"
+                :class="{ invalid: startBad(row) }"
+                inputmode="numeric"
+                :disabled="row.kind === 'current'"
+              />
+              <span>-</span>
+              <input
+                v-model="row.end"
+                class="num"
+                :class="{ invalid: endBad(row) }"
+                inputmode="numeric"
+                :disabled="row.kind === 'current'"
+              />
+            </div>
+            <div v-if="row.kind === 'file'" class="ops">
+              <button title="上移" :disabled="i <= 1" @click="moveRow(i, -1)">↑</button>
+              <button title="下移" :disabled="i >= mergeDialogState.rows.length - 1" @click="moveRow(i, 1)">
+                ↓
+              </button>
+              <button title="删除该文件" @click="removeRow(i)">×</button>
+            </div>
+            <div v-else></div>
           </div>
-          <input
-            :ref="(el) => setInputRef(el, i)"
-            v-model="inputs[i]"
-            placeholder="如 1-3,5"
-            @keydown.enter="confirm"
-            @keydown.esc="cancel"
-          />
-          <div v-if="!rows[i].ok" class="row-error">页码范围无效</div>
         </div>
       </div>
+      <div class="list-foot">
+        <button @click="addFiles">+ 添加文件</button>
+        <button :disabled="selectedCount === 0" @click="clearSelected">
+          清除选中({{ selectedCount }}/{{ mergeDialogState.rows.length }})
+        </button>
+      </div>
+      <div class="set-row">
+        <span class="label">输出目录</span>
+        <select :value="mergeDialogState.outputDir ?? ''" @change="onDirChange">
+          <option value="">PDF相同目录</option>
+          <option v-if="mergeDialogState.outputDir !== null" :value="mergeDialogState.outputDir">
+            {{ mergeDialogState.outputDir }}
+          </option>
+          <option value="__choose__">选择目录…</option>
+        </select>
+      </div>
+      <div class="set-row">
+        <span class="label">输出名称</span>
+        <input ref="nameInput" v-model="mergeDialogState.outputName" class="name-input" :class="{ invalid: outputNameBad }" />
+        <span class="suffix">.pdf</span>
+      </div>
+      <label class="set-check">
+        <input v-model="mergeDialogState.autoOpen" type="checkbox" />
+        转换完成自动打开文件目录
+      </label>
       <div class="actions">
+        <span class="total">共 {{ totalPages }} 页</span>
         <button @click="cancel">取消</button>
-        <button class="primary" :disabled="!allValid" @click="confirm">确定</button>
+        <button class="primary" :disabled="!canMerge" @click="confirm">开始合并</button>
       </div>
     </div>
   </div>
@@ -84,7 +211,8 @@ function cancel(): void {
 }
 
 .dialog {
-  width: 320px;
+  width: 560px;
+  max-width: calc(100vw - 32px);
   padding: 16px;
   border-radius: 8px;
   background: var(--panel-bg);
@@ -99,52 +227,100 @@ function cancel(): void {
   font-weight: 600;
 }
 
-.message {
-  color: var(--toolbar-fg-dim);
+.grid-row {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) 56px 160px 96px;
+  gap: 6px;
+  align-items: center;
 }
 
-.file-list {
-  max-height: 260px;
+.head {
+  color: var(--toolbar-fg-dim);
+  font-size: 12px;
+}
+
+.list {
+  max-height: 300px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-}
-
-.file-row {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.file-info {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
+  gap: 6px;
 }
 
 .file-name {
-  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.file-pages {
+.range {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.num {
+  width: 100%;
+  min-width: 0;
+  text-align: center;
+}
+
+.invalid {
+  border-color: #e06c6c;
+}
+
+.ops {
+  display: flex;
+  gap: 4px;
+}
+
+.ops button {
+  padding: 2px 6px;
+}
+
+.list-foot {
+  display: flex;
+  gap: 8px;
+}
+
+.set-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.set-row .label {
+  width: 64px;
   flex: none;
-  font-size: 12px;
   color: var(--toolbar-fg-dim);
 }
 
-.row-error {
-  font-size: 12px;
-  color: #ffb4b4;
+.set-row select,
+.name-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.suffix {
+  color: var(--toolbar-fg-dim);
+}
+
+.set-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .actions {
   display: flex;
   justify-content: flex-end;
+  align-items: center;
   gap: 8px;
+}
+
+.actions .total {
+  margin-right: auto;
+  color: var(--toolbar-fg-dim);
 }
 
 button.primary {

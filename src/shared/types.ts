@@ -216,6 +216,18 @@ export interface AppendFileSpec {
   pages: number[] | null
 }
 
+/** 批量拆分任务(1-based 闭区间;两模式互斥;docId 存在时用内存 buffer) */
+export type SplitTask =
+  | { mode: 'maxPages'; path: string; docId?: string; start: number; end: number; pagesPerFile: number }
+  | { mode: 'ranges'; path: string; docId?: string; ranges: number[][] }
+
+export interface SplitTaskResult {
+  path: string
+  ok: boolean
+  outputs?: string[]
+  error?: string
+}
+
 /** 页面操作指令(main 侧 docops 执行) */
 export type PageOp =
   | { kind: 'delete'; pages: number[] }

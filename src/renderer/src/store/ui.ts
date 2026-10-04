@@ -1,5 +1,5 @@
 import { reactive } from 'vue'
-import type { AppendFileSpec, StampKey } from '@shared/types'
+import type { AppendFileSpec, SplitTask, StampKey } from '@shared/types'
 
 export type Tool =
   | 'select'
@@ -81,7 +81,7 @@ export function submitPassword(value: string | null): void {
 
 /* --------------------------- 页面范围对话框 --------------------------- */
 
-export type PagesAction = 'extract' | 'delete' | 'split' | 'export'
+export type PagesAction = 'extract' | 'delete' | 'export'
 export type ExportFormat = 'pdf' | 'png'
 export type ExportMode = 'each' | 'long'
 
@@ -111,28 +111,137 @@ export function submitPagesRange(value: PagesRangeRequest | null): void {
   pagesResolve = null
 }
 
-/* --------------------------- 合并页码对话框 --------------------------- */
+/* --------------------------- 合并对话框 --------------------------- */
 
-export interface MergeFileEntry {
+export interface PdfFileEntry {
   path: string
   name: string
   pageCount: number
 }
 
-export const mergeDialogState = reactive({ open: false, files: [] as MergeFileEntry[] })
+export interface MergeRow {
+  kind: 'current' | 'file'
+  path: string
+  name: string
+  pageCount: number
+  start: string
+  end: string
+  selected: boolean
+}
 
-let mergeResolve: ((value: AppendFileSpec[] | null) => void) | null = null
+export interface MergeRequest {
+  files: AppendFileSpec[]
+  outputName: string
+  outputDir: string | null
+  autoOpen: boolean
+}
 
-export function requestMergeSpecs(files: MergeFileEntry[]): Promise<AppendFileSpec[] | null> {
-  mergeDialogState.files = files
+export const mergeDialogState = reactive({
+  open: false,
+  rows: [] as MergeRow[],
+  outputName: '',
+  outputDir: null as string | null,
+  autoOpen: false
+})
+
+let mergeResolve: ((value: MergeRequest | null) => void) | null = null
+
+export function requestMergeWork(seed: {
+  path: string
+  name: string
+  pageCount: number
+  defaultName: string
+}): Promise<MergeRequest | null> {
+  mergeDialogState.rows = [
+    {
+      kind: 'current',
+      path: seed.path,
+      name: seed.name,
+      pageCount: seed.pageCount,
+      start: '1',
+      end: String(seed.pageCount),
+      selected: false
+    }
+  ]
+  mergeDialogState.outputName = seed.defaultName
+  mergeDialogState.outputDir = null
+  mergeDialogState.autoOpen = false
   mergeDialogState.open = true
   return new Promise((resolve) => {
     mergeResolve = resolve
   })
 }
 
-export function submitMergeSpecs(value: AppendFileSpec[] | null): void {
+export function submitMergeWork(value: MergeRequest | null): void {
   mergeDialogState.open = false
   mergeResolve?.(value)
   mergeResolve = null
+}
+
+/* --------------------------- 拆分对话框 --------------------------- */
+
+export type SplitMode = 'maxPages' | 'ranges'
+
+export interface SplitRow {
+  kind: 'current' | 'file'
+  docId?: string
+  path: string
+  name: string
+  pageCount: number
+  mode: SplitMode
+  start: string
+  end: string
+  pagesPerFile: string
+  ranges: string
+  selected: boolean
+}
+
+export interface SplitRequest {
+  tasks: SplitTask[]
+  outputDir: string | null
+  autoOpen: boolean
+}
+
+export const splitDialogState = reactive({
+  open: false,
+  rows: [] as SplitRow[],
+  outputDir: null as string | null,
+  autoOpen: false
+})
+
+let splitResolve: ((value: SplitRequest | null) => void) | null = null
+
+export function requestSplitWork(seed: {
+  docId: string
+  path: string
+  name: string
+  pageCount: number
+}): Promise<SplitRequest | null> {
+  splitDialogState.rows = [
+    {
+      kind: 'current',
+      docId: seed.docId,
+      path: seed.path,
+      name: seed.name,
+      pageCount: seed.pageCount,
+      mode: 'maxPages',
+      start: '1',
+      end: String(seed.pageCount),
+      pagesPerFile: '1',
+      ranges: `1-${seed.pageCount}`,
+      selected: false
+    }
+  ]
+  splitDialogState.outputDir = null
+  splitDialogState.autoOpen = false
+  splitDialogState.open = true
+  return new Promise((resolve) => {
+    splitResolve = resolve
+  })
+}
+
+export function submitSplitWork(value: SplitRequest | null): void {
+  splitDialogState.open = false
+  splitResolve?.(value)
+  splitResolve = null
 }
