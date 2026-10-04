@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs'
 import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { openDocument, getDocEntry, sidecarPathFor } from './lib/pdfio'
+import { openDocument, getDocEntry, readPdfPageCount, sidecarPathFor } from './lib/pdfio'
 import { applyPageOp } from './lib/docops'
 import { getImageBuffer, importImage, readImageBuffer, type ImageImport } from './lib/images'
 import { writeAnnotations } from './lib/pdflibwrite'
@@ -50,6 +50,13 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   })
 
   ipcMain.handle('doc:open', async (_e, filePath: string) => openDocument(filePath))
+
+  ipcMain.handle(
+    'pdf:pageCounts',
+    async (_e, paths: string[]): Promise<Array<{ path: string; pageCount?: number; error?: string }>> => {
+      return Promise.all(paths.map(async (path) => ({ path, ...(await readPdfPageCount(path)) })))
+    }
+  )
 
   ipcMain.handle('pageops:apply', async (_e, payload: { docId: string; op: PageOp }) => {
     return guard(() => applyPageOp(payload.docId, payload.op))

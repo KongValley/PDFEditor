@@ -210,12 +210,18 @@ export interface PageOpResult {
   savedPath?: string
 }
 
+/** 追加合并的单个文件:pages 为要合并的 0-based 页序;null = 全部页 */
+export interface AppendFileSpec {
+  path: string
+  pages: number[] | null
+}
+
 /** 页面操作指令(main 侧 docops 执行) */
 export type PageOp =
   | { kind: 'delete'; pages: number[] }
   | { kind: 'rotate'; pages: number[]; delta: number }
   | { kind: 'insertBlank'; afterIndex: number }
-  | { kind: 'append'; paths: string[] }
+  | { kind: 'append'; files: AppendFileSpec[] }
   | { kind: 'export'; pages: number[]; targetPath: string }
 
 export interface SaveResult {

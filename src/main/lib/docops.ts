@@ -49,10 +49,14 @@ export async function applyPageOp(docId: string, op: PageOp): Promise<PageOpResu
       break
     }
     case 'append': {
-      for (const path of op.paths) {
-        const bytes = await readFile(path)
+      for (const file of op.files) {
+        const bytes = await readFile(file.path)
         const other = await PDFDocument.load(bytes)
-        const copied = await doc.copyPages(other, other.getPageIndices())
+        const indices = (file.pages ?? other.getPageIndices()).filter(
+          (i) => i >= 0 && i < other.getPageCount()
+        )
+        if (indices.length === 0) continue
+        const copied = await doc.copyPages(other, indices)
         for (const page of copied) doc.addPage(page)
       }
       break

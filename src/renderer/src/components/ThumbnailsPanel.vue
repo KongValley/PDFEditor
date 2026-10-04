@@ -152,7 +152,7 @@ watch(
       <button title="左旋 90°(选中页或当前页)" @click="onRotate(-90)">左旋</button>
       <button title="右旋 90°(选中页或当前页)" @click="onRotate(90)">右旋</button>
       <button title="在当前页之后插入空白页" @click="onInsertBlank">空白页</button>
-      <button title="合并其他 PDF 到末尾" @click="onMerge">合并</button>
+      <button title="合并其他 PDF(可指定页码,另存为新文件)" @click="onMerge">合并</button>
     </div>
     <div ref="containerEl" class="thumbs-scroll">
       <div class="thumbs-inner">

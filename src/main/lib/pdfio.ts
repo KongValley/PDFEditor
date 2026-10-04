@@ -59,6 +59,25 @@ export function toArrayBuffer(buffer: Buffer): ArrayBuffer {
   return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer
 }
 
+/** 读取任意 PDF 的页数(不进入文档缓存);加密或损坏返回 error */
+export async function readPdfPageCount(
+  filePath: string
+): Promise<{ pageCount: number } | { error: string }> {
+  let buffer: Buffer
+  try {
+    buffer = await readFile(filePath)
+  } catch (err) {
+    return { error: `无法读取文件:${(err as Error).message}` }
+  }
+  try {
+    const parsed = await PDFDocument.load(buffer, { ignoreEncryption: true })
+    if (parsed.isEncrypted) return { error: '加密文档不支持合并' }
+    return { pageCount: parsed.getPageCount() }
+  } catch {
+    return { error: '无法解析 PDF' }
+  }
+}
+
 export async function openDocument(filePath: string): Promise<OpenResult> {
   let buffer: Buffer
   try {

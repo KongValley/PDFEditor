@@ -1,5 +1,5 @@
 import { reactive } from 'vue'
-import type { StampKey } from '@shared/types'
+import type { AppendFileSpec, StampKey } from '@shared/types'
 
 export type Tool =
   | 'select'
@@ -109,4 +109,30 @@ export function submitPagesRange(value: PagesRangeRequest | null): void {
   pagesDialogState.open = false
   pagesResolve?.(value)
   pagesResolve = null
+}
+
+/* --------------------------- 合并页码对话框 --------------------------- */
+
+export interface MergeFileEntry {
+  path: string
+  name: string
+  pageCount: number
+}
+
+export const mergeDialogState = reactive({ open: false, files: [] as MergeFileEntry[] })
+
+let mergeResolve: ((value: AppendFileSpec[] | null) => void) | null = null
+
+export function requestMergeSpecs(files: MergeFileEntry[]): Promise<AppendFileSpec[] | null> {
+  mergeDialogState.files = files
+  mergeDialogState.open = true
+  return new Promise((resolve) => {
+    mergeResolve = resolve
+  })
+}
+
+export function submitMergeSpecs(value: AppendFileSpec[] | null): void {
+  mergeDialogState.open = false
+  mergeResolve?.(value)
+  mergeResolve = null
 }

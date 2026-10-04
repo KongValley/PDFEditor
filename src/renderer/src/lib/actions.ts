@@ -1,7 +1,14 @@
-import type { ChooseFileResult, ImageInfo, PageOp, PageOpResult, SaveResult } from '@shared/types'
+import type {
+  AppendFileSpec,
+  ChooseFileResult,
+  ImageInfo,
+  PageOp,
+  PageOpResult,
+  SaveResult
+} from '@shared/types'
 import { docState, getPage, openByPath, reloadDocument } from '../store/document'
 import { annotState, applyPageMap, exportAnnotations, resetAnnotations, setImageUrl } from '../store/annotations'
-import { requestPassword, showToast } from '../store/ui'
+import { requestMergeSpecs, requestPassword, showToast, type MergeFileEntry } from '../store/ui'
 import { getPageViewport } from './pdfjs'
 
 /** 从 sidecar 恢复注释与图片缓存 */
@@ -138,16 +145,77 @@ export async function insertBlankPage(afterIndex: number): Promise<void> {
   if (await runPageOp({ kind: 'insertBlank', afterIndex })) showToast('已插入空白页')
 }
 
-export async function mergePdfs(paths?: string[]): Promise<void> {
+export async function mergePdfs(
+  paths?: string[],
+  specs?: AppendFileSpec[],
+  targetPath?: string
+): Promise<void> {
+  const docId = docState.docId
+  if (!docId) {
+    showToast('请先打开 PDF 文件', 'error')
+    return
+  }
   let files = paths ?? []
   if (files.length === 0) {
     const result = (await window.pdfAPI.invoke('app:chooseFile', true)) as ChooseFileResult
     if (result.canceled || result.paths.length === 0) return
     files = result.paths
   }
-  if (await runPageOp({ kind: 'append', paths: files })) {
-    showToast(`已合并 ${files.length} 个文件`)
+
+  let mergeSpecs = specs ?? null
+  if (!mergeSpecs) {
+    const counts = (await window.pdfAPI.invoke('pdf:pageCounts', files)) as Array<{
+      path: string
+      pageCount?: number
+      error?: string
+    }>
+    const readable: MergeFileEntry[] = []
+    for (const count of counts) {
+      if (typeof count.pageCount !== 'number') continue
+      readable.push({
+        path: count.path,
+        name: count.path.split(/[\\/]/).pop() ?? count.path,
+        pageCount: count.pageCount
+      })
+    }
+    if (readable.length === 0) {
+      showToast('没有可合并的文件', 'error')
+      return
+    }
+    const skipped = counts.length - readable.length
+    if (skipped > 0) showToast(`已跳过 ${skipped} 个无法读取的文件`, 'error')
+    mergeSpecs = await requestMergeSpecs(readable)
+    if (!mergeSpecs) return
   }
+
+  if (!(await runPageOp({ kind: 'append', files: mergeSpecs }))) return
+
+  const result = (await window.pdfAPI.invoke('save:saveAs', {
+    docId,
+    defaultPath: mergeOutputDefaultPath(),
+    targetPath,
+    annotations: exportAnnotations(),
+    formValues: { ...docState.formValues }
+  })) as SaveResult
+  if (result.canceled) {
+    showToast('合并已在编辑器中生效,未另存(可手动保存)')
+    return
+  }
+  if (!result.ok) {
+    showToast(result.error ?? '输出失败', 'error')
+    return
+  }
+  if (result.savedPath) docState.filePath = result.savedPath
+  showToast(`已合并 ${mergeSpecs.length} 个文件并输出:${result.savedPath ?? ''}`)
+}
+
+/** 合并输出默认路径:当前文档同目录下的 <文件名>-合并.pdf */
+function mergeOutputDefaultPath(): string {
+  const filePath = docState.filePath
+  if (!filePath) return '合并结果.pdf'
+  const sepIndex = Math.max(filePath.lastIndexOf('\\'), filePath.lastIndexOf('/'))
+  const dir = sepIndex >= 0 ? filePath.slice(0, sepIndex + 1) : ''
+  return `${dir}${fileStem()}-合并.pdf`
 }
 
 export async function exportPages(pages: number[], targetPath?: string): Promise<void> {
