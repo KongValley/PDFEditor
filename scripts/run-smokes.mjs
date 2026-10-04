@@ -22,7 +22,8 @@ const scripts = [
   'step8.js',
   'step9.js',
   'step10-mem.js',
-  'step11-doccycle.js'
+  'step11-doccycle.js',
+  'step12-pages-range.js'
 ]
 
 if (!existsSync(join(root, 'samples', 'sample-zh.pdf'))) {

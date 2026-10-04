@@ -153,7 +153,6 @@ export async function mergePdfs(paths?: string[]): Promise<void> {
 export async function exportPages(pages: number[], targetPath?: string): Promise<void> {
   const docId = docState.docId
   if (!docId || pages.length === 0) return
-  const stem = docState.filePath?.split(/[\\/]/).pop()?.replace(/\.pdf$/i, '') ?? 'document'
   if (targetPath) {
     const op = (await window.pdfAPI.invoke('pageops:apply', {
       docId,
@@ -166,8 +165,113 @@ export async function exportPages(pages: number[], targetPath?: string): Promise
   const result = (await window.pdfAPI.invoke('pageops:export', {
     docId,
     pages,
-    defaultName: `${stem}-导出.pdf`
+    defaultName: `${fileStem()}-导出.pdf`
   })) as PageOpResult
   if (result.ok) showToast(`已导出:${result.savedPath ?? ''}`)
   else if (result.error !== 'canceled') showToast(result.error ?? '导出失败', 'error')
+}
+
+/** 提取:范围页复制为新 PDF(保存对话框),原文档不变 */
+export async function extractPages(pages: number[]): Promise<void> {
+  const docId = docState.docId
+  if (!docId || pages.length === 0) return
+  const result = (await window.pdfAPI.invoke('pageops:export', {
+    docId,
+    pages,
+    defaultName: `${fileStem()}-提取.pdf`
+  })) as PageOpResult
+  if (result.ok) showToast(`已提取 ${pages.length} 页:${result.savedPath ?? ''}`)
+  else if (result.error !== 'canceled') showToast(result.error ?? '提取失败', 'error')
+}
+
+/** 拆分:每段各存为一个 PDF(每段一次保存对话框) */
+export async function splitPages(segments: number[][]): Promise<void> {
+  if (segments.length === 0) return
+  let done = 0
+  for (const pages of segments) {
+    const result = (await window.pdfAPI.invoke('pageops:export', {
+      docId: docState.docId,
+      pages,
+      defaultName: `${fileStem()}-拆-${pages.length}页.pdf`
+    })) as PageOpResult
+    if (!result.ok) {
+      if (result.error !== 'canceled') showToast(result.error ?? '拆分失败', 'error')
+      break
+    }
+    done++
+  }
+  if (done > 0) showToast(`已拆分为 ${done} 个文件`)
+}
+
+function fileStem(): string {
+  return docState.filePath?.split(/[\\/]/).pop()?.replace(/\.pdf$/i, '') ?? 'document'
+}
+
+/** 渲染单页到离屏 canvas(scale=2,与 exportCurrentPageImage 一致) */
+async function renderPageToCanvas(pageNumber: number): Promise<HTMLCanvasElement | null> {
+  const page = await getPage(pageNumber)
+  const { viewport } = getPageViewport(page, 2, docState.rotationView)
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.floor(viewport.width)
+  canvas.height = Math.floor(viewport.height)
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return null
+  await page.render({ canvasContext: ctx, viewport }).promise
+  return canvas
+}
+
+/** 导出页面为图片:逐页多图(用户选目录)或拼接长图(单张 PNG) */
+export async function exportPagesAsImages(
+  pages: number[],
+  mode: 'each' | 'long',
+  direction?: 'h' | 'v'
+): Promise<void> {
+  if (!docState.pdfDoc || pages.length === 0) {
+    showToast('请先打开 PDF 文件', 'error')
+    return
+  }
+  try {
+    if (mode === 'long') {
+      const canvases: HTMLCanvasElement[] = []
+      for (const index of pages) {
+        const canvas = await renderPageToCanvas(index + 1)
+        if (canvas) canvases.push(canvas)
+      }
+      if (canvases.length === 0) return
+      const vertical = direction !== 'h'
+      const width = vertical ? Math.max(...canvases.map((c) => c.width)) : canvases.reduce((sum, c) => sum + c.width, 0)
+      const height = vertical ? canvases.reduce((sum, c) => sum + c.height, 0) : Math.max(...canvases.map((c) => c.height))
+      const out = document.createElement('canvas')
+      out.width = width
+      out.height = height
+      const ctx = out.getContext('2d')
+      if (!ctx) return
+      let offset = 0
+      for (const c of canvases) {
+        ctx.drawImage(c, vertical ? (width - c.width) / 2 : offset, vertical ? offset : (height - c.height) / 2)
+        offset += vertical ? c.height : c.width
+      }
+      const result = (await window.pdfAPI.invoke('app:saveImage', {
+        defaultName: `${fileStem()}-长图.png`,
+        dataUrl: out.toDataURL('image/png')
+      })) as SaveResult
+      if (result.ok) showToast(`已导出长图:${result.savedPath ?? ''}`)
+      else if (!result.canceled) showToast(result.error ?? '导出长图失败', 'error')
+      return
+    }
+    const dataUrls: string[] = []
+    const names: string[] = []
+    for (const index of pages) {
+      const canvas = await renderPageToCanvas(index + 1)
+      if (!canvas) continue
+      dataUrls.push(canvas.toDataURL('image/png'))
+      names.push(`${fileStem()}-第${index + 1}页.png`)
+    }
+    if (dataUrls.length === 0) return
+    const result = (await window.pdfAPI.invoke('app:saveImages', { names, dataUrls })) as SaveResult
+    if (result.ok) showToast(`已导出 ${dataUrls.length} 张图片:${result.savedPath ?? ''}`)
+    else if (!result.canceled) showToast(result.error ?? '导出图片失败', 'error')
+  } catch (err) {
+    showToast(`导出图片失败:${err instanceof Error ? err.message : String(err)}`, 'error')
+  }
 }

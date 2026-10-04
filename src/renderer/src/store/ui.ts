@@ -78,3 +78,35 @@ export function submitPassword(value: string | null): void {
   passwordResolve?.(value)
   passwordResolve = null
 }
+
+/* --------------------------- 页面范围对话框 --------------------------- */
+
+export type PagesAction = 'extract' | 'delete' | 'split' | 'export'
+export type ExportFormat = 'pdf' | 'png'
+export type ExportMode = 'each' | 'long'
+
+/** 对话框确认时携带的选项(export 分流用;其余 action 只有 input) */
+export interface PagesRangeRequest {
+  input: string
+  format?: ExportFormat
+  mode?: ExportMode
+  direction?: 'h' | 'v'
+}
+
+export const pagesDialogState = reactive({ open: false, action: 'extract' as PagesAction })
+
+let pagesResolve: ((value: PagesRangeRequest | null) => void) | null = null
+
+export function requestPagesRange(action: PagesAction): Promise<PagesRangeRequest | null> {
+  pagesDialogState.action = action
+  pagesDialogState.open = true
+  return new Promise((resolve) => {
+    pagesResolve = resolve
+  })
+}
+
+export function submitPagesRange(value: PagesRangeRequest | null): void {
+  pagesDialogState.open = false
+  pagesResolve?.(value)
+  pagesResolve = null
+}

@@ -3,6 +3,7 @@
  * 供 PDF_EDITOR_SMOKE 模式下主进程 executeJavaScript 调用。
  */
 import { openPath, deletePages, exportPages, insertBlankPage, mergePdfs, rotatePages } from './lib/actions'
+import { parsePageRange, splitPageSegments } from '@shared/text'
 import { docState, cachedPageCount, pinnedPageCounts, docCleanupCount } from './store/document'
 import { searchState } from './store/search'
 import { ui } from './store/ui'
@@ -47,6 +48,8 @@ export function installTestApi(): void {
     insertBlankPage,
     mergePdfs,
     exportPages,
+    parsePageRange,
+    splitPageSegments,
     scrollToPage,
     cachedPageCount,
     pinnedPageCounts,

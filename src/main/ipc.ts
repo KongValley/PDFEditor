@@ -1,4 +1,5 @@
 import { app, dialog, ipcMain, type BrowserWindow, type OpenDialogOptions } from 'electron'
+import { existsSync } from 'node:fs'
 import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -167,6 +168,34 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       const base64 = payload.dataUrl.split(',')[1] ?? ''
       await writeFile(result.filePath, Buffer.from(base64, 'base64'))
       return { ok: true, savedPath: result.filePath }
+    }
+  )
+
+  ipcMain.handle(
+    'app:saveImages',
+    async (_e, payload: { names: string[]; dataUrls: string[] }): Promise<SaveResult> => {
+      const win = getWindow()
+      const options: OpenDialogOptions = {
+        title: '选择图片保存目录',
+        properties: ['openDirectory', 'createDirectory']
+      }
+      const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
+      if (result.canceled || result.filePaths.length === 0) return { ok: false, canceled: true }
+      const dir = result.filePaths[0]
+      return guard<SaveResult>(async () => {
+        for (const [i, name] of payload.names.entries()) {
+          // 重名不覆盖:stem 后依次追加 -1/-2…
+          const dot = name.lastIndexOf('.')
+          const stem = dot < 0 ? name : name.slice(0, dot)
+          const ext = dot < 0 ? '' : name.slice(dot)
+          let target = join(dir, name)
+          let n = 1
+          while (existsSync(target)) target = join(dir, `${stem}-${n++}${ext}`)
+          const base64 = (payload.dataUrls[i] ?? '').split(',')[1] ?? ''
+          await writeFile(target, Buffer.from(base64, 'base64'))
+        }
+        return { ok: true, savedPath: dir }
+      })
     }
   )
 }

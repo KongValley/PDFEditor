@@ -56,3 +56,36 @@ export function fitFontSize(
 export function pointsToMm(points: number): number {
   return Math.round((points * 25.4) / 72 * 10) / 10
 }
+
+/**
+ * 解析页码范围(1-based,含端点)为升序去重的 0-based 页索引数组。
+ * 支持 `1-3,5,7-9`;逗号/中文逗号/空白分隔;`-`/`~`/`—` 作连字符。
+ * 输入为空、token 非数字、页号越界或区间倒序时返回 null。
+ */
+export function parsePageRange(input: string, totalPages: number): number[] | null {
+  const trimmed = input.trim()
+  if (trimmed === '') return null
+  const pages = new Set<number>()
+  for (const token of trimmed.split(/[,\uff0c\s]+/)) {
+    if (token === '') continue
+    const part = token.replace(/[~\u2014\uff0d]/g, '-')
+    const m = /^(\d+)(?:-(\d+))?$/.exec(part)
+    if (!m) return null
+    const from = Number(m[1])
+    const to = m[2] === undefined ? from : Number(m[2])
+    if (from < 1 || to < from || to > totalPages) return null
+    for (let p = from; p <= to; p++) pages.add(p - 1)
+  }
+  return pages.size === 0 ? null : [...pages].sort((a, b) => a - b)
+}
+
+/** 升序页索引按连续段切分:[[0,1,2],[4,5]] */
+export function splitPageSegments(pages: number[]): number[][] {
+  const segments: number[][] = []
+  for (const page of pages) {
+    const last = segments[segments.length - 1]
+    if (last && last[last.length - 1] === page - 1) last.push(page)
+    else segments.push([page])
+  }
+  return segments
+}

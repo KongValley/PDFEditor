@@ -3,7 +3,17 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import PageThumb from './PageThumb.vue'
 import { docState, pinThumbPages } from '../store/document'
 import { scrollToPage } from '../store/viewer'
-import { deletePages, exportPages, insertBlankPage, mergePdfs, rotatePages } from '../lib/actions'
+import {
+  deletePages,
+  extractPages,
+  exportPagesAsImages,
+  insertBlankPage,
+  mergePdfs,
+  rotatePages,
+  splitPages
+} from '../lib/actions'
+import { requestPagesRange, showToast, type PagesAction } from '../store/ui'
+import { parsePageRange, splitPageSegments } from '@shared/text'
 
 const THUMB_WIDTH = 84
 
@@ -25,7 +35,6 @@ const items = computed(() =>
 
 const selectedList = computed(() => [...selected.value].sort((a, b) => a - b))
 const rotateTargets = computed(() => (selectedList.value.length > 0 ? selectedList.value : [docState.currentPage]))
-const selectedIndexes = computed(() => selectedList.value.map((page) => page - 1))
 
 function toggleSelect(page: number): void {
   const next = new Set(selected.value)
@@ -63,11 +72,33 @@ function setupObserver(): void {
   for (const el of root.querySelectorAll<HTMLElement>('[data-thumb]')) observer.observe(el)
 }
 
-async function onDelete(): Promise<void> {
-  const pages = selectedIndexes.value
-  if (pages.length === 0) return
-  await deletePages(pages)
-  clearSelection()
+async function onRangeAction(action: PagesAction): Promise<void> {
+  const result = await requestPagesRange(action)
+  if (!result) return
+  const pages = parsePageRange(result.input, docState.pageCount)
+  if (!pages || pages.length === 0) {
+    showToast('页码范围无效', 'error')
+    return
+  }
+  switch (action) {
+    case 'delete':
+      await deletePages(pages)
+      clearSelection()
+      break
+    case 'extract':
+      await extractPages(pages)
+      break
+    case 'split':
+      await splitPages(splitPageSegments(pages))
+      break
+    case 'export':
+      if (result.format === 'png') {
+        await exportPagesAsImages(pages, result.mode ?? 'each', result.direction)
+      } else {
+        await extractPages(pages)
+      }
+      break
+  }
 }
 
 async function onRotate(delta: number): Promise<void> {
@@ -80,11 +111,6 @@ async function onInsertBlank(): Promise<void> {
 
 async function onMerge(): Promise<void> {
   await mergePdfs()
-}
-
-async function onExport(): Promise<void> {
-  const pages = selectedIndexes.value.length > 0 ? selectedIndexes.value : [docState.currentPage - 1]
-  await exportPages(pages)
 }
 
 onMounted(() => {
@@ -119,12 +145,14 @@ watch(
 <template>
   <aside class="thumbs">
     <div class="pages-toolbar">
-      <button :disabled="selected.size === 0" title="删除选中页" @click="onDelete">删除</button>
+      <button title="按页码范围删除页面" @click="onRangeAction('delete')">删除</button>
+      <button title="按页码范围提取为新 PDF" @click="onRangeAction('extract')">提取</button>
+      <button title="按范围每段拆分出一个 PDF" @click="onRangeAction('split')">拆分</button>
+      <button title="按范围导出(PDF / PNG多图 / 长图)" @click="onRangeAction('export')">导出</button>
       <button title="左旋 90°(选中页或当前页)" @click="onRotate(-90)">左旋</button>
       <button title="右旋 90°(选中页或当前页)" @click="onRotate(90)">右旋</button>
       <button title="在当前页之后插入空白页" @click="onInsertBlank">空白页</button>
       <button title="合并其他 PDF 到末尾" @click="onMerge">合并</button>
-      <button :disabled="selected.size === 0" title="导出选中页为新 PDF" @click="onExport">拆分</button>
     </div>
     <div ref="containerEl" class="thumbs-scroll">
       <div class="thumbs-inner">
@@ -171,7 +199,7 @@ watch(
 
 .pages-toolbar {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(4, 1fr);
   gap: 2px;
   padding: 6px;
   border-bottom: 1px solid var(--panel-border);
