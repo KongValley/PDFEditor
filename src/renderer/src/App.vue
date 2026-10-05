@@ -8,23 +8,15 @@ import PasswordDialog from './components/PasswordDialog.vue'
 import MergeDialog from './components/MergeDialog.vue'
 import SplitDialog from './components/SplitDialog.vue'
 import PagesRangeDialog from './components/PagesRangeDialog.vue'
+import ZoomControl from './components/ZoomControl.vue'
 import PdfViewer from './viewer/PdfViewer.vue'
 import { docState } from './store/document'
 import { showToast, ui } from './store/ui'
-import { fitPage, fitWidth, scrollToPage, setViewMode, stepPage, zoomAt, zoomBy } from './store/viewer'
+import { fitPage, fitWidth, scrollToPage, setViewMode, stepPage, zoomAt } from './store/viewer'
 import { confirmDiscardChanges, openPath } from './lib/actions'
 import { useGlobalKeymap } from './lib/keymap'
 
 useGlobalKeymap()
-
-const ZOOM_PRESETS = [25, 50, 75, 100, 125, 150, 200, 300]
-const zoomPercent = computed(() => Math.round(docState.scale * 100))
-
-function onZoomPreset(event: Event): void {
-  const value = Number((event.target as HTMLSelectElement).value)
-  ;(event.target as HTMLSelectElement).value = ''
-  if (value > 0) zoomAt(value / 100)
-}
 
 function onPageCommit(event: Event): void {
   const value = Number((event.target as HTMLInputElement).value)
@@ -133,13 +125,7 @@ watch(
 
         <span class="status-divider"></span>
 
-        <button title="缩小 (Ctrl+-)" @click="zoomBy(1 / 1.1)">−</button>
-        <span class="zoom-value">{{ zoomPercent }}%</span>
-        <button title="放大 (Ctrl+=)" @click="zoomBy(1.1)">+</button>
-        <select class="zoom-preset" @change="onZoomPreset">
-          <option value="">预设</option>
-          <option v-for="preset in ZOOM_PRESETS" :key="preset" :value="preset">{{ preset }}%</option>
-        </select>
+        <ZoomControl />
         <button title="实际大小 (1:1)" @click="zoomAt(1)">实际大小</button>
         <button title="适合页面" @click="fitPage">适合页面</button>
         <button title="适合宽度 (Ctrl+0)" @click="fitWidth">适合宽度</button>
@@ -227,20 +213,9 @@ watch(
   font-size: 12px;
 }
 
-.page-total,
-.zoom-value {
+.page-total {
   color: var(--toolbar-fg-dim);
   white-space: nowrap;
-}
-
-.zoom-value {
-  min-width: 42px;
-  text-align: center;
-}
-
-.status-bar .zoom-preset {
-  padding: 1px 2px;
-  font-size: 12px;
 }
 
 .status-file {

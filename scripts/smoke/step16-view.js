@@ -114,6 +114,57 @@ await sleep(1600)
 check('重开文档保留单页模式', t.docState.viewMode === 'single', t.docState.viewMode)
 check('重开后仅 1 页可见', shownPages().length === 1, shownPages().length)
 
+/* ---------- 9. 缩放输入框与常用比例菜单 ---------- */
+const zoomInput = () => document.querySelector('.status-bar .zoom-input')
+check('缩放输入框存在', !!zoomInput())
+check('输入框显示当前比例', zoomInput().value === `${Math.round(t.docState.scale * 100)}%`, zoomInput().value)
+
+zoomInput().value = '150'
+zoomInput().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+await sleep(300)
+check('输入 150 回车 → 150%', Math.abs(t.docState.scale - 1.5) < 1e-6, t.docState.scale)
+check('输入框回显 150%', zoomInput().value === '150%', zoomInput().value)
+
+zoomInput().value = '999'
+zoomInput().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+await sleep(300)
+check('999 被限制在 400%', Math.abs(t.docState.scale - 4) < 1e-6, t.docState.scale)
+check('回显 400%', zoomInput().value === '400%', zoomInput().value)
+
+zoomInput().value = 'abc'
+zoomInput().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+await sleep(300)
+check('非法输入不改动缩放', Math.abs(t.docState.scale - 4) < 1e-6, t.docState.scale)
+check('非法输入回显当前值', zoomInput().value === '400%', zoomInput().value)
+
+zoomInput().focus()
+zoomInput().value = '125'
+zoomInput().blur()
+await sleep(300)
+check('失焦提交 125%', Math.abs(t.docState.scale - 1.25) < 1e-6, t.docState.scale)
+
+document.querySelector('.status-bar .zoom-menu-btn').click()
+await sleep(200)
+check('菜单打开', !!document.querySelector('.zoom-menu'))
+const zoomItems = [...document.querySelectorAll('.zoom-menu button')]
+check('菜单含 8 个常用比例', zoomItems.length === 8, zoomItems.length)
+check('当前比例高亮', !!zoomItems.find((el) => el.classList.contains('active') && el.textContent.trim() === '125%'))
+zoomItems.find((el) => el.textContent.trim() === '50%').click()
+await sleep(300)
+check('点选 50% 生效', Math.abs(t.docState.scale - 0.5) < 1e-6, t.docState.scale)
+check('点选后菜单关闭', !document.querySelector('.zoom-menu'))
+check('输入框同步 50%', zoomInput().value === '50%', zoomInput().value)
+
+document.querySelector('.status-bar .zoom-menu-btn').click()
+await sleep(200)
+document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+await sleep(200)
+check('点击外部关闭菜单', !document.querySelector('.zoom-menu'))
+
+document.querySelector('.status-bar button[title="放大 (Ctrl+=)"]').click()
+await sleep(200)
+check('放大按钮后输入框同步', zoomInput().value === `${Math.round(t.docState.scale * 100)}%`, zoomInput().value)
+
 return {
   actualSize: 'ok',
   twoPageLayout: 'ok',
@@ -122,5 +173,7 @@ return {
   singlePage: 'ok',
   wheelFlip: 'ok',
   backToContinuous: 'ok',
-  modePersistence: 'ok'
+  modePersistence: 'ok',
+  zoomInput: 'ok',
+  zoomMenu: 'ok'
 }
