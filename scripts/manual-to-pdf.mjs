@@ -47,6 +47,19 @@ function markdownToHtml(md) {
   while (i < lines.length) {
     const line = lines[i]
 
+    // 图片(块级):![alt](相对路径) → figure + 绝对 file:// 地址
+    const image = /^!\[([^\]]*)\]\(([^)]+)\)\s*$/.exec(line)
+    if (image) {
+      closeList()
+      const abs = join(root, image[2]).replace(/\\/g, '/')
+      html.push(
+        `<figure><img src="file:///${abs}" alt="${escapeHtml(image[1])}">` +
+          `<figcaption>${inline(image[1])}</figcaption></figure>`
+      )
+      i++
+      continue
+    }
+
     // 代码块
     if (line.startsWith('```')) {
       closeList()
@@ -156,6 +169,9 @@ th, td { border: 1px solid #c9d2de; padding: 1.6mm 2mm; text-align: left; vertic
 th { background: #eef3fa; font-weight: 600; }
 tr { page-break-inside: avoid; }
 hr { border: none; border-top: 1px solid #d5dbe5; margin: 5mm 0; }
+figure { margin: 3mm 0 4mm; page-break-inside: avoid; }
+figure img { width: 100%; border: 1px solid #cfd7e3; border-radius: 2px; }
+figcaption { font-size: 9pt; color: #5b6472; margin-top: 1.2mm; text-align: center; }
 a { color: #1971c2; text-decoration: none; word-break: break-all; }
 strong { color: #10131a; }
 `

@@ -14,6 +14,7 @@
     "typecheck": "vue-tsc --noEmit",
     "smoke": "node scripts/run-smokes.mjs",
     "manual": "node scripts/manual-to-pdf.mjs",
+    "manual:shots": "node scripts/capture-manual-shots.mjs",
     "dist:win7-32": "npm run build && node scripts/package-win.mjs win7-ia32",
     "dist:win10-64": "npm run build && node scripts/package-win.mjs win10-x64",
     "dist:win10-32": "npm run build && node scripts/package-win.mjs win10-ia32",
