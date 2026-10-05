@@ -37,7 +37,8 @@ import {
   undo,
   updateAnnotation
 } from './store/annotations'
-import { scrollToPage } from './store/viewer'
+import { renderWatchdog, scrollToPage } from './store/viewer'
+import { goBack, goForward, readingState, setRestoreLastPage } from './store/reading'
 import { TOOL_DEFAULTS, withIdentity } from './lib/annots'
 import { pdfjs } from './lib/pdfjs'
 import { paintAnnotations } from './lib/canvasannot'
@@ -48,13 +49,14 @@ declare global {
   }
 }
 
-/** 打开文档并等待首页渲染完成(注释层挂载即代表首个页面已渲染) */
+/** 打开文档并等待当前页渲染完成(注释层挂载即代表该页已渲染;恢复阅读位置后首页可能不在视口) */
 async function openPathReady(path: string): Promise<void> {
   const t0 = Date.now()
   await openPath(path)
+  const currentLayer = () => document.querySelector(`[data-page="${docState.currentPage}"] .ann-layer`)
   const deadline = Date.now() + 20000
   while (Date.now() < deadline) {
-    if (document.querySelector('[data-page="1"] .ann-layer')) return
+    if (currentLayer()) return
     await new Promise((resolve) => setTimeout(resolve, 100))
   }
   const viewer = document.querySelector('.viewer')
@@ -62,7 +64,7 @@ async function openPathReady(path: string): Promise<void> {
     .map((el) => el.dataset.visible)
     .join(',')
   console.log(
-    `[t] ready-timeout ${Date.now() - t0}ms path=${path.split(/[\\/]/).pop()} pages=${document.querySelectorAll('.page-wrap').length} layers=${document.querySelectorAll('.ann-layer').length} layer1=${!!document.querySelector('[data-page="1"] .ann-layer')} scrollTop=${viewer?.scrollTop ?? -1} visible=${visibleFlags} currentPage=${docState.currentPage} pageCount=${docState.pageCount}`
+    `[t] ready-timeout ${Date.now() - t0}ms path=${path.split(/[\\/]/).pop()} pages=${document.querySelectorAll('.page-wrap').length} layers=${document.querySelectorAll('.ann-layer').length} currentLayer=${!!currentLayer()} scrollTop=${viewer?.scrollTop ?? -1} visible=${visibleFlags} currentPage=${docState.currentPage} pageCount=${docState.pageCount}`
   )
 }
 
@@ -106,6 +108,11 @@ export function installTestApi(): void {
     parsePageRange,
     splitPageSegments,
     scrollToPage,
+    renderWatchdog,
+    goBack,
+    goForward,
+    readingState,
+    setRestoreLastPage,
     cachedPageCount,
     pinnedPageCounts,
     cleanupCount: docCleanupCount,

@@ -10,6 +10,9 @@ const TWO_UP = 2
 let container: HTMLElement | null = null
 let fitMode: 'none' | 'width' | 'page' = 'none'
 
+/** 渲染看门狗:worker 偶发停摆时 render().promise 永不 settle(代码审查报告存疑 #4);冒烟可调 */
+export const renderWatchdog = { timeoutMs: 8000, timeouts: 0, renders: 0, stallNext: false }
+
 export function attachContainer(el: HTMLElement | null): void {
   container = el
 }

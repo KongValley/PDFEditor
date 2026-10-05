@@ -27,7 +27,10 @@ const scripts = [
   'step13-batch.js',
   'step14-ux.js',
   'step15-annots.js',
-  'step16-view.js'
+  'step16-view.js',
+  'step17-render.js',
+  'step18-print.js',
+  'step19-nav.js'
 ]
 
 if (!existsSync(join(root, 'samples', 'sample-zh.pdf'))) {

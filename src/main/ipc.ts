@@ -14,6 +14,9 @@ import {
 } from './lib/pdfio'
 import { applyPageOp, redoPageOp, splitPdfTasks, undoPageOp } from './lib/docops'
 import { getImageBuffer, importImage, readImageBuffer, type ImageImport } from './lib/images'
+import { printImages, type PrintPayload } from './lib/print'
+import { getRecentPage, setRecentPage } from './lib/recent'
+import { isSmokeMode } from './smoke'
 import { extractEditorAnnotations, writeAnnotations } from './lib/pdflibwrite'
 import type {
   Annotation,
@@ -281,6 +284,20 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   ipcMain.handle('app:readWorkerScript', async (_e, url: string): Promise<string> => {
     const path = resolveRendererAsset(url)
     return readFile(path, 'utf8')
+  })
+
+  ipcMain.handle('app:printPages', (_e, payload: PrintPayload) => guard(() => printImages(payload)))
+
+  ipcMain.handle('app:runtimeInfo', (): { smoke: boolean } => ({ smoke: isSmokeMode() }))
+
+  ipcMain.handle('app:recentGet', (_e, filePath: string) =>
+    guard(async () => ({ ok: true, page: await getRecentPage(String(filePath)) }))
+  )
+
+  ipcMain.handle('app:recentSet', async (_e, payload: { path: string; page: number }) => {
+    if (!payload?.path || !(payload.page > 0)) return { ok: false, error: '无效的阅读位置' }
+    await setRecentPage(payload.path, Math.round(payload.page))
+    return { ok: true }
   })
 
   ipcMain.handle('img:choose', async (): Promise<ImageImport | { canceled: true }> => {

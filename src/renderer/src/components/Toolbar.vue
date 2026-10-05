@@ -4,7 +4,7 @@ import { docState } from '../store/document'
 import { setTool, ui, type Tool } from '../store/ui'
 import { canRedo, canUndo, removeSelected, redo, undo } from '../store/annotations'
 import { rotateView } from '../store/viewer'
-import { exportCurrentPageImage, openFileDialog, saveDocument, saveDocumentAs } from '../lib/actions'
+import { exportCurrentPageImage, openFileDialog, printPagesDialog, saveDocument, saveDocumentAs } from '../lib/actions'
 import { STAMPS, STAMP_KEYS } from '../lib/annots'
 
 const TOOLS: Array<{ tool: Tool; label: string; title: string }> = [
@@ -32,6 +32,7 @@ const hasDoc = computed(() => docState.pdfDoc !== null)
       <button :disabled="!hasDoc" title="保存 PDF (Ctrl+S)" @click="saveDocument">保存</button>
       <button :disabled="!hasDoc" title="另存为 (Ctrl+Shift+S)" @click="saveDocumentAs">另存为</button>
       <button :disabled="!hasDoc" title="导出当前页为 PNG (Ctrl+E)" @click="exportCurrentPageImage">导出图片</button>
+      <button :disabled="!hasDoc" title="打印 (Ctrl+P)" @click="printPagesDialog">打印</button>
 
       <span class="divider"></span>
 

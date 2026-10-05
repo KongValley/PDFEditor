@@ -4,7 +4,8 @@ import { setTool, ui } from '../store/ui'
 import { copySelection, duplicateSelection, pasteClipboard, removeSelected, redo, undo } from '../store/annotations'
 import { searchStep } from '../store/search'
 import { fitWidth, scrollToPage, stepPage, zoomBy } from '../store/viewer'
-import { exportCurrentPageImage, openFileDialog, saveDocument, saveDocumentAs } from './actions'
+import { goBack, goForward } from '../store/reading'
+import { exportCurrentPageImage, openFileDialog, printPagesDialog, saveDocument, saveDocumentAs } from './actions'
 
 export function isTypingTarget(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null
@@ -33,6 +34,11 @@ export function useGlobalKeymap(): void {
       void exportCurrentPageImage()
       return
     }
+    if (ctrl && key === 'p') {
+      event.preventDefault()
+      void printPagesDialog()
+      return
+    }
     if (ctrl && key === 'f') {
       event.preventDefault()
       ui.searchOpen = true
@@ -57,6 +63,16 @@ export function useGlobalKeymap(): void {
       event.preventDefault()
       if (document.fullscreenElement) void document.exitFullscreen()
       else void document.documentElement.requestFullscreen()
+      return
+    }
+    if (event.altKey && event.key === 'ArrowLeft') {
+      event.preventDefault()
+      goBack()
+      return
+    }
+    if (event.altKey && event.key === 'ArrowRight') {
+      event.preventDefault()
+      goForward()
       return
     }
     if (event.key === 'F3') {

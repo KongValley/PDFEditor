@@ -13,10 +13,12 @@ import PdfViewer from './viewer/PdfViewer.vue'
 import { docState } from './store/document'
 import { showToast, ui } from './store/ui'
 import { fitPage, fitWidth, scrollToPage, setViewMode, stepPage, zoomAt } from './store/viewer'
+import { goBack, goForward, readingState, useReading } from './store/reading'
 import { confirmDiscardChanges, openPath } from './lib/actions'
 import { useGlobalKeymap } from './lib/keymap'
 
 useGlobalKeymap()
+useReading()
 
 function onPageCommit(event: Event): void {
   const value = Number((event.target as HTMLInputElement).value)
@@ -96,6 +98,11 @@ watch(
       <span class="status-file" :title="docState.filePath ?? ''">{{ fileName || '未打开文件' }}</span>
 
       <template v-if="docState.pdfDoc">
+        <button :disabled="!readingState.canBack" title="后退 (Alt+←)" @click="goBack">后退</button>
+        <button :disabled="!readingState.canForward" title="前进 (Alt+→)" @click="goForward">前进</button>
+
+        <span class="status-divider"></span>
+
         <button title="上一页" @click="stepPage(-1)">上一页</button>
         <input
           class="page-input"

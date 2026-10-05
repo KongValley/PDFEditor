@@ -21,13 +21,16 @@ import {
 import {
   commitOpenEditor,
   requestMergeWork,
+  requestPagesRange,
   requestPassword,
   requestSplitWork,
   showToast,
   type MergeRequest,
   type PdfFileEntry
 } from '../store/ui'
+import { parsePageRange } from '@shared/text'
 import { invalidateSearch } from '../store/search'
+import { maybeRestoreLastPage } from '../store/reading'
 import { getPageViewport, pdfjs } from './pdfjs'
 import { paintAnnotations } from './canvasannot'
 
@@ -65,6 +68,7 @@ export async function openPath(path: string): Promise<void> {
     return
   }
   await restoreSidecar()
+  await maybeRestoreLastPage(docState.filePath ?? path)
 }
 
 /** 有未保存更改时确认放弃(false = 用户取消) */
@@ -525,4 +529,51 @@ export async function exportPagesAsImages(
   } catch (err) {
     showToast(`导出图片失败:${err instanceof Error ? err.message : String(err)}`, 'error')
   }
+}
+
+/** 打印:离屏渲染所选页(含注释)后交主进程走系统打印对话框 */
+export async function printPages(pages: number[], includeAnnotations = true): Promise<void> {
+  if (!docState.pdfDoc || pages.length === 0) return
+  commitOpenEditor()
+  try {
+    const dataUrls: string[] = []
+    const sizesMm: Array<{ w: number; h: number }> = []
+    for (const index of pages) {
+      const canvas = await renderPageToCanvas(index + 1, includeAnnotations)
+      if (!canvas) continue
+      dataUrls.push(canvas.toDataURL('image/png'))
+      const box = docState.pageBoxes[index]
+      if (!box) continue
+      const rotated = docState.rotationView % 180 !== 0
+      const w = rotated ? box.h : box.w
+      const h = rotated ? box.w : box.h
+      sizesMm.push({ w: (w * 25.4) / 72, h: (h * 25.4) / 72 })
+    }
+    if (dataUrls.length === 0) return
+    const result = (await window.pdfAPI.invoke('app:printPages', {
+      jobName: `${fileStem()}-打印`,
+      dataUrls,
+      sizesMm
+    })) as { ok: boolean; canceled?: boolean; error?: string }
+    if (result.ok) showToast('已提交打印')
+    else if (!result.canceled) showToast(result.error ?? '打印失败', 'error')
+  } catch (err) {
+    showToast(`打印失败:${err instanceof Error ? err.message : String(err)}`, 'error')
+  }
+}
+
+/** 工具栏「打印」按钮:先收页码范围,再调 printPages */
+export async function printPagesDialog(): Promise<void> {
+  if (!docState.pdfDoc) {
+    showToast('请先打开 PDF 文件', 'error')
+    return
+  }
+  const request = await requestPagesRange('print')
+  if (!request) return
+  const pages = parsePageRange(request.input, docState.pageCount)
+  if (!pages || pages.length === 0) {
+    showToast('页码范围无效', 'error')
+    return
+  }
+  await printPages(pages, request.includeAnnotations ?? true)
 }

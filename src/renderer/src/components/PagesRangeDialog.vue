@@ -12,7 +12,8 @@ import {
 const TITLES: Record<PagesAction, string> = {
   extract: '提取页面',
   delete: '删除页面',
-  export: '导出页面'
+  export: '导出页面',
+  print: '打印页面'
 }
 
 const value = ref('')

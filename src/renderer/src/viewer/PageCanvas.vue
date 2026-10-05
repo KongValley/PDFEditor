@@ -6,6 +6,7 @@ import { docState, getPage, pageDisplaySize } from '../store/document'
 import { searchState } from '../store/search'
 import { addAnnotation, addAnnotations, selectAnnotation } from '../store/annotations'
 import { ui } from '../store/ui'
+import { renderWatchdog } from '../store/viewer'
 import { getPageViewport, pdfjs } from '../lib/pdfjs'
 import { pdfRectToScreen, rectFromPoints, screenPointToPdf, type ScreenRect } from '../lib/geo'
 import { TOOL_DEFAULTS, withIdentity } from '../lib/annots'
@@ -62,11 +63,34 @@ async function renderTextLayer(page: PDFPageProxy, vp: PageViewport): Promise<vo
   }
 }
 
-async function renderPage(): Promise<void> {
+/** 超时竞速:worker 停摆时 promise 永不 settle,到点返回 'timeout'(计时器随结果清理) */
+function settleWithin<T>(promise: Promise<T>, ms: number): Promise<T | 'timeout'> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => resolve('timeout'), ms)
+    promise.then(
+      (value) => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      (err) => {
+        clearTimeout(timer)
+        reject(err)
+      }
+    )
+  })
+}
+
+async function renderPage(attempt = 0): Promise<void> {
   const canvas = canvasEl.value
   if (!canvas || !props.visible) return
   const mySeq = ++seq
-  const page = await getPage(props.pageNumber)
+  const page = await settleWithin(getPage(props.pageNumber), renderWatchdog.timeoutMs)
+  if (page === 'timeout') {
+    renderWatchdog.timeouts++
+    console.warn(`[render] 第 ${props.pageNumber} 页 getPage 超时(${renderWatchdog.timeoutMs}ms)`)
+    if (attempt === 0 && mySeq === seq && props.visible) return renderPage(1)
+    return
+  }
   if (mySeq !== seq) return
 
   const info = getPageViewport(page, docState.scale, docState.rotationView)
@@ -87,15 +111,31 @@ async function renderPage(): Promise<void> {
     // 批注由本应用 SVG 覆盖层绘制:pdf.js 默认会把 /Annots 画进位图 → 同屏两遍
     annotationMode: pdfjs.AnnotationMode.DISABLE
   })
+  const stalled = renderWatchdog.stallNext
+  if (stalled) renderWatchdog.stallNext = false
+  if (stalled) void renderTask.promise.catch(() => {}) // 冒烟模拟停摆:真实结果忽略,避免未处理拒绝
+  let outcome: 'ok' | 'timeout'
   try {
-    await renderTask.promise
+    const result = await settleWithin(
+      stalled ? new Promise<never>(() => {}) : renderTask.promise,
+      renderWatchdog.timeoutMs
+    )
+    outcome = result === 'timeout' ? 'timeout' : 'ok'
   } catch (err) {
     if ((err as Error)?.name !== 'RenderingCancelledException') console.warn('页面渲染失败:', err)
+    return
+  }
+  if (outcome === 'timeout') {
+    renderWatchdog.timeouts++
+    console.warn(`[render] 第 ${props.pageNumber} 页渲染超时(${renderWatchdog.timeoutMs}ms),取消并重试`)
+    renderTask.cancel()
+    if (attempt === 0 && mySeq === seq && props.visible) return renderPage(1)
     return
   }
   if (mySeq !== seq) return
   viewport.value = vp
   rendered.value = true
+  renderWatchdog.renders++
   await renderTextLayer(page, vp)
 }
 

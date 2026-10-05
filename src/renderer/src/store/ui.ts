@@ -95,7 +95,7 @@ export function submitPassword(value: string | null): void {
 
 /* --------------------------- 页面范围对话框 --------------------------- */
 
-export type PagesAction = 'extract' | 'delete' | 'export'
+export type PagesAction = 'extract' | 'delete' | 'export' | 'print'
 export type ExportFormat = 'pdf' | 'png'
 export type ExportMode = 'each' | 'long'
 
