@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, protocol, shell } from 'electron'
 import { join, normalize } from 'node:path'
 import { isRendererDirty, registerIpc, setRendererDirty } from './ipc'
+import { cleanupPrintJobs } from './lib/print'
 import { isSmokeMode, runSmoke } from './smoke'
 
 // 内网 32 位老机器优先稳定:禁用硬件加速(避免老显卡驱动导致的黑屏/崩溃)
@@ -129,4 +130,8 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
+})
+
+app.on('will-quit', () => {
+  cleanupPrintJobs()
 })

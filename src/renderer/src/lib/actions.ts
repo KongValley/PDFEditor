@@ -26,7 +26,8 @@ import {
   requestSplitWork,
   showToast,
   type MergeRequest,
-  type PdfFileEntry
+  type PdfFileEntry,
+  type PrintQuality
 } from '../store/ui'
 import { parsePageRange } from '@shared/text'
 import { invalidateSearch } from '../store/search'
@@ -449,13 +450,14 @@ function dirOf(p: string): string {
   return index >= 0 ? p.slice(0, index) : ''
 }
 
-/** 渲染单页到离屏 canvas(scale=2;批注不画入位图,由调用方按勾选用画笔叠加) */
+/** 渲染单页到离屏 canvas(默认 scale=2;批注不画入位图,由调用方按勾选用画笔叠加) */
 async function renderPageToCanvas(
   pageNumber: number,
-  includeAnnotations: boolean
+  includeAnnotations: boolean,
+  scale = 2
 ): Promise<HTMLCanvasElement | null> {
   const page = await getPage(pageNumber)
-  const { viewport } = getPageViewport(page, 2, docState.rotationView)
+  const { viewport } = getPageViewport(page, scale, docState.rotationView)
   const canvas = document.createElement('canvas')
   canvas.width = Math.floor(viewport.width)
   canvas.height = Math.floor(viewport.height)
@@ -531,34 +533,68 @@ export async function exportPagesAsImages(
   }
 }
 
-/** 打印:离屏渲染所选页(含注释)后交主进程走系统打印对话框 */
-export async function printPages(pages: number[], includeAnnotations = true): Promise<void> {
+/** 打印单页 PNG dataURL:标准 2×(≈144dpi)、高清 300dpi */
+export async function renderPrintPageDataUrl(
+  pageNumber: number,
+  includeAnnotations: boolean,
+  quality: PrintQuality
+): Promise<string | null> {
+  const scale = quality === 'high' ? 300 / 72 : 2
+  const canvas = await renderPageToCanvas(pageNumber, includeAnnotations, scale)
+  return canvas ? canvas.toDataURL('image/png') : null
+}
+
+/** 打印:逐页渲染并即传主进程(峰值只占一页),最后提交给系统打印对话框 */
+export async function printPages(
+  pages: number[],
+  includeAnnotations = true,
+  quality: PrintQuality = 'standard'
+): Promise<void> {
   if (!docState.pdfDoc || pages.length === 0) return
   commitOpenEditor()
+  let jobId: string | null = null
   try {
-    const dataUrls: string[] = []
-    const sizesMm: Array<{ w: number; h: number }> = []
-    for (const index of pages) {
-      const canvas = await renderPageToCanvas(index + 1, includeAnnotations)
-      if (!canvas) continue
-      dataUrls.push(canvas.toDataURL('image/png'))
+    const sizesMm = pages.map((index) => {
       const box = docState.pageBoxes[index]
-      if (!box) continue
+      if (!box) return { w: 210, h: 297 } // 缺页尺寸信息时按 A4 输出,不中断打印
       const rotated = docState.rotationView % 180 !== 0
       const w = rotated ? box.h : box.w
       const h = rotated ? box.w : box.h
-      sizesMm.push({ w: (w * 25.4) / 72, h: (h * 25.4) / 72 })
-    }
-    if (dataUrls.length === 0) return
-    const result = (await window.pdfAPI.invoke('app:printPages', {
+      return { w: (w * 25.4) / 72, h: (h * 25.4) / 72 }
+    })
+    const prepared = (await window.pdfAPI.invoke('app:printPrepare', {
       jobName: `${fileStem()}-打印`,
-      dataUrls,
+      pageCount: pages.length,
       sizesMm
-    })) as { ok: boolean; canceled?: boolean; error?: string }
+    })) as { ok: boolean; jobId?: string; error?: string }
+    if (!prepared.ok || !prepared.jobId) {
+      showToast(prepared.error ?? '打印失败', 'error')
+      return
+    }
+    jobId = prepared.jobId
+    for (const [i, index] of pages.entries()) {
+      showToast(`正在渲染打印页面 ${i + 1} / ${pages.length}…`)
+      const dataUrl = await renderPrintPageDataUrl(index + 1, includeAnnotations, quality)
+      if (!dataUrl) throw new Error(`第 ${index + 1} 页渲染失败`)
+      const added = (await window.pdfAPI.invoke('app:printAddPage', {
+        jobId,
+        index: i,
+        dataUrl
+      })) as { ok: boolean; error?: string }
+      if (!added.ok) throw new Error(added.error ?? '打印页面写入失败')
+    }
+    const result = (await window.pdfAPI.invoke('app:printCommit', { jobId })) as {
+      ok: boolean
+      canceled?: boolean
+      error?: string
+    }
+    jobId = null
     if (result.ok) showToast('已提交打印')
     else if (!result.canceled) showToast(result.error ?? '打印失败', 'error')
   } catch (err) {
     showToast(`打印失败:${err instanceof Error ? err.message : String(err)}`, 'error')
+  } finally {
+    if (jobId) void window.pdfAPI.invoke('app:printAbort', { jobId })
   }
 }
 
@@ -575,5 +611,5 @@ export async function printPagesDialog(): Promise<void> {
     showToast('页码范围无效', 'error')
     return
   }
-  await printPages(pages, request.includeAnnotations ?? true)
+  await printPages(pages, request.includeAnnotations ?? true, request.printQuality ?? 'standard')
 }

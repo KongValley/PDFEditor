@@ -14,7 +14,7 @@ import {
 } from './lib/pdfio'
 import { applyPageOp, redoPageOp, splitPdfTasks, undoPageOp } from './lib/docops'
 import { getImageBuffer, importImage, readImageBuffer, type ImageImport } from './lib/images'
-import { printImages, type PrintPayload } from './lib/print'
+import { abortPrintJob, addPrintPage, commitPrintJob, preparePrintJob } from './lib/print'
 import { getRecentPage, setRecentPage } from './lib/recent'
 import { isSmokeMode } from './smoke'
 import { extractEditorAnnotations, writeAnnotations } from './lib/pdflibwrite'
@@ -286,7 +286,19 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     return readFile(path, 'utf8')
   })
 
-  ipcMain.handle('app:printPages', (_e, payload: PrintPayload) => guard(() => printImages(payload)))
+  ipcMain.handle('app:printPrepare', (_e, payload: Parameters<typeof preparePrintJob>[0]) =>
+    guard(() => preparePrintJob(payload))
+  )
+
+  ipcMain.handle('app:printAddPage', (_e, payload: Parameters<typeof addPrintPage>[0]) =>
+    guard(() => addPrintPage(payload))
+  )
+
+  ipcMain.handle('app:printCommit', (_e, payload: { jobId: string; dryRun?: boolean }) =>
+    guard(() => commitPrintJob(payload))
+  )
+
+  ipcMain.handle('app:printAbort', (_e, jobId: string) => guard(() => abortPrintJob(String(jobId))))
 
   ipcMain.handle('app:runtimeInfo', (): { smoke: boolean } => ({ smoke: isSmokeMode() }))
 

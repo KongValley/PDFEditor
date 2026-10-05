@@ -6,7 +6,8 @@ import {
   submitPagesRange,
   type ExportFormat,
   type ExportMode,
-  type PagesAction
+  type PagesAction,
+  type PrintQuality
 } from '../store/ui'
 
 const TITLES: Record<PagesAction, string> = {
@@ -21,9 +22,11 @@ const format = ref<ExportFormat>('pdf')
 const mode = ref<ExportMode>('each')
 const direction = ref<'h' | 'v'>('v')
 const includeAnnotations = ref(true)
+const printQuality = ref<PrintQuality>('standard')
 const inputEl = ref<HTMLInputElement | null>(null)
 
 const isExport = computed(() => pagesDialogState.action === 'export')
+const isPrint = computed(() => pagesDialogState.action === 'print')
 const showIncludeAnnotations = computed(() => pagesDialogState.action !== 'delete')
 
 watch(
@@ -35,6 +38,7 @@ watch(
     mode.value = 'each'
     direction.value = 'v'
     includeAnnotations.value = true
+    printQuality.value = 'standard'
     await nextTick()
     inputEl.value?.focus()
   }
@@ -46,7 +50,8 @@ function confirm(): void {
     format: format.value,
     mode: mode.value,
     direction: direction.value,
-    includeAnnotations: includeAnnotations.value
+    includeAnnotations: includeAnnotations.value,
+    printQuality: printQuality.value
   })
 }
 
@@ -92,6 +97,13 @@ function cancel(): void {
           </div>
         </template>
       </template>
+      <div v-if="isPrint" class="row">
+        <span class="label">清晰度</span>
+        <select v-model="printQuality">
+          <option value="standard">标准(约 150 dpi)</option>
+          <option value="high">高清(约 300 dpi)</option>
+        </select>
+      </div>
       <label v-if="showIncludeAnnotations" class="check-row">
         <input v-model="includeAnnotations" type="checkbox" />
         包含注释

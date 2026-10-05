@@ -98,6 +98,8 @@ export function submitPassword(value: string | null): void {
 export type PagesAction = 'extract' | 'delete' | 'export' | 'print'
 export type ExportFormat = 'pdf' | 'png'
 export type ExportMode = 'each' | 'long'
+/** 打印清晰度:标准 2×(≈144dpi)/ 高清 300dpi */
+export type PrintQuality = 'standard' | 'high'
 
 /** 对话框确认时携带的选项(export 分流用;其余 action 只有 input) */
 export interface PagesRangeRequest {
@@ -107,6 +109,8 @@ export interface PagesRangeRequest {
   direction?: 'h' | 'v'
   /** 提取/导出 PDF/PNG 时是否包含注释(默认勾选) */
   includeAnnotations?: boolean
+  /** 打印清晰度(print 专用,默认 standard) */
+  printQuality?: PrintQuality
 }
 
 export const pagesDialogState = reactive({ open: false, action: 'extract' as PagesAction })

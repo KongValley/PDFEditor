@@ -1,40 +1,81 @@
 import { BrowserWindow } from 'electron'
+import { randomUUID } from 'node:crypto'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-export interface PrintPayload {
+export type PrintResult = { ok: boolean; canceled?: boolean; error?: string; pageCount?: number; html?: string }
+
+interface PrintJob {
+  dir: string
   jobName: string
-  dataUrls: string[]
   sizesMm: Array<{ w: number; h: number }>
-  /** 冒烟用:只生成打印 HTML 并返回,不打开打印对话框 */
-  dryRun?: boolean
+  files: Array<string | null>
 }
 
-export type PrintResult = { ok: boolean; canceled?: boolean; error?: string; pageCount?: number; html?: string }
+const jobs = new Map<string, PrintJob>()
 
 function escapeHtml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
 
-/** 逐页 PNG → 打印 HTML → 系统打印对话框(隐藏窗口;每页一张,纵向铺满纸张宽度) */
-export async function printImages(payload: PrintPayload): Promise<PrintResult> {
-  const images = Array.isArray(payload.dataUrls) ? payload.dataUrls : []
-  if (images.length === 0) return { ok: false, error: '没有可打印的页面' }
+/** 建任务:创建临时目录,登记 N 个页槽 */
+export async function preparePrintJob(payload: {
+  jobName: string
+  pageCount: number
+  sizesMm: Array<{ w: number; h: number }>
+}): Promise<{ ok: boolean; jobId?: string; error?: string }> {
+  const pageCount = Math.floor(Number(payload?.pageCount))
+  if (!Number.isFinite(pageCount) || pageCount <= 0) return { ok: false, error: '没有可打印的页面' }
   const dir = await mkdtemp(join(tmpdir(), 'pdf-editor-print-'))
+  const jobId = randomUUID()
+  jobs.set(jobId, {
+    dir,
+    jobName: payload.jobName || 'PDF 打印',
+    sizesMm: Array.isArray(payload.sizesMm) ? payload.sizesMm : [],
+    files: new Array(pageCount).fill(null)
+  })
+  return { ok: true, jobId }
+}
+
+/** 逐页落盘(渲染层每页渲染完立即调用,内存峰值只占一页) */
+export async function addPrintPage(payload: {
+  jobId: string
+  index: number
+  dataUrl: string
+}): Promise<{ ok: boolean; error?: string }> {
+  const job = jobs.get(payload?.jobId)
+  if (!job) return { ok: false, error: '打印任务已过期' }
+  const index = Math.floor(Number(payload.index))
+  if (!Number.isFinite(index) || index < 0 || index >= job.files.length) return { ok: false, error: '打印页码越界' }
+  const file = join(job.dir, `page-${index + 1}.png`)
+  await writeFile(file, Buffer.from(String(payload.dataUrl).split(',')[1] ?? '', 'base64'))
+  job.files[index] = file
+  return { ok: true }
+}
+
+/** 放弃任务并清理临时目录 */
+export async function abortPrintJob(jobId: string): Promise<{ ok: boolean }> {
+  const job = jobs.get(jobId)
+  if (!job) return { ok: true }
+  jobs.delete(jobId)
+  await rm(job.dir, { recursive: true, force: true })
+  return { ok: true }
+}
+
+/** 提交任务:组装打印 HTML → 隐藏窗口弹系统打印对话框(dryRun 只返回 HTML) */
+export async function commitPrintJob(payload: { jobId: string; dryRun?: boolean }): Promise<PrintResult> {
+  const job = jobs.get(payload?.jobId)
+  if (!job) return { ok: false, error: '打印任务已过期' }
   try {
-    const files: string[] = []
-    for (const [i, dataUrl] of images.entries()) {
-      const file = join(dir, `page-${i + 1}.png`)
-      await writeFile(file, Buffer.from(String(dataUrl).split(',')[1] ?? '', 'base64'))
-      files.push(file)
-    }
-    const first = payload.sizesMm?.[0]
+    if (job.files.some((file) => !file)) return { ok: false, error: '打印页面不完整' }
+    const files = job.files as string[]
+    const first = job.sizesMm[0]
     const size = first && first.w > 0 && first.h > 0 ? `${first.w.toFixed(1)}mm ${first.h.toFixed(1)}mm` : 'auto'
     const html = [
       '<!DOCTYPE html><html><head><meta charset="utf-8">',
-      `<title>${escapeHtml(payload.jobName)}</title>`,
+      `<title>${escapeHtml(job.jobName)}</title>`,
       '<style>',
       `@page { size: ${size}; margin: 0; }`,
       'html, body { margin: 0; padding: 0; }',
@@ -45,7 +86,7 @@ export async function printImages(payload: PrintPayload): Promise<PrintResult> {
       '</body></html>'
     ].join('')
     if (payload.dryRun) return { ok: true, pageCount: files.length, html }
-    const htmlPath = join(dir, 'print.html')
+    const htmlPath = join(job.dir, 'print.html')
     await writeFile(htmlPath, html, 'utf8')
     const win = new BrowserWindow({ show: false, width: 800, height: 600, webPreferences: { sandbox: true } })
     try {
@@ -67,6 +108,15 @@ export async function printImages(payload: PrintPayload): Promise<PrintResult> {
       win.destroy()
     }
   } finally {
-    await rm(dir, { recursive: true, force: true })
+    jobs.delete(payload.jobId)
+    await rm(job.dir, { recursive: true, force: true })
+  }
+}
+
+/** 退出时清理所有未完成任务(渲染层崩溃/中途退出) */
+export function cleanupPrintJobs(): void {
+  for (const [jobId, job] of jobs) {
+    jobs.delete(jobId)
+    void rm(job.dir, { recursive: true, force: true })
   }
 }
