@@ -7,6 +7,7 @@ import RightPanel from './components/RightPanel.vue'
 import PasswordDialog from './components/PasswordDialog.vue'
 import MergeDialog from './components/MergeDialog.vue'
 import SplitDialog from './components/SplitDialog.vue'
+import AboutDialog from './components/AboutDialog.vue'
 import PagesRangeDialog from './components/PagesRangeDialog.vue'
 import ZoomControl from './components/ZoomControl.vue'
 import PdfViewer from './viewer/PdfViewer.vue'
@@ -147,6 +148,7 @@ watch(
     <MergeDialog />
     <PagesRangeDialog />
     <SplitDialog />
+    <AboutDialog />
     <div v-if="ui.toast" class="toast" :class="ui.toast.kind">{{ ui.toast.text }}</div>
   </div>
 </template>

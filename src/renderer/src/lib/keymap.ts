@@ -116,6 +116,7 @@ export function useGlobalKeymap(): void {
 
     if (event.key === 'Escape') {
       ui.searchOpen = false
+      ui.aboutOpen = false
       setTool('select')
       return
     }

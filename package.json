@@ -7,12 +7,13 @@
   "license": "MIT",
   "private": true,
   "scripts": {
-    "predev": "node scripts/sync-pdfjs-assets.mjs",
+    "predev": "node scripts/sync-pdfjs-assets.mjs && node scripts/gen-licenses.mjs",
     "dev": "electron-vite dev",
-    "prebuild": "node scripts/sync-pdfjs-assets.mjs",
+    "prebuild": "node scripts/sync-pdfjs-assets.mjs && node scripts/gen-licenses.mjs",
     "build": "electron-vite build",
     "typecheck": "vue-tsc --noEmit",
     "smoke": "node scripts/run-smokes.mjs",
+    "licenses": "node scripts/gen-licenses.mjs",
     "manual": "node scripts/manual-to-pdf.mjs",
     "manual:shots": "node scripts/capture-manual-shots.mjs",
     "dist:win7-32": "npm run build && node scripts/package-win.mjs win7-ia32",
@@ -53,6 +54,10 @@
       {
         "from": "resources",
         "to": "resources"
+      },
+      {
+        "from": "src/renderer/public/third-party-notices.json",
+        "to": "THIRD-PARTY-NOTICES.json"
       }
     ],
     "win": {

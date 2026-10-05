@@ -300,7 +300,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
 
   ipcMain.handle('app:printAbort', (_e, jobId: string) => guard(() => abortPrintJob(String(jobId))))
 
-  ipcMain.handle('app:runtimeInfo', (): { smoke: boolean } => ({ smoke: isSmokeMode() }))
+  ipcMain.handle(
+    'app:runtimeInfo',
+    (): { smoke: boolean; version: string } => ({ smoke: isSmokeMode(), version: app.getVersion() })
+  )
 
   ipcMain.handle('app:recentGet', (_e, filePath: string) =>
     guard(async () => ({ ok: true, page: await getRecentPage(String(filePath)) }))

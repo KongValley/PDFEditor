@@ -23,6 +23,7 @@ interface UiState {
   tool: Tool
   stampKey: StampKey
   searchOpen: boolean
+  aboutOpen: boolean
   sideTab: 'annotations' | 'outline'
   toast: ToastMessage | null
   selectedAnnotationIds: string[]
@@ -32,6 +33,7 @@ export const ui = reactive<UiState>({
   tool: 'select',
   stampKey: 'approved',
   searchOpen: false,
+  aboutOpen: false,
   sideTab: 'annotations',
   toast: null,
   selectedAnnotationIds: []

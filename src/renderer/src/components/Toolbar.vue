@@ -47,6 +47,7 @@ const hasDoc = computed(() => docState.pdfDoc !== null)
       <button :disabled="!hasDoc" :class="{ active: ui.searchOpen }" title="搜索 (Ctrl+F)" @click="ui.searchOpen = !ui.searchOpen">
         搜索
       </button>
+      <button title="关于 / 开源许可" @click="ui.aboutOpen = true">关于</button>
     </div>
 
     <div class="toolbar-row">
