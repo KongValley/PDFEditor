@@ -160,6 +160,8 @@ export function paintAnnotations(
         roundedRect(ctx, box.x, box.y, box.w, box.h, 2)
         ctx.fill()
         ctx.stroke()
+        // 折角固定 0.5 覆盖色(与 SVG 覆盖层的 fill-opacity="0.5" 一致),不随注释透明度再乘一次
+        ctx.globalAlpha = 1
         const fold = 8 * Math.min(scale, 1.5)
         ctx.beginPath()
         ctx.moveTo(box.x + box.w - fold, box.y)

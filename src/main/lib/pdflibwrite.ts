@@ -10,6 +10,7 @@ import {
   PDFHexString,
   PDFName,
   PDFNumber,
+  PDFObjectCopier,
   PDFOptionList,
   PDFRadioGroup,
   PDFString,
@@ -359,7 +360,7 @@ function buildAnnotDict(doc: PDFDocument, ann: Annotation, ctx: AnnotWriteContex
   dict.set(PDFName.of('Type'), PDFName.of('Annot'))
   dict.set(PDFName.of('F'), PDFNumber.of(4))
   dict.set(PDFName.of('Rect'), doc.context.obj([x1, y1, x2, y2]))
-  dict.set(PDFName.of('NM'), PDFString.of(ann.id))
+  dict.set(PDFName.of('NM'), PDFHexString.fromText(ann.id))
   dict.set(PDFName.of('PdEditorData'), PDFHexString.of(Buffer.from(JSON.stringify(ann), 'utf8').toString('hex')))
   dict.set(PDFName.of('CA'), PDFNumber.of(ann.opacity))
   dict.set(PDFName.of('C'), doc.context.obj([r, g, b]))
@@ -411,7 +412,9 @@ function buildAnnotDict(doc: PDFDocument, ann: Annotation, ctx: AnnotWriteContex
     case 'note':
       dict.set(PDFName.of('Subtype'), PDFName.of('Text'))
       dict.set(PDFName.of('Name'), PDFName.of('Note'))
-      dict.set(PDFName.of('Contents'), PDFString.of(ann.text || ''))
+      // 用户文本必须用 PDFHexString(UTF-16BE+BOM)写入:PDFString.of 不转义,
+      // 中文码位低位含 ')' / '\' 时会截断字符串,导致整个批注对象无法解析
+      dict.set(PDFName.of('Contents'), PDFHexString.fromText(ann.text || ''))
       break
     case 'stamp':
       dict.set(PDFName.of('Subtype'), PDFName.of('Stamp'))
@@ -479,6 +482,81 @@ export async function replaceOwnAnnotations(
 /** 剥离全部批注(含表单 Widget/外来批注):导出「纯净页面」用 */
 export function stripAllAnnotations(doc: PDFDocument): void {
   for (const page of doc.getPages()) page.node.delete(PDFName.of('Annots'))
+}
+
+/**
+ * 收集页面上的表单字段引用:从每个 Widget 沿 /Parent 上溯到顶层字段字典。
+ * Widget 本身可能是字段(无 /Parent),也可能挂在 /Kids 之下。
+ */
+function collectAcroFormFieldRefs(doc: PDFDocument): PDFRef[] {
+  const refs: PDFRef[] = []
+  const seen = new Set<string>()
+  const asDict = (object: PDFObject | undefined): PDFDict | undefined => {
+    const resolved = object ? doc.context.lookup(object) : undefined
+    return resolved instanceof PDFDict ? resolved : undefined
+  }
+  const parentKey = PDFName.of('Parent')
+  for (const page of doc.getPages()) {
+    const annots = page.node.Annots()
+    if (!annots) continue
+    for (const item of annots.asArray()) {
+      const widget = asDict(item)
+      if (!widget || widget.get(PDFName.of('Subtype'))?.toString() !== '/Widget') continue
+      let field = widget
+      for (let depth = 0; depth < 32; depth++) {
+        const parent = asDict(field.get(parentKey))
+        if (!parent) break
+        field = parent
+      }
+      if (!field.has(PDFName.of('FT')) && !field.has(PDFName.of('Kids'))) continue
+      const ref = doc.context.getObjectRef(field)
+      if (!ref) continue
+      const key = ref.toString()
+      if (seen.has(key)) continue
+      seen.add(key)
+      refs.push(ref)
+    }
+  }
+  return refs
+}
+
+/**
+ * 重建 /AcroForm:copyPages 只复制页面对象,字段定义挂在文档级 AcroForm 上会一起丢失,
+ * 导致提取/导出/拆分/合并产物里的控件成为孤儿(可显示但无法写回)。
+ * 已有的字段保留并追加新字段;目标文档没有 AcroForm 时,用源文档的非 /Fields 条目
+ * (/DA、/DR 等)经 PDFObjectCopier 复制后新建。
+ * 注:跨页字段只复制到被复制页的子项时,/Kids 可能仍引用未复制页的 Widget(孤立对象,不影响填写)。
+ */
+export function mergeAcroForm(target: PDFDocument, source: PDFDocument | null): void {
+  const fieldRefs = collectAcroFormFieldRefs(target)
+  if (fieldRefs.length === 0) return
+  const existingObj = target.catalog.get(PDFName.of('AcroForm'))
+  const existing = existingObj ? target.context.lookup(existingObj) : undefined
+  if (existing instanceof PDFDict) {
+    const fieldsObj = existing.get(PDFName.of('Fields'))
+    const fields = fieldsObj ? target.context.lookup(fieldsObj) : undefined
+    if (fields instanceof PDFArray) {
+      const known = new Set(fields.asArray().map((ref) => ref.toString()))
+      for (const ref of fieldRefs) if (!known.has(ref.toString())) fields.push(ref)
+      return
+    }
+    existing.set(PDFName.of('Fields'), target.context.obj(fieldRefs))
+    return
+  }
+
+  const sourceFormObj = source?.catalog.get(PDFName.of('AcroForm'))
+  const sourceForm = sourceFormObj && source ? source.context.lookup(sourceFormObj) : undefined
+  const fresh = PDFDict.withContext(target.context)
+  if (sourceForm instanceof PDFDict && source) {
+    const copier = PDFObjectCopier.for(source.context, target.context)
+    for (const key of sourceForm.keys()) {
+      if (key.asString() === '/Fields') continue
+      const value = sourceForm.get(key)
+      if (value) fresh.set(key, copier.copy(value))
+    }
+  }
+  fresh.set(PDFName.of('Fields'), target.context.obj(fieldRefs))
+  target.catalog.set(PDFName.of('AcroForm'), target.context.register(fresh))
 }
 
 /** 从 PDF 提取本应用写入的批注(按 /PdEditorData 解析;page 以所在页覆盖) */

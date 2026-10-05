@@ -57,8 +57,15 @@ export function readSidecar(pdfPath: string): SidecarData | null {
     const raw: unknown = JSON.parse(readFileSync(path, 'utf8'))
     if (!raw || typeof raw !== 'object') return null
     const data = raw as Partial<SidecarData>
-    if (!Array.isArray(data.annotations)) return null
-    return { version: data.version ?? 1, annotations: data.annotations, formValues: data.formValues ?? {} }
+    if (data.annotations !== undefined && !Array.isArray(data.annotations)) {
+      // annotations 类型异常不应连 formValues 一起丢弃
+      console.warn('[sidecar] annotations 字段类型异常,按空处理:', path)
+    }
+    return {
+      version: data.version ?? 1,
+      annotations: Array.isArray(data.annotations) ? data.annotations : [],
+      formValues: data.formValues && typeof data.formValues === 'object' ? data.formValues : {}
+    }
   } catch (err) {
     console.warn('[sidecar] 解析失败:', err)
     return null

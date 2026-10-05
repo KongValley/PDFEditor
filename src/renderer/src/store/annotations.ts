@@ -240,7 +240,8 @@ export async function redo(): Promise<void> {
 
 /**
  * 撤销页面操作:主进程换回 buffer,渲染层恢复注释/路径快照,并逆映射历史命令页号。
- * 失败区分:快照缺失(条目作废)与其它失败(条目回压,可重试)。
+ * 回压条目仅限「主进程快照尚未被消费」的失败;快照已消费后(IPC 成功)的失败只提示不回压,
+ * 否则两端栈会错位 —— 下一次 Ctrl+Z 会多回退一步。
  */
 async function undoSinglePage(entry: PageEntry): Promise<void> {
   const docId = docState.docId
@@ -248,15 +249,26 @@ async function undoSinglePage(entry: PageEntry): Promise<void> {
     showToast('该页面操作已超出可撤销范围', 'error')
     return
   }
+  let result: PageOpResult
   try {
-    const result = (await window.pdfAPI.invoke('pageops:undo', docId)) as PageOpResult
-    if (!result.ok || !result.buffer) {
-      if (result.error === '没有可撤销的页面操作') {
-        showToast('该页面操作已超出可撤销范围', 'error')
-        return
-      }
-      throw new Error(result.error ?? '撤销失败')
+    result = (await window.pdfAPI.invoke('pageops:undo', docId)) as PageOpResult
+  } catch (err) {
+    undoStack.push(entry)
+    showToast(`撤销失败:${err instanceof Error ? err.message : String(err)}`, 'error')
+    return
+  }
+  if (!result.ok || !result.buffer) {
+    if (result.error === '没有可撤销的页面操作') {
+      showToast('该页面操作已超出可撤销范围', 'error')
+      return
     }
+    undoStack.push(entry)
+    showToast(`撤销失败:${result.error ?? '撤销失败'}`, 'error')
+    return
+  }
+
+  // 以下主进程快照已消费:任何失败都不再回压,保持两侧栈配对
+  try {
     await reloadDocument(result.buffer)
     invalidateSearch()
     restoreItems(entry.annotations)
@@ -266,8 +278,7 @@ async function undoSinglePage(entry: PageEntry): Promise<void> {
     markDirty()
     redoStack.push(entry)
   } catch (err) {
-    undoStack.push(entry)
-    showToast(`撤销失败:${err instanceof Error ? err.message : String(err)}`, 'error')
+    showToast(`撤销已完成但界面刷新失败,请重开文档:${err instanceof Error ? err.message : String(err)}`, 'error')
   }
 }
 
@@ -540,7 +551,15 @@ export function resetAnnotations(items: Annotation[] = []): void {
 export function importAnnotations(anns: Annotation[]): void {
   let added = false
   for (const ann of anns) {
-    if (annotState.items.some((a) => a.id === ann.id)) continue
+    const existing = annotState.items.find((a) => a.id === ann.id)
+    if (existing) {
+      // 同 id 同页 = 同一份注释被重复导入(如合并自己保存过的副本),跳过;
+      // 同 id 不同页 = 副本页上的实例(提取/另存后再合并回来),重新发号保留,避免保存时被剥离
+      if (existing.page === ann.page) continue
+      annotState.items.push({ ...ann, id: crypto.randomUUID() })
+      added = true
+      continue
+    }
     annotState.items.push({ ...ann })
     added = true
   }

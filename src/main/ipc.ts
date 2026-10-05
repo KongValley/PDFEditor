@@ -247,6 +247,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
               await writeFile(tmpSidecar, JSON.stringify(sidecar, null, 2), 'utf8')
               await rename(tmpSidecar, sidecarPath)
             }
+            entry.path = targetPath
             return { ok: true, mode: 'sidecar', savedPath: targetPath }
           }
 
@@ -258,7 +259,15 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
           await writeFile(tmpPath, bytes)
           if (writeSidecar) await writeFile(tmpSidecar, JSON.stringify(sidecar, null, 2), 'utf8')
           await rename(tmpPath, targetPath)
-          if (writeSidecar) await rename(tmpSidecar, sidecarPath)
+          if (writeSidecar) {
+            // PDF 已落盘:sidecar 失败降级为提示,不再谎报整体失败
+            try {
+              await rename(tmpSidecar, sidecarPath)
+            } catch (err) {
+              warnings.push(`sidecar 写入失败(PDF 已保存):${(err as Error).message}`)
+              await rm(tmpSidecar, { force: true }).catch(() => undefined)
+            }
+          }
           entry.path = targetPath
           return { ok: true, mode: 'pdf', savedPath: targetPath, warnings }
         } catch (err) {

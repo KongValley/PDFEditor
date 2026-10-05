@@ -139,6 +139,8 @@ export async function exportCurrentPageImage(): Promise<void> {
     showToast('请先打开 PDF 文件', 'error')
     return
   }
+  // 未提交的画布编辑器内容先并入模型,否则导出缺少最后一次编辑
+  commitOpenEditor()
   const pageNumber = docState.currentPage
   try {
     const page = await getPage(pageNumber)
@@ -296,6 +298,7 @@ export async function mergePdfs(specs?: AppendFileSpec[], targetPath?: string): 
     files = request.files
   }
 
+  commitOpenEditor()
   const annotationsBefore = exportAnnotations()
   const filePathBefore = filePath
   if (!(await runPageOp({ kind: 'append', files }, { recordHistory: false }))) return
@@ -349,6 +352,7 @@ export async function exportPages(
 ): Promise<void> {
   const docId = docState.docId
   if (!docId || pages.length === 0) return
+  commitOpenEditor()
   const annotations = includeAnnotations ? exportAnnotations() : undefined
   if (targetPath) {
     const op = (await window.pdfAPI.invoke('pageops:apply', {
@@ -374,6 +378,7 @@ export async function exportPages(
 export async function extractPages(pages: number[], includeAnnotations = true): Promise<void> {
   const docId = docState.docId
   if (!docId || pages.length === 0) return
+  commitOpenEditor()
   const result = (await window.pdfAPI.invoke('pageops:export', {
     docId,
     pages,
@@ -400,6 +405,7 @@ export async function splitPdfs(): Promise<void> {
     pageCount: docState.pageCount
   })
   if (!request) return
+  commitOpenEditor()
   const results = (await window.pdfAPI.invoke('pdf:splitTasks', {
     tasks: request.tasks,
     outputDir: request.outputDir,
@@ -473,6 +479,7 @@ export async function exportPagesAsImages(
     showToast('请先打开 PDF 文件', 'error')
     return
   }
+  commitOpenEditor()
   try {
     if (mode === 'long') {
       const canvases: HTMLCanvasElement[] = []

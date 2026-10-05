@@ -3,7 +3,7 @@ import { basename, dirname, join } from 'node:path'
 import { PDFDocument, degrees } from 'pdf-lib'
 import { getDocEntry, pruneBufferStack, pushBufferSnapshot, setDocBuffer, toArrayBuffer, uniqueFilePath } from './pdfio'
 import { getImageBuffer, readImageBuffer } from './images'
-import { createAnnotContext, replaceOwnAnnotations, stripAllAnnotations } from './pdflibwrite'
+import { createAnnotContext, mergeAcroForm, replaceOwnAnnotations, stripAllAnnotations } from './pdflibwrite'
 import type { Annotation, PageOp, PageOpResult, SplitTask, SplitTaskResult } from '@shared/types'
 
 function identityMap(count: number): number[] {
@@ -77,35 +77,42 @@ export async function applyPageOp(docId: string, op: PageOp): Promise<PageOpResu
         if (indices.length === 0) continue
         const copied = await doc.copyPages(other, indices)
         for (const page of copied) doc.addPage(page)
+        // 被并文件的表单字段定义也要带过来,否则 Widget 成为孤儿
+        mergeAcroForm(doc, other)
       }
       break
     }
     case 'export': {
       if (op.pages.length === 0) return { ok: false, error: '未指定要导出的页面' }
-      const out = await PDFDocument.create()
       const indices = op.pages.filter((i) => i >= 0 && i < oldCount)
+      if (indices.length === 0) return { ok: false, error: '导出页码范围全部越界' }
+      const out = await PDFDocument.create()
       const copied = await out.copyPages(doc, indices)
       for (const page of copied) out.addPage(page)
       const warnings: string[] = []
       if (op.includeAnnotations === false) {
         stripAllAnnotations(out)
-      } else if (op.annotations && op.annotations.length > 0) {
-        const { ctx } = await createAnnotContext(
-          out,
-          async (imgId, refPath) => getImageBuffer(imgId) ?? (await readImageBuffer(refPath)),
-          warnings
-        )
-        // 页码映射到输出页序:未导出的页上注释自然丢弃
-        await replaceOwnAnnotations(
-          out,
-          op.annotations,
-          (page) => {
-            const index = indices.indexOf(page)
-            return index >= 0 ? index : null
-          },
-          ctx
-        )
-        for (const warning of warnings) console.warn('[export]', warning)
+      } else {
+        // 不勾「包含注释」时 Widget 已随 /Annots 剥离,无需重建 AcroForm
+        mergeAcroForm(out, doc)
+        if (op.annotations && op.annotations.length > 0) {
+          const { ctx } = await createAnnotContext(
+            out,
+            async (imgId, refPath) => getImageBuffer(imgId) ?? (await readImageBuffer(refPath)),
+            warnings
+          )
+          // 页码映射到输出页序:未导出的页上注释自然丢弃
+          await replaceOwnAnnotations(
+            out,
+            op.annotations,
+            (page) => {
+              const index = indices.indexOf(page)
+              return index >= 0 ? index : null
+            },
+            ctx
+          )
+          for (const warning of warnings) console.warn('[export]', warning)
+        }
       }
       await mkdir(dirname(op.targetPath), { recursive: true })
       await writeFile(op.targetPath, await out.save({ useObjectStreams: false }))
@@ -204,7 +211,10 @@ export async function splitPdfTasks(
         const warnings: string[] = []
         if (options.includeAnnotations === false) {
           stripAllAnnotations(out)
-        } else if (options.annotations && options.annotations.length > 0 && task.docId) {
+        } else {
+          mergeAcroForm(out, src)
+        }
+        if (options.includeAnnotations !== false && options.annotations && options.annotations.length > 0 && task.docId) {
           // 当前文档:按模型重建自产批注(页号映射到该 chunk);其它文件保留 copyPages 携带的批注
           const { ctx } = await createAnnotContext(
             out,

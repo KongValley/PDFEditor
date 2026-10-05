@@ -143,7 +143,14 @@ t.addAnnotation(
   })
 )
 await sleep(250)
-const labels = [...wrap.querySelectorAll('.ann-layer text.measure-label')].map((el) => el.textContent.trim())
+// 固定 sleep 在渲染偶发迟延时不足:轮询等待标签出现(上限 6s)
+let labels = []
+const labelDeadline = Date.now() + 6000
+while (Date.now() < labelDeadline) {
+  labels = [...wrap.querySelectorAll('.ann-layer text.measure-label')].map((el) => el.textContent.trim())
+  if (labels.some((l) => l === '25.4 mm')) break
+  await sleep(150)
+}
 check('测量标签渲染', labels.some((l) => l === '25.4 mm'), labels)
 
 return { labels, finalColor: t.annotState.items[0].color }

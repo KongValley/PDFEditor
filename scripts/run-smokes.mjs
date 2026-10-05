@@ -34,10 +34,13 @@ if (!existsSync(join(root, 'samples', 'sample-zh.pdf'))) {
   process.exit(1)
 }
 
-// 单步脚本超时(毫秒):默认 60s;重负载步骤(批量拆分/批注往返)给更宽裕的上限
+// 单步脚本超时(毫秒):默认 60s;重负载步骤给更宽裕的上限
+// step13/14/15 含批量拆分、50 页大文档、20+ 次文档打开;渲染层偶发首屏等待
+// (见 docs/代码审查报告.md「存疑」第 4 条)会额外消耗 20s/次,独立跑约 28–50s,套件内更慢
 const STEP_TIMEOUTS = {
   'step13-batch.js': '120000',
-  'step15-annots.js': '120000'
+  'step14-ux.js': '120000',
+  'step15-annots.js': '300000'
 }
 
 let failed = 0

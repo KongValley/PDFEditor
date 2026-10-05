@@ -249,6 +249,8 @@ export async function reloadDocument(buffer: ArrayBuffer): Promise<void> {
   docState.pdfDoc = markRaw(pdfDoc)
   docState.pageCount = pdfDoc.numPages
   docState.pageBoxes = await fillPageBoxes(pdfDoc)
+  // 页面/合并操作会改变表单控件集合:重新发现,否则合并进来的字段不显示也无法填写
+  docState.formFields = await discoverFormFields(pdfDoc)
   docState.currentPage = Math.min(Math.max(docState.currentPage, 1), pdfDoc.numPages)
   if (previous) void previous.cleanup()
 }

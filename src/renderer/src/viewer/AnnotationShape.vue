@@ -192,7 +192,9 @@ const imageHref = computed(() => (props.ann.kind === 'image' ? annotState.imageU
         :height="box.h"
         rx="2"
         :fill="ann.color"
+        :fill-opacity="ann.opacity"
         stroke="#8a6d1a"
+        :stroke-opacity="ann.opacity"
         :stroke-width="Math.max(1, scale)"
       />
       <path

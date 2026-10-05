@@ -2,7 +2,7 @@
 import { ref, watch } from 'vue'
 import type { RenderTask } from 'pdfjs-dist'
 import { docState, getPage } from '../store/document'
-import { getPageViewport } from '../lib/pdfjs'
+import { getPageViewport, pdfjs } from '../lib/pdfjs'
 
 const props = defineProps<{ pageNumber: number; thumbWidth: number; visible: boolean }>()
 
@@ -42,7 +42,12 @@ async function renderThumb(): Promise<void> {
     const ctx = canvas.getContext('2d')
     if (!ctx) return
     task?.cancel()
-    task = page.render({ canvasContext: ctx, viewport })
+    task = page.render({
+      canvasContext: ctx,
+      viewport,
+      // 批注由主视图的 SVG 覆盖层负责:缩略图若由 pdf.js 画 /Annots,会出现「删除后仍显示旧批注」的不一致
+      annotationMode: pdfjs.AnnotationMode.DISABLE
+    })
     await task.promise
   } catch (err) {
     if ((err as Error)?.name !== 'RenderingCancelledException') console.warn('缩略图渲染失败:', err)
