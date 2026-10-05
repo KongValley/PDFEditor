@@ -1,9 +1,30 @@
 // 单架构打包:node scripts/package-win.mjs <win7-ia32|win10-x64|win10-ia32|win7-x64>
 // 各组合 → release/<中文目录>/,含安装包(NSIS)与便携版,文件名自明。
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+// 随 Win7 分发目录附带的补丁安装说明(写入 前置补丁/安装说明.txt)
+const PATCH_README = `Windows 7 前置补丁(适用于本目录中的安装包/便携版)
+
+前提:Windows 7 SP1。
+安装顺序:先装 KB4490628,再装 KB4474419;KB2533623、KB2670838 顺序不限。双击 .msu 逐个安装,提示重启就重启。
+
+- KB2533623  强烈建议 — 提供 DLL 安全加载 API(SetDefaultDllDirectories);缺失时应用按旧式加载运行,老系统若报「无法定位程序输入点 SetDefaultDllDirectories 于动态链接库 KERNEL32.dll」补装它即可
+- KB2670838  推荐 — Windows 7 平台更新(DirectWrite 1.1);未装时页面文字可能渲染模糊
+- KB4490628  推荐 — 维护堆栈(KB4474419 的前置)
+- KB4474419  推荐 — SHA-2 代码签名支持;企业内网更新分发与签名校验链路需要
+
+官方下载地址(缺失时补取;下载页选 Windows 7 / 6.1、32 位或 64 位):
+- KB2533623:https://support.microsoft.com/kb/2533623 (支持页,内含 x86/x64 下载入口)
+- KB2670838:https://www.microsoft.com/en-us/download/details.aspx?id=36805
+- KB4490628:https://www.catalog.update.microsoft.com/Search.aspx?q=KB4490628
+- KB4474419:https://www.catalog.update.microsoft.com/Search.aspx?q=KB4474419
+
+本应用完全离线运行,不联网、不校验代码签名;补上这些补丁可消除老系统上的兼容与渲染问题。
+补丁来自 Microsoft 官方渠道,均带 Microsoft 数字签名;Win10 及以上系统不需要这些补丁。
+`
 
 // os → 打包目录名(中文,内网分发直观);arch → electron 架构 + 文件名后缀
 const combos = {
@@ -87,6 +108,23 @@ renameSync(artifacts.nsis, path.join(outDir, nsisName))
 renameSync(artifacts.portable, path.join(outDir, portableName))
 const blockmap = `${artifacts.nsis}.blockmap`
 if (existsSync(blockmap)) renameSync(blockmap, path.join(outDir, `${nsisName}.blockmap`))
+
+// Win7 前置补丁:从 win7-patches/ 复制本架构 .msu 到分发目录;无补丁源时只提示不失败(CI 无此目录)
+if (os === 'Win7') {
+  const patchSrc = path.join(root, 'win7-patches')
+  const archToken = arch === 'ia32' ? /(^|[-_])x86([-_.]|$)/ : /(^|[-_])x64([-_.]|$)/
+  const patches = existsSync(patchSrc)
+    ? readdirSync(patchSrc).filter((f) => /\.msu$/i.test(f) && f.includes('6.1') && archToken.test(f.toLowerCase()))
+    : []
+  if (patches.length > 0) {
+    const patchDir = path.join(outDir, '前置补丁')
+    mkdirSync(patchDir, { recursive: true })
+    for (const f of patches) copyFileSync(path.join(patchSrc, f), path.join(patchDir, f))
+    writeFileSync(path.join(patchDir, '安装说明.txt'), PATCH_README, 'utf8')
+  } else {
+    console.log('  提示:win7-patches/ 无匹配的本架构 .msu,跳过「前置补丁」(见 README §1)')
+  }
+}
 
 console.log(`\n完成:release/${label}/`)
 for (const f of readdirSync(outDir)) console.log(`  ${f}`)
