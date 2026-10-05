@@ -1,10 +1,30 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { Annotation } from '@shared/types'
-import { removeAnnotation, selectAnnotation, selectedAnnotation, updateAnnotation } from '../store/annotations'
-import { KIND_LABEL, PALETTE, STAMPS } from '../lib/annots'
+import {
+  annotationsZOrder,
+  commitAnnotations,
+  patchAnnotation,
+  removeAnnotation,
+  selectAnnotation,
+  selectedAnnotation,
+  bringToFront,
+  moveDown,
+  moveUp,
+  sendToBack,
+  updateAnnotation
+} from '../store/annotations'
+import { KIND_LABEL, PALETTE, STAMPS, textPatch } from '../lib/annots'
 
 const ann = computed(() => selectedAnnotation())
+
+/** 层级按钮可用性(按同页邻居判定) */
+const zorder = computed(() => {
+  const current = ann.value
+  return current
+    ? annotationsZOrder(current.id)
+    : { canUp: false, canDown: false, canFront: false, canBack: false }
+})
 
 const thickness = computed(() => {
   const a = ann.value
@@ -32,20 +52,39 @@ function patch(partial: Partial<Annotation>): void {
   updateAnnotation(current.id, partial)
 }
 
+/** 连续输入(滑块/文本框)实时改模型但不写历史,change 时合并为一条命令 */
+let liveBefore: Annotation | null = null
+
+function patchLive(partial: Partial<Annotation>): void {
+  const current = ann.value
+  if (!current) return
+  if (!liveBefore) liveBefore = JSON.parse(JSON.stringify(current)) as Annotation
+  patchAnnotation(current.id, partial)
+}
+
+function commitLive(): void {
+  if (!liveBefore) return
+  const before = liveBefore
+  liveBefore = null
+  commitAnnotations([before])
+}
+
 function onOpacity(event: Event): void {
-  patch({ opacity: Number((event.target as HTMLInputElement).value) })
+  patchLive({ opacity: Number((event.target as HTMLInputElement).value) })
 }
 
 function onThickness(event: Event): void {
-  patch({ thickness: Number((event.target as HTMLInputElement).value) } as Partial<Annotation>)
+  patchLive({ thickness: Number((event.target as HTMLInputElement).value) } as Partial<Annotation>)
 }
 
 function onFontSize(event: Event): void {
-  patch({ fontSize: Number((event.target as HTMLInputElement).value) } as Partial<Annotation>)
+  patchLive({ fontSize: Number((event.target as HTMLInputElement).value) } as Partial<Annotation>)
 }
 
 function onText(event: Event): void {
-  patch({ text: (event.target as HTMLTextAreaElement).value } as Partial<Annotation>)
+  const current = ann.value
+  if (!current) return
+  patchLive(textPatch(current, (event.target as HTMLTextAreaElement).value))
 }
 </script>
 
@@ -72,30 +111,46 @@ function onText(event: Event): void {
 
     <div class="row">
       <span class="label">透明度</span>
-      <input type="range" min="0.1" max="1" step="0.05" :value="ann.opacity" @input="onOpacity" />
+      <input type="range" min="0.1" max="1" step="0.05" :value="ann.opacity" @input="onOpacity" @change="commitLive" />
       <span class="value">{{ Math.round(ann.opacity * 100) }}%</span>
     </div>
 
     <div v-if="thickness > 0" class="row">
       <span class="label">线宽</span>
-      <input type="range" min="0.5" max="12" step="0.5" :value="thickness" @input="onThickness" />
+      <input type="range" min="0.5" max="12" step="0.5" :value="thickness" @input="onThickness" @change="commitLive" />
       <span class="value">{{ thickness }}</span>
     </div>
 
     <div v-if="fontSize > 0" class="row">
       <span class="label">字号</span>
-      <input type="range" min="8" max="72" step="1" :value="fontSize" @input="onFontSize" />
+      <input type="range" min="8" max="72" step="1" :value="fontSize" @input="onFontSize" @change="commitLive" />
       <span class="value">{{ fontSize }}</span>
     </div>
 
     <div v-if="text || ann.kind === 'text' || ann.kind === 'note'" class="row column">
       <span class="label">内容</span>
-      <textarea :value="text" rows="4" @input="onText"></textarea>
+      <textarea :value="text" rows="4" @input="onText" @change="commitLive"></textarea>
     </div>
 
     <div v-if="ann.kind === 'stamp'" class="row">
       <span class="label">图章</span>
       <span class="value wide">{{ STAMPS[ann.stampKey].label }}</span>
+    </div>
+
+    <div class="row">
+      <span class="label">层级</span>
+      <button :disabled="!zorder.canBack" title="移到最底层" @click="sendToBack(ann.id)">置底</button>
+      <button :disabled="!zorder.canDown" title="下移一层" @click="moveDown(ann.id)">下移</button>
+      <button :disabled="!zorder.canUp" title="上移一层" @click="moveUp(ann.id)">上移</button>
+      <button :disabled="!zorder.canFront" title="移到最顶层" @click="bringToFront(ann.id)">置顶</button>
+    </div>
+
+    <div class="row">
+      <span class="label">锁定</span>
+      <button :class="{ active: ann.locked }" @click="patch({ locked: !ann.locked })">
+        {{ ann.locked ? '解锁' : '锁定' }}
+      </button>
+      <span class="value">{{ ann.locked ? '画布上不可拖动' : '可自由拖动' }}</span>
     </div>
 
     <div class="row">

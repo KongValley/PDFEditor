@@ -141,14 +141,51 @@ const save2 = await window.pdfAPI.invoke('save:saveAs', {
 check('旋转页保存成功', save2.ok === true, save2)
 await sleep(300)
 
-// 重开保存后的文件(无 sidecar → 只显示 PDF 内已烘焙的内容)
+// 重开保存后的文件(无 sidecar):批注以真实 PDF 批注对象存储,/Annots 读回
 await t.openPath(`${__smokeRoot}/tmp/saved-rotated.pdf`)
 await sleep(1200)
-check('无 sidecar 时不恢复注释', t.annotState.items.length === 0, t.annotState.items.length)
+check('无 sidecar 时从 PDF 恢复注释', t.annotState.items.length === 1, t.annotState.items.length)
+const restoredRotated = t.annotState.items.find((a) => a.kind === 'highlight' && a.page === 1)
+check(
+  '恢复的高亮 bbox 与保存前一致',
+  !!restoredRotated &&
+    Math.abs(restoredRotated.bbox.x - out.rotatedBbox.x) < 1 &&
+    Math.abs(restoredRotated.bbox.y - out.rotatedBbox.y) < 1 &&
+    Math.abs(restoredRotated.bbox.w - out.rotatedBbox.w) < 1 &&
+    Math.abs(restoredRotated.bbox.h - out.rotatedBbox.h) < 1,
+  { restored: restoredRotated?.bbox ?? null, before: out.rotatedBbox }
+)
 t.scrollToPage(2)
 await sleep(1200)
 
+// 覆盖层渲染位置 = 原视觉位置(pdf 批注对象路径下屏幕由 SVG 覆盖层绘制)
 const wrap2b = document.querySelector('[data-page="2"]')
+const layerDeadline = Date.now() + 10000
+let hlEl = null
+while (Date.now() < layerDeadline) {
+  hlEl = wrap2b.querySelector('.ann-layer rect[fill="#ffe066"]')
+  if (hlEl) break
+  await sleep(150)
+}
+check('高亮渲染在注释覆盖层', !!hlEl, null)
+const wrap2bRect = wrap2b.getBoundingClientRect()
+const hlRect = hlEl.getBoundingClientRect()
+const hlRel = {
+  x: hlRect.left - wrap2bRect.left,
+  y: hlRect.top - wrap2bRect.top,
+  w: hlRect.width,
+  h: hlRect.height
+}
+check(
+  '高亮视觉位置与保存前一致(±4px)',
+  Math.abs(hlRel.x - out.screenRect.x) < 4 &&
+    Math.abs(hlRel.y - out.screenRect.y) < 4 &&
+    Math.abs(hlRel.w - out.screenRect.w) < 6 &&
+    Math.abs(hlRel.h - out.screenRect.h) < 6,
+  { now: hlRel, before: out.screenRect }
+)
+
+// 真实性校验:页面内容流中不应再有烘焙的高亮(旧模型才烘焙)
 const canvas2 = wrap2b.querySelector('.page-canvas')
 const ctx = canvas2.getContext('2d')
 const dpr = canvas2.width / parseFloat(canvas2.style.width)
@@ -157,9 +194,9 @@ const sampleY = Math.round((out.screenRect.y + out.screenRect.h / 2) * dpr)
 const pixel = ctx.getImageData(sampleX, sampleY, 1, 1).data
 out.pixel = [pixel[0], pixel[1], pixel[2]]
 const yellowish = pixel[0] > 200 && pixel[1] > 180 && pixel[2] < 200
-check('保存后的高亮位于原视觉位置(像素校验)', yellowish, out.pixel)
+check('页面内容未烘焙高亮(真实批注对象)', !yellowish, out.pixel)
 
-// 对照:页面右下角区域不应是高亮色
+// 对照:页面右下角区域同样不应是高亮色
 const farPixel = ctx.getImageData(Math.round(canvas2.width * 0.8), Math.round(canvas2.height * 0.85), 1, 1).data
 out.farPixel = [farPixel[0], farPixel[1], farPixel[2]]
 check('无关区域未被高亮', !(farPixel[0] > 200 && farPixel[1] > 180 && farPixel[2] < 200), out.farPixel)

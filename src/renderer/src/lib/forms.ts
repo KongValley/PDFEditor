@@ -35,7 +35,11 @@ function mapFieldType(widget: WidgetLike, objectType?: string): FormFieldType {
 
 function normalizeValue(type: FormFieldType, raw: unknown): FormValue | undefined {
   if (raw === undefined || raw === null) return undefined
-  if (type === 'checkbox' || type === 'radio') {
+  // 单选组的值必须是选中按钮的导出值(字符串);布尔值无法写回,不作为初始值
+  if (type === 'radio') {
+    return typeof raw === 'string' && raw !== 'Off' && raw !== '' ? raw : undefined
+  }
+  if (type === 'checkbox') {
     if (typeof raw === 'boolean') return raw
     return typeof raw === 'string' && raw !== 'Off' && raw !== ''
   }

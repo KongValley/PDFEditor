@@ -23,7 +23,7 @@ export function contentHeight(): number {
   return Math.max(total, 0)
 }
 
-function pageOffsetTop(index: number): number {
+export function pageOffsetTop(index: number): number {
   let top = 0
   for (let i = 0; i < index; i++) top += pageDisplaySize(i).h + PAGE_GAP
   return top

@@ -1,29 +1,61 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import type { Annotation } from '@shared/types'
-import { annotState, removeAnnotation, selectAnnotation } from '../store/annotations'
+import { annotState, removeAnnotation, selectAnnotation, toggleAnnotationSelection } from '../store/annotations'
 import { docState } from '../store/document'
 import { scrollToPage } from '../store/viewer'
 import { ui } from '../store/ui'
 import { KIND_LABEL, annotationSummary } from '../lib/annots'
 
-const pageItems = computed(() => annotState.items.filter((a) => a.page === docState.currentPage - 1))
+const pageScope = ref<'current' | 'all'>('current')
+const kindFilter = ref<'all' | Annotation['kind']>('all')
+
+const KINDS = Object.keys(KIND_LABEL) as Annotation['kind'][]
+
+const pageItems = computed(() => {
+  const base =
+    pageScope.value === 'current'
+      ? annotState.items.filter((a) => a.page === docState.currentPage - 1)
+      : annotState.items
+  const list = kindFilter.value === 'all' ? base : base.filter((a) => a.kind === kindFilter.value)
+  return pageScope.value === 'all' ? [...list].sort((a, b) => a.page - b.page) : list
+})
 
 function locate(ann: Annotation): void {
   selectAnnotation(ann.id)
   if (ann.page !== docState.currentPage - 1) scrollToPage(ann.page + 1)
 }
+
+function onItemClick(ann: Annotation, event: MouseEvent): void {
+  if (event.shiftKey) {
+    toggleAnnotationSelection(ann.id)
+    return
+  }
+  locate(ann)
+}
 </script>
 
 <template>
   <div class="ann-list">
-    <div v-if="pageItems.length === 0" class="empty">本页暂无注释</div>
+    <div class="filters">
+      <select v-model="pageScope" title="页范围">
+        <option value="current">当前页</option>
+        <option value="all">全部页</option>
+      </select>
+      <select v-model="kindFilter" title="注释类型">
+        <option value="all">全部类型</option>
+        <option v-for="kind in KINDS" :key="kind" :value="kind">{{ KIND_LABEL[kind] }}</option>
+      </select>
+    </div>
+    <div v-if="pageItems.length === 0" class="empty">
+      {{ pageScope === 'current' ? '本页暂无注释' : '暂无注释' }}
+    </div>
     <div
       v-for="ann in pageItems"
       :key="ann.id"
       class="ann-item"
-      :class="{ selected: ann.id === ui.selectedAnnotationId }"
-      @click="locate(ann)"
+      :class="{ selected: ui.selectedAnnotationIds.includes(ann.id) }"
+      @click="onItemClick(ann, $event)"
     >
       <span class="kind">{{ KIND_LABEL[ann.kind] }}</span>
       <span class="summary">{{ annotationSummary(ann) }}</span>
@@ -41,6 +73,17 @@ function locate(ann: Annotation): void {
   gap: 2px;
   padding: 6px;
   overflow-y: auto;
+}
+
+.filters {
+  display: flex;
+  gap: 6px;
+  padding-bottom: 4px;
+}
+
+.filters select {
+  flex: 1;
+  min-width: 0;
 }
 
 .empty {

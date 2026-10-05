@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import type { PageViewport } from 'pdfjs-dist'
 import type { FormFieldInfo } from '@shared/types'
-import { docState } from '../store/document'
+import { docState, markDirty } from '../store/document'
 import { pdfRectToScreen } from '../lib/geo'
 
 const props = defineProps<{ pageNumber: number; viewport: PageViewport }>()
@@ -27,19 +27,23 @@ function checkedValue(field: FormFieldInfo): boolean {
 
 function onText(field: FormFieldInfo, event: Event): void {
   docState.formValues[field.fullName] = (event.target as HTMLInputElement).value
+  markDirty()
 }
 
 function onCheck(field: FormFieldInfo, event: Event): void {
   const checked = (event.target as HTMLInputElement).checked
   if (field.type === 'radio') {
     if (checked) docState.formValues[field.fullName] = field.options?.[0] ?? 'On'
+    markDirty()
     return
   }
   docState.formValues[field.fullName] = checked
+  markDirty()
 }
 
 function onSelect(field: FormFieldInfo, event: Event): void {
   docState.formValues[field.fullName] = (event.target as HTMLSelectElement).value
+  markDirty()
 }
 </script>
 

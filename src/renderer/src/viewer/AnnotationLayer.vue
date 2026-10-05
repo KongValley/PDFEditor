@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { PageViewport } from 'pdfjs-dist'
 import type { Annotation, ImageInfo, Point } from '@shared/types'
 import AnnotationShape from './AnnotationShape.vue'
@@ -8,12 +8,14 @@ import {
   addAnnotation,
   annotState,
   commitAnnotation,
+  commitAnnotations,
   patchAnnotation,
   removeAnnotation,
-  selectAnnotation
+  selectAnnotation,
+  toggleAnnotationSelection
 } from '../store/annotations'
-import { setTool, showToast, ui } from '../store/ui'
-import { STAMPS, TOOL_DEFAULTS, withIdentity } from '../lib/annots'
+import { registerEditorCommit, setTool, showToast, ui } from '../store/ui'
+import { STAMPS, TOOL_DEFAULTS, textPatch, withIdentity } from '../lib/annots'
 
 const props = defineProps<{
   pageNumber: number
@@ -44,6 +46,11 @@ interface DragState {
   handle: string
   before: Annotation
   startPdf: Point
+  /** 起始屏幕坐标(旋转视图下缩放手柄按屏幕位移换算) */
+  startClient: { x: number; y: number }
+  /** 参与本次拖动的注释(多选批量移动;resize 只有自身) */
+  movers: Annotation[]
+  pointerId: number
 }
 
 const drag = ref<DragState | null>(null)
@@ -70,6 +77,8 @@ const defaultStyle = computed(() => TOOL_DEFAULTS[ui.tool] ?? TOOL_DEFAULTS.rect
 /* ------------------------------ 绘制 ------------------------------ */
 
 function onLayerPointerDown(event: PointerEvent): void {
+  // 注:select 工具的空白点击清选在 PageCanvas 的 page-wrap 上处理——
+  // 该模式下本 svg 为 pointer-events:none,收不到空白点击
   if (!interactive.value || !props.viewport) return
   event.preventDefault()
   const local = localPoint(event)
@@ -240,23 +249,77 @@ function onAnnPointerDown(ann: Annotation, event: PointerEvent): void {
   if (ui.tool !== 'select' || !props.viewport) return
   event.stopPropagation()
   event.preventDefault()
-  selectAnnotation(ann.id)
+  if (event.shiftKey) {
+    toggleAnnotationSelection(ann.id)
+    return
+  }
+  if (!ui.selectedAnnotationIds.includes(ann.id)) selectAnnotation(ann.id)
+  if (ann.locked) return
+  // 多选里被锁定的成员不参与移动;全部锁定则不进入拖动
+  const movers = ui.selectedAnnotationIds
+    .map((id) => annotState.items.find((a) => a.id === id))
+    .filter((a): a is Annotation => !!a && !a.locked)
+    .map((a) => JSON.parse(JSON.stringify(a)) as Annotation)
+  if (movers.length === 0) return
   const startPdf = toPdf(localPoint(event))
   if (!startPdf) return
-  drag.value = { mode: 'move', handle: '', before: JSON.parse(JSON.stringify(ann)) as Annotation, startPdf }
+  drag.value = {
+    mode: 'move',
+    handle: '',
+    before: JSON.parse(JSON.stringify(ann)) as Annotation,
+    startPdf,
+    startClient: { x: event.clientX, y: event.clientY },
+    movers,
+    pointerId: event.pointerId
+  }
+  try {
+    svgEl.value?.setPointerCapture(event.pointerId)
+  } catch {
+    // 合成事件/无活动指针时 capture 会抛错;拖拽仍由 window 监听兜底
+  }
   window.addEventListener('pointermove', onDragMove)
   window.addEventListener('pointerup', onDragEnd)
+  window.addEventListener('pointercancel', onDragEnd)
 }
 
 function onHandlePointerDown(ann: Annotation, handle: string, event: PointerEvent): void {
-  if (!props.viewport) return
+  if (!props.viewport || ann.locked) return
   event.stopPropagation()
   event.preventDefault()
   const startPdf = toPdf(localPoint(event))
   if (!startPdf) return
-  drag.value = { mode: 'resize', handle, before: JSON.parse(JSON.stringify(ann)) as Annotation, startPdf }
+  const before = JSON.parse(JSON.stringify(ann)) as Annotation
+  drag.value = {
+    mode: 'resize',
+    handle,
+    before,
+    startPdf,
+    startClient: { x: event.clientX, y: event.clientY },
+    movers: [before],
+    pointerId: event.pointerId
+  }
+  try {
+    svgEl.value?.setPointerCapture(event.pointerId)
+  } catch {
+    // 同上:忽略 capture 失败
+  }
   window.addEventListener('pointermove', onDragMove)
   window.addEventListener('pointerup', onDragEnd)
+  window.addEventListener('pointercancel', onDragEnd)
+}
+
+/** 位移一个注释(按类型走几何点或 bbox) */
+function shiftAnnotation(before: Annotation, dx: number, dy: number): Partial<Annotation> {
+  if (before.kind === 'ink') {
+    return { points: before.points.map((p) => ({ x: p.x + dx, y: p.y + dy })) }
+  }
+  if (before.kind === 'arrow' || before.kind === 'measure') {
+    return {
+      from: { x: before.from.x + dx, y: before.from.y + dy },
+      to: { x: before.to.x + dx, y: before.to.y + dy }
+    }
+  }
+  return { bbox: { ...before.bbox, x: before.bbox.x + dx, y: before.bbox.y + dy } }
 }
 
 function onDragMove(event: PointerEvent): void {
@@ -270,15 +333,8 @@ function onDragMove(event: PointerEvent): void {
   const before = state.before
 
   if (state.mode === 'move') {
-    if (before.kind === 'ink') {
-      patchAnnotation(before.id, { points: before.points.map((p) => ({ x: p.x + dx, y: p.y + dy })) })
-    } else if (before.kind === 'arrow' || before.kind === 'measure') {
-      patchAnnotation(before.id, {
-        from: { x: before.from.x + dx, y: before.from.y + dy },
-        to: { x: before.to.x + dx, y: before.to.y + dy }
-      })
-    } else {
-      patchAnnotation(before.id, { bbox: { ...before.bbox, x: before.bbox.x + dx, y: before.bbox.y + dy } })
+    for (const mover of state.movers) {
+      patchAnnotation(mover.id, shiftAnnotation(mover, dx, dy))
     }
     return
   }
@@ -289,19 +345,21 @@ function onDragMove(event: PointerEvent): void {
     return
   }
 
-  // 矩形族:在屏幕空间做把手位移,再换算回 PDF 空间(旋转无关)
+  // 矩形族:按屏幕位移缩放(屏幕 y 向下;n/s 与 PDF 空间的增量方向相反)
+  const sdx = event.clientX - state.startClient.x
+  const sdy = event.clientY - state.startClient.y
   const screen = pdfRectToScreen(vp, before.bbox)
   let { x, y, w, h } = screen
   if (state.handle.includes('w')) {
-    x += dx * vp.scale
-    w -= dx * vp.scale
+    x += sdx
+    w -= sdx
   }
-  if (state.handle.includes('e')) w += dx * vp.scale
+  if (state.handle.includes('e')) w += sdx
   if (state.handle.includes('n')) {
-    y -= dy * vp.scale
-    h += dy * vp.scale
+    y += sdy
+    h -= sdy
   }
-  if (state.handle.includes('s')) h -= dy * vp.scale
+  if (state.handle.includes('s')) h += sdy
   w = Math.max(w, 8)
   h = Math.max(h, 8)
   patchAnnotation(before.id, { bbox: screenToPdfRect(x, y, w, h) })
@@ -311,8 +369,15 @@ function onDragEnd(): void {
   const state = drag.value
   window.removeEventListener('pointermove', onDragMove)
   window.removeEventListener('pointerup', onDragEnd)
+  window.removeEventListener('pointercancel', onDragEnd)
   drag.value = null
-  if (state) commitAnnotation(state.before)
+  if (!state) return
+  try {
+    svgEl.value?.releasePointerCapture(state.pointerId)
+  } catch {
+    // 指针已释放(如 pointercancel 后):忽略
+  }
+  commitAnnotations(state.movers)
 }
 
 /* ------------------------------ 编辑 ------------------------------ */
@@ -322,18 +387,20 @@ function openEditor(id: string): void {
   if (!ann || (ann.kind !== 'text' && ann.kind !== 'note')) return
   editingId.value = id
   editorText.value = ann.text
+  registerEditorCommit(commitEditor)
 }
 
 function onAnnDoubleClick(ann: Annotation): void {
-  if (ui.tool !== 'select') return
+  if (ui.tool !== 'select' || ann.locked) return
   if (ann.kind === 'text' || ann.kind === 'note') openEditor(ann.id)
 }
 
 function commitEditor(): void {
   const id = editingId.value
+  editingId.value = null
+  registerEditorCommit(null)
   if (!id) return
   const ann = annotState.items.find((a) => a.id === id)
-  editingId.value = null
   if (!ann) return
   const text = editorText.value
   if (text.trim() === '') removeAnnotation(id)
@@ -351,15 +418,16 @@ function updateText(id: string, text: string): void {
 function updateAnnotationText(id: string, text: string): void {
   const ann = annotState.items.find((a) => a.id === id)
   if (!ann || (ann.kind !== 'text' && ann.kind !== 'note')) return
-  const patch: Partial<Annotation> = { text }
-  if (ann.kind === 'text') {
-    const lineCount = Math.max(text.split('\n').length, 1)
-    const needed = ann.fontSize * 1.2 * lineCount + 6
-    if (needed > ann.bbox.h) patch.bbox = { ...ann.bbox, h: needed }
-  }
-  patchAnnotation(id, patch)
+  patchAnnotation(id, textPatch(ann, text))
   commitAnnotation(ann)
 }
+
+/** 编辑器对应的注释仍存在时才渲染编辑框(注释可能被列表/撤销删除) */
+const editingAlive = computed(() => !!editingId.value && annotState.items.some((a) => a.id === editingId.value))
+
+watch(editingAlive, (alive) => {
+  if (!alive) editingId.value = null
+})
 
 const editorStyle = computed(() => {
   const id = editingId.value
@@ -398,13 +466,29 @@ const previewLine = computed(() => {
   return { from: state.startScreen, to: state.currentScreen }
 })
 
-const selected = computed(() => annotState.items.find((a) => a.id === ui.selectedAnnotationId) ?? null)
+/** 恰好单选时返回该注释(用于属性/把手);多选或未选 → null */
+const selected = computed(() => {
+  const ids = ui.selectedAnnotationIds
+  if (ids.length !== 1) return null
+  const id = ids[0]
+  return annotState.items.find((a) => a.id === id && a.page === props.pageNumber - 1) ?? null
+})
 
 const selectionBox = computed(() => {
   const ann = selected.value
   const vp = props.viewport
   if (!ann || !vp || ann.page !== props.pageNumber - 1) return null
   return pdfRectToScreen(vp, ann.bbox)
+})
+
+/** 本页全部选中项的虚线框(多选可视化) */
+const selectedBoxes = computed(() => {
+  const vp = props.viewport
+  if (!vp) return []
+  const ids = ui.selectedAnnotationIds
+  return items.value
+    .filter((ann) => ids.includes(ann.id))
+    .map((ann) => ({ id: ann.id, box: pdfRectToScreen(vp, ann.bbox) }))
 })
 
 const HANDLES = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']
@@ -435,6 +519,8 @@ onBeforeUnmount(() => {
   window.removeEventListener('pointerup', onLayerPointerUp)
   window.removeEventListener('pointermove', onDragMove)
   window.removeEventListener('pointerup', onDragEnd)
+  window.removeEventListener('pointercancel', onDragEnd)
+  registerEditorCommit(null)
 })
 </script>
 
@@ -480,19 +566,21 @@ onBeforeUnmount(() => {
       stroke-dasharray="4 3"
     />
 
-    <template v-if="selectionBox && ui.tool === 'select'">
+    <template v-if="ui.tool === 'select'">
       <rect
-        :x="selectionBox.x - 2"
-        :y="selectionBox.y - 2"
-        :width="selectionBox.w + 4"
-        :height="selectionBox.h + 4"
+        v-for="item in selectedBoxes"
+        :key="item.id"
+        :x="item.box.x - 2"
+        :y="item.box.y - 2"
+        :width="item.box.w + 4"
+        :height="item.box.h + 4"
         fill="none"
         stroke="#4a8fe7"
         stroke-width="1"
         stroke-dasharray="4 3"
         class="selection-frame"
       />
-      <template v-if="selected && selected.kind !== 'ink' && selected.kind !== 'arrow' && selected.kind !== 'measure'">
+      <template v-if="selected && !selected.locked && selected.kind !== 'ink' && selected.kind !== 'arrow' && selected.kind !== 'measure'">
         <rect
           v-for="handle in HANDLES"
           :key="handle"
@@ -507,7 +595,7 @@ onBeforeUnmount(() => {
           @pointerdown="onHandlePointerDown(selected, handle, $event)"
         />
       </template>
-      <template v-else-if="selected">
+      <template v-else-if="selected && !selected.locked">
         <circle
           v-for="handle in endpointHandles"
           :key="handle.handle"
@@ -524,7 +612,7 @@ onBeforeUnmount(() => {
     </template>
   </svg>
 
-  <div v-if="editingId" class="ann-editor" :style="editorStyle" @pointerdown.stop>
+  <div v-if="editingId && editingAlive" class="ann-editor" :style="editorStyle" @pointerdown.stop>
     <textarea
       v-model="editorText"
       class="ann-editor-input"

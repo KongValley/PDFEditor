@@ -1,8 +1,10 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { PDFDocument, degrees } from 'pdf-lib'
-import { getDocEntry, setDocBuffer, toArrayBuffer, uniqueFilePath } from './pdfio'
-import type { PageOp, PageOpResult, SplitTask, SplitTaskResult } from '@shared/types'
+import { getDocEntry, pruneBufferStack, pushBufferSnapshot, setDocBuffer, toArrayBuffer, uniqueFilePath } from './pdfio'
+import { getImageBuffer, readImageBuffer } from './images'
+import { createAnnotContext, replaceOwnAnnotations, stripAllAnnotations } from './pdflibwrite'
+import type { Annotation, PageOp, PageOpResult, SplitTask, SplitTaskResult } from '@shared/types'
 
 function identityMap(count: number): number[] {
   return Array.from({ length: count }, (_, i) => i)
@@ -49,6 +51,22 @@ export async function applyPageOp(docId: string, op: PageOp): Promise<PageOpResu
       for (let i = 0; i < oldCount; i++) pageMap[i] = i < insertAt ? i : i + 1
       break
     }
+    case 'move': {
+      const from = Math.min(Math.max(op.from, 0), oldCount - 1)
+      const to = Math.min(Math.max(op.to, 0), oldCount - 1)
+      if (from === to) return { ok: false, error: '目标位置与当前位置相同' }
+      const page = doc.getPage(from)
+      doc.removePage(from)
+      doc.insertPage(to, page)
+      const order = Array.from({ length: oldCount }, (_, i) => i)
+      const [moved] = order.splice(from, 1)
+      order.splice(to, 0, moved)
+      pageMap = []
+      order.forEach((oldIdx, newIdx) => {
+        pageMap[oldIdx] = newIdx
+      })
+      break
+    }
     case 'append': {
       for (const file of op.files) {
         const bytes = await readFile(file.path)
@@ -68,12 +86,34 @@ export async function applyPageOp(docId: string, op: PageOp): Promise<PageOpResu
       const indices = op.pages.filter((i) => i >= 0 && i < oldCount)
       const copied = await out.copyPages(doc, indices)
       for (const page of copied) out.addPage(page)
+      const warnings: string[] = []
+      if (op.includeAnnotations === false) {
+        stripAllAnnotations(out)
+      } else if (op.annotations && op.annotations.length > 0) {
+        const { ctx } = await createAnnotContext(
+          out,
+          async (imgId, refPath) => getImageBuffer(imgId) ?? (await readImageBuffer(refPath)),
+          warnings
+        )
+        // 页码映射到输出页序:未导出的页上注释自然丢弃
+        await replaceOwnAnnotations(
+          out,
+          op.annotations,
+          (page) => {
+            const index = indices.indexOf(page)
+            return index >= 0 ? index : null
+          },
+          ctx
+        )
+        for (const warning of warnings) console.warn('[export]', warning)
+      }
       await mkdir(dirname(op.targetPath), { recursive: true })
       await writeFile(op.targetPath, await out.save({ useObjectStreams: false }))
       return { ok: true, savedPath: op.targetPath }
     }
   }
 
+  const snapshotted = pushBufferSnapshot(entry)
   const bytes = await doc.save({ useObjectStreams: false })
   const buffer = Buffer.from(bytes)
   setDocBuffer(docId, buffer, doc.getPageCount())
@@ -81,12 +121,41 @@ export async function applyPageOp(docId: string, op: PageOp): Promise<PageOpResu
     ok: true,
     buffer: toArrayBuffer(buffer),
     pageCount: doc.getPageCount(),
-    pageMap
+    pageMap,
+    snapshotted
   }
 }
 
+/** 撤销最近一次页面操作(主进程快照栈);渲染层同步恢复注释/路径快照 */
+export function undoPageOp(docId: string): PageOpResult {
+  const entry = getDocEntry(docId)
+  if (!entry) return { ok: false, error: '文档未打开' }
+  const prev = entry.undoBuffers.pop()
+  if (!prev) return { ok: false, error: '没有可撤销的页面操作' }
+  entry.redoBuffers.push({ buffer: entry.buffer, pageCount: entry.pageCount })
+  pruneBufferStack(entry.redoBuffers)
+  setDocBuffer(docId, prev.buffer, prev.pageCount)
+  return { ok: true, buffer: toArrayBuffer(prev.buffer), pageCount: prev.pageCount }
+}
+
+/** 重做页面操作 */
+export function redoPageOp(docId: string): PageOpResult {
+  const entry = getDocEntry(docId)
+  if (!entry) return { ok: false, error: '文档未打开' }
+  const next = entry.redoBuffers.pop()
+  if (!next) return { ok: false, error: '没有可重做的页面操作' }
+  entry.undoBuffers.push({ buffer: entry.buffer, pageCount: entry.pageCount })
+  pruneBufferStack(entry.undoBuffers)
+  setDocBuffer(docId, next.buffer, next.pageCount)
+  return { ok: true, buffer: toArrayBuffer(next.buffer), pageCount: next.pageCount }
+}
+
 /** 批量拆分:每任务独立处理,失败不中断其它任务 */
-export async function splitPdfTasks(tasks: SplitTask[], outputDir: string | null): Promise<SplitTaskResult[]> {
+export async function splitPdfTasks(
+  tasks: SplitTask[],
+  outputDir: string | null,
+  options: { includeAnnotations?: boolean; annotations?: Annotation[] } = {}
+): Promise<SplitTaskResult[]> {
   const results: SplitTaskResult[] = []
   for (const task of tasks) {
     const entry = task.docId ? getDocEntry(task.docId) : undefined
@@ -132,6 +201,27 @@ export async function splitPdfTasks(tasks: SplitTask[], outputDir: string | null
         const out = await PDFDocument.create()
         const copied = await out.copyPages(src, chunk)
         for (const page of copied) out.addPage(page)
+        const warnings: string[] = []
+        if (options.includeAnnotations === false) {
+          stripAllAnnotations(out)
+        } else if (options.annotations && options.annotations.length > 0 && task.docId) {
+          // 当前文档:按模型重建自产批注(页号映射到该 chunk);其它文件保留 copyPages 携带的批注
+          const { ctx } = await createAnnotContext(
+            out,
+            async (imgId, refPath) => getImageBuffer(imgId) ?? (await readImageBuffer(refPath)),
+            warnings
+          )
+          await replaceOwnAnnotations(
+            out,
+            options.annotations,
+            (page) => {
+              const index = chunk.indexOf(page)
+              return index >= 0 ? index : null
+            },
+            ctx
+          )
+          for (const warning of warnings) console.warn('[split]', warning)
+        }
         const target = uniqueFilePath(destDir, `${stem}-${i + 1}.pdf`)
         await writeFile(target, await out.save({ useObjectStreams: false }))
         outputs.push(target)

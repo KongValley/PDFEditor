@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import Toolbar from './components/Toolbar.vue'
 import SearchBar from './components/SearchBar.vue'
 import ThumbnailsPanel from './components/ThumbnailsPanel.vue'
@@ -11,7 +11,7 @@ import PagesRangeDialog from './components/PagesRangeDialog.vue'
 import PdfViewer from './viewer/PdfViewer.vue'
 import { docState } from './store/document'
 import { showToast, ui } from './store/ui'
-import { openPath } from './lib/actions'
+import { confirmDiscardChanges, openPath } from './lib/actions'
 import { useGlobalKeymap } from './lib/keymap'
 
 useGlobalKeymap()
@@ -19,13 +19,20 @@ useGlobalKeymap()
 const dragging = ref(false)
 let dragDepth = 0
 
+/** 仅外部文件拖入时接管拖放(内部缩略图排序的 drag 不带 Files) */
+function isFileDrag(event: DragEvent): boolean {
+  return !!event.dataTransfer && event.dataTransfer.types.includes('Files')
+}
+
 function onDragEnter(event: DragEvent): void {
+  if (!isFileDrag(event)) return
   event.preventDefault()
   dragDepth++
   dragging.value = true
 }
 
 function onDragOver(event: DragEvent): void {
+  if (!isFileDrag(event)) return
   event.preventDefault()
 }
 
@@ -41,11 +48,25 @@ function onDrop(event: DragEvent): void {
   const files = event.dataTransfer?.files
   if (!files || files.length === 0) return
   const path = window.pdfAPI.getPathForFile(files[0])
-  if (path && /\.pdf$/i.test(path)) void openPath(path)
-  else showToast('仅支持 PDF 文件', 'error')
+  if (!path || !/\.pdf$/i.test(path)) {
+    showToast('仅支持 PDF 文件', 'error')
+    return
+  }
+  if (!confirmDiscardChanges()) return
+  if (files.length > 1) showToast(`其余 ${files.length - 1} 个文件已忽略(一次只能打开一个)`)
+  void openPath(path)
 }
 
 const fileName = computed(() => docState.filePath?.split(/[\\/]/).pop() ?? '')
+
+// 脏标记同步主进程(关窗确认用)
+watch(
+  () => docState.dirty,
+  (value) => {
+    void window.pdfAPI.invoke('app:setDirty', value)
+  },
+  { immediate: true }
+)
 </script>
 
 <template>
@@ -67,6 +88,7 @@ const fileName = computed(() => docState.filePath?.split(/[\\/]/).pop() ?? '')
       <span class="status-file" :title="docState.filePath ?? ''">{{ fileName || '未打开文件' }}</span>
       <span v-if="docState.pdfDoc">第 {{ docState.currentPage }} / {{ docState.pageCount }} 页</span>
       <span v-if="docState.pdfDoc">缩放 {{ Math.round(docState.scale * 100) }}%</span>
+      <span v-if="docState.dirty" class="status-dirty">未保存</span>
       <span v-if="docState.encrypted" class="status-warn">加密文档</span>
     </footer>
 
@@ -135,6 +157,10 @@ const fileName = computed(() => docState.filePath?.split(/[\\/]/).pop() ?? '')
 }
 
 .status-warn {
+  color: #f0c36d;
+}
+
+.status-dirty {
   color: #f0c36d;
 }
 

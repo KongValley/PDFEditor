@@ -19,9 +19,11 @@ const value = ref('')
 const format = ref<ExportFormat>('pdf')
 const mode = ref<ExportMode>('each')
 const direction = ref<'h' | 'v'>('v')
+const includeAnnotations = ref(true)
 const inputEl = ref<HTMLInputElement | null>(null)
 
 const isExport = computed(() => pagesDialogState.action === 'export')
+const showIncludeAnnotations = computed(() => pagesDialogState.action !== 'delete')
 
 watch(
   () => pagesDialogState.open,
@@ -31,6 +33,7 @@ watch(
     format.value = 'pdf'
     mode.value = 'each'
     direction.value = 'v'
+    includeAnnotations.value = true
     await nextTick()
     inputEl.value?.focus()
   }
@@ -41,7 +44,8 @@ function confirm(): void {
     input: value.value,
     format: format.value,
     mode: mode.value,
-    direction: direction.value
+    direction: direction.value,
+    includeAnnotations: includeAnnotations.value
   })
 }
 
@@ -87,6 +91,10 @@ function cancel(): void {
           </div>
         </template>
       </template>
+      <label v-if="showIncludeAnnotations" class="check-row">
+        <input v-model="includeAnnotations" type="checkbox" />
+        包含注释
+      </label>
       <div class="actions">
         <button @click="cancel">取消</button>
         <button class="primary" @click="confirm">确定</button>
@@ -130,6 +138,13 @@ function cancel(): void {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--toolbar-fg-dim);
 }
 
 .label {

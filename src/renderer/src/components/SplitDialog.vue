@@ -112,7 +112,12 @@ function confirm(): void {
       pagesPerFile: Number(row.pagesPerFile)
     }
   })
-  submitSplitWork({ tasks, outputDir: splitDialogState.outputDir, autoOpen: splitDialogState.autoOpen })
+  submitSplitWork({
+    tasks,
+    outputDir: splitDialogState.outputDir,
+    autoOpen: splitDialogState.autoOpen,
+    includeAnnotations: splitDialogState.includeAnnotations
+  })
 }
 
 function cancel(): void {
@@ -184,6 +189,10 @@ function cancel(): void {
           <option value="__choose__">选择目录…</option>
         </select>
       </div>
+      <label class="set-check">
+        <input v-model="splitDialogState.includeAnnotations" type="checkbox" />
+        包含注释
+      </label>
       <label class="set-check">
         <input v-model="splitDialogState.autoOpen" type="checkbox" />
         转换完成自动打开文件目录

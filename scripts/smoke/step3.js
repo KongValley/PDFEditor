@@ -120,7 +120,7 @@ check('stamp rendered', stampNodes === 1, stampNodes)
 
 // 5) 选中 + 属性面板
 t.ui.tool = 'select'
-t.ui.selectedAnnotationId = t.annotState.items.find((a) => a.kind === 'rect').id
+t.ui.selectedAnnotationIds = [t.annotState.items.find((a) => a.kind === 'rect').id]
 await sleep(150)
 check('props panel visible', !!document.querySelector('.props'), null)
 check('selection handles', wrap.querySelectorAll('.ann-layer .handle').length === 8, wrap.querySelectorAll('.ann-layer .handle').length)
@@ -135,7 +135,7 @@ await sleep(60)
 check('redo restores', t.annotState.items.length === before, t.annotState.items.length)
 
 // 7) 快捷键删除选中
-t.ui.selectedAnnotationId = t.annotState.items[t.annotState.items.length - 1].id
+t.ui.selectedAnnotationIds = [t.annotState.items[t.annotState.items.length - 1].id]
 const beforeDelete = t.annotState.items.length
 window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }))
 await sleep(80)
@@ -146,7 +146,7 @@ window.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bub
 await sleep(80)
 check('ctrl+z restores', t.annotState.items.length === beforeDelete, t.annotState.items.length)
 
-t.ui.selectedAnnotationId = null
+t.ui.selectedAnnotationIds = []
 await sleep(200)
 
 return {

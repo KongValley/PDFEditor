@@ -23,20 +23,18 @@ interface UiState {
   tool: Tool
   stampKey: StampKey
   searchOpen: boolean
-  searchQuery: string
   sideTab: 'annotations' | 'outline'
   toast: ToastMessage | null
-  selectedAnnotationId: string | null
+  selectedAnnotationIds: string[]
 }
 
 export const ui = reactive<UiState>({
   tool: 'select',
   stampKey: 'approved',
   searchOpen: false,
-  searchQuery: '',
   sideTab: 'annotations',
   toast: null,
-  selectedAnnotationId: null
+  selectedAnnotationIds: []
 })
 
 let toastTimer: number | undefined
@@ -51,7 +49,20 @@ export function showToast(text: string, kind: 'info' | 'error' = 'info'): void {
 
 export function setTool(tool: Tool): void {
   ui.tool = tool
-  if (tool !== 'select') ui.selectedAnnotationId = null
+  if (tool !== 'select') ui.selectedAnnotationIds = []
+}
+
+/* --------------------------- 画布编辑器提交钩子 --------------------------- */
+
+let editorCommit: (() => void) | null = null
+
+/** AnnotationLayer 打开文字/便签编辑器时注册;保存前调用以保证最后一次编辑已入模型 */
+export function registerEditorCommit(fn: (() => void) | null): void {
+  editorCommit = fn
+}
+
+export function commitOpenEditor(): void {
+  editorCommit?.()
 }
 
 /* --------------------------- 密码输入 --------------------------- */
@@ -66,6 +77,9 @@ export const passwordState = reactive<PasswordState>({ open: false, message: '' 
 let passwordResolve: ((value: string | null) => void) | null = null
 
 export function requestPassword(message: string): Promise<string | null> {
+  // 单槽 resolver:旧请求被新请求覆盖前先按「取消」结算,避免上一个 Promise 永不 settle
+  passwordResolve?.(null)
+  passwordResolve = null
   passwordState.open = true
   passwordState.message = message
   return new Promise((resolve) => {
@@ -91,6 +105,8 @@ export interface PagesRangeRequest {
   format?: ExportFormat
   mode?: ExportMode
   direction?: 'h' | 'v'
+  /** 提取/导出 PDF/PNG 时是否包含注释(默认勾选) */
+  includeAnnotations?: boolean
 }
 
 export const pagesDialogState = reactive({ open: false, action: 'extract' as PagesAction })
@@ -98,6 +114,8 @@ export const pagesDialogState = reactive({ open: false, action: 'extract' as Pag
 let pagesResolve: ((value: PagesRangeRequest | null) => void) | null = null
 
 export function requestPagesRange(action: PagesAction): Promise<PagesRangeRequest | null> {
+  pagesResolve?.(null)
+  pagesResolve = null
   pagesDialogState.action = action
   pagesDialogState.open = true
   return new Promise((resolve) => {
@@ -152,6 +170,8 @@ export function requestMergeWork(seed: {
   pageCount: number
   defaultName: string
 }): Promise<MergeRequest | null> {
+  mergeResolve?.(null)
+  mergeResolve = null
   mergeDialogState.rows = [
     {
       kind: 'current',
@@ -200,13 +220,16 @@ export interface SplitRequest {
   tasks: SplitTask[]
   outputDir: string | null
   autoOpen: boolean
+  /** 拆分输出是否包含注释(默认勾选) */
+  includeAnnotations: boolean
 }
 
 export const splitDialogState = reactive({
   open: false,
   rows: [] as SplitRow[],
   outputDir: null as string | null,
-  autoOpen: false
+  autoOpen: false,
+  includeAnnotations: true
 })
 
 let splitResolve: ((value: SplitRequest | null) => void) | null = null
@@ -217,6 +240,8 @@ export function requestSplitWork(seed: {
   name: string
   pageCount: number
 }): Promise<SplitRequest | null> {
+  splitResolve?.(null)
+  splitResolve = null
   splitDialogState.rows = [
     {
       kind: 'current',
@@ -234,6 +259,7 @@ export function requestSplitWork(seed: {
   ]
   splitDialogState.outputDir = null
   splitDialogState.autoOpen = false
+  splitDialogState.includeAnnotations = true
   splitDialogState.open = true
   return new Promise((resolve) => {
     splitResolve = resolve

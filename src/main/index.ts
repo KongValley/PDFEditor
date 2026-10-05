@@ -1,6 +1,6 @@
-import { app, BrowserWindow, protocol, shell } from 'electron'
+import { app, BrowserWindow, dialog, protocol, shell } from 'electron'
 import { join, normalize } from 'node:path'
-import { registerIpc } from './ipc'
+import { isRendererDirty, registerIpc, setRendererDirty } from './ipc'
 import { isSmokeMode, runSmoke } from './smoke'
 
 // 内网 32 位老机器优先稳定:禁用硬件加速(避免老显卡驱动导致的黑屏/崩溃)
@@ -60,6 +60,29 @@ function createWindow(): void {
 
   mainWindow.on('ready-to-show', () => {
     mainWindow?.show()
+  })
+
+  // 未保存改动时拦截关窗(冒烟模式跳过,避免阻塞 app.quit)
+  mainWindow.on('close', (event) => {
+    const win = mainWindow
+    if (isSmokeMode() || !win || !isRendererDirty()) return
+    event.preventDefault()
+    void dialog
+      .showMessageBox(win, {
+        type: 'warning',
+        title: '未保存的更改',
+        message: '当前文档有未保存的更改',
+        detail: '直接关闭将丢失这些更改。',
+        buttons: ['取消', '不保存并关闭'],
+        defaultId: 0,
+        cancelId: 0
+      })
+      .then(({ response }) => {
+        if (response === 1) {
+          setRendererDirty(false)
+          win.destroy()
+        }
+      })
   })
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {

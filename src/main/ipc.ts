@@ -1,12 +1,20 @@
 import { app, dialog, ipcMain, shell, type BrowserWindow, type OpenDialogOptions } from 'electron'
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { openDocument, getDocEntry, readPdfPageCount, sidecarPathFor, uniqueFilePath } from './lib/pdfio'
-import { applyPageOp, splitPdfTasks } from './lib/docops'
+import { PDFDocument } from 'pdf-lib'
+import {
+  openDocument,
+  getDocEntry,
+  readPdfPageCount,
+  releaseDocument,
+  sidecarPathFor,
+  uniqueFilePath
+} from './lib/pdfio'
+import { applyPageOp, redoPageOp, splitPdfTasks, undoPageOp } from './lib/docops'
 import { getImageBuffer, importImage, readImageBuffer, type ImageImport } from './lib/images'
-import { writeAnnotations } from './lib/pdflibwrite'
+import { extractEditorAnnotations, writeAnnotations } from './lib/pdflibwrite'
 import type {
   Annotation,
   ChooseFileResult,
@@ -27,6 +35,15 @@ function resolveRendererAsset(url: string): string {
 
 /** 各 IPC handler 的返回结构均含 ok/error,失败时统一返回该形状 */
 type OkResult = { ok: boolean; error?: string }
+
+/** 渲染层脏标记(关窗确认用);由渲染层通过 app:setDirty 推送 */
+let rendererDirty = false
+export function setRendererDirty(value: boolean): void {
+  rendererDirty = value
+}
+export function isRendererDirty(): boolean {
+  return rendererDirty
+}
 
 /** 统一兜底:pdf-lib/文件系统异常不应让 IPC 静默 reject(用户会看到"点了没反应") */
 async function guard<T extends OkResult>(run: () => Promise<T> | T): Promise<T> {
@@ -53,6 +70,24 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
 
   ipcMain.handle('doc:open', async (_e, filePath: string) => openDocument(filePath))
 
+  ipcMain.handle('doc:release', (_e, docId: string): { ok: boolean } => {
+    releaseDocument(docId)
+    return { ok: true }
+  })
+
+  // 页面操作(合并等)后从主进程 buffer 提取新出现的自产批注(pdf.js 不暴露自定义键)
+  ipcMain.handle('doc:getAnnotations', async (_e, docId: string): Promise<{ annotations: Annotation[] }> => {
+    const entry = getDocEntry(docId)
+    if (!entry || entry.encrypted) return { annotations: [] }
+    try {
+      const doc = await PDFDocument.load(entry.buffer, { ignoreEncryption: true })
+      return { annotations: extractEditorAnnotations(doc) }
+    } catch (err) {
+      console.warn('[doc:getAnnotations] 解析失败:', err)
+      return { annotations: [] }
+    }
+  })
+
   ipcMain.handle(
     'pdf:pageCounts',
     async (_e, paths: string[]): Promise<Array<{ path: string; pageCount?: number; error?: string }>> => {
@@ -62,8 +97,19 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
 
   ipcMain.handle(
     'pdf:splitTasks',
-    async (_e, payload: { tasks: SplitTask[]; outputDir: string | null }): Promise<SplitTaskResult[]> =>
-      splitPdfTasks(payload.tasks, payload.outputDir)
+    async (
+      _e,
+      payload: {
+        tasks: SplitTask[]
+        outputDir: string | null
+        includeAnnotations?: boolean
+        annotations?: Annotation[]
+      }
+    ): Promise<SplitTaskResult[]> =>
+      splitPdfTasks(payload.tasks, payload.outputDir, {
+        includeAnnotations: payload.includeAnnotations,
+        annotations: payload.annotations
+      })
   )
 
   ipcMain.handle('app:chooseDir', async (): Promise<{ canceled: boolean; dir: string }> => {
@@ -99,9 +145,31 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     return guard(() => applyPageOp(payload.docId, payload.op))
   })
 
+  ipcMain.handle('pageops:undo', async (_e, docId: string): Promise<PageOpResult> => {
+    return guard(() => undoPageOp(docId))
+  })
+
+  ipcMain.handle('pageops:redo', async (_e, docId: string): Promise<PageOpResult> => {
+    return guard(() => redoPageOp(docId))
+  })
+
+  ipcMain.handle('app:setDirty', (_e, dirty: boolean): { ok: boolean } => {
+    setRendererDirty(dirty)
+    return { ok: true }
+  })
+
   ipcMain.handle(
     'pageops:export',
-    async (_e, payload: { docId: string; pages: number[]; defaultName: string }): Promise<PageOpResult> => {
+    async (
+      _e,
+      payload: {
+        docId: string
+        pages: number[]
+        defaultName: string
+        includeAnnotations?: boolean
+        annotations?: Annotation[]
+      }
+    ): Promise<PageOpResult> => {
       const win = getWindow()
       const entry = getDocEntry(payload.docId)
       const options = {
@@ -115,7 +183,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
         applyPageOp(payload.docId, {
           kind: 'export',
           pages: payload.pages,
-          targetPath: result.filePath ?? ''
+          targetPath: result.filePath ?? '',
+          includeAnnotations: payload.includeAnnotations,
+          annotations: payload.annotations
         })
       )
     }
@@ -155,27 +225,46 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
 
         await mkdir(dirname(targetPath), { recursive: true })
 
+        // D1:明文文档注释只存 PDF /Annots,sidecar 仅保留表单值;加密文档仍走 sidecar 注释
         const sidecar: SidecarData = {
           version: 1,
-          annotations: payload.annotations,
+          annotations: entry.encrypted ? payload.annotations : [],
           formValues: payload.formValues
         }
         const writeSidecar = payload.writeSidecar !== false
-
-        // 加密文档:无法解密重写,只保存 sidecar
-        if (entry.encrypted) {
-          if (writeSidecar) await writeFile(sidecarPathFor(targetPath), JSON.stringify(sidecar, null, 2), 'utf8')
-          return { ok: true, mode: 'sidecar', savedPath: targetPath }
+        const sidecarPath = sidecarPathFor(targetPath)
+        const tmpPath = `${targetPath}.tmp-${Date.now()}`
+        const tmpSidecar = `${sidecarPath}.tmp-${Date.now()}`
+        const cleanupTmp = async (): Promise<void> => {
+          await rm(tmpPath, { force: true }).catch(() => undefined)
+          await rm(tmpSidecar, { force: true }).catch(() => undefined)
         }
 
-        const { bytes, warnings } = await writeAnnotations(entry.buffer, {
-          annotations: payload.annotations,
-          formValues: payload.formValues,
-          resolveImage: async (imgId, refPath) => getImageBuffer(imgId) ?? (await readImageBuffer(refPath))
-        })
-        await writeFile(targetPath, bytes)
-        if (writeSidecar) await writeFile(sidecarPathFor(targetPath), JSON.stringify(sidecar, null, 2), 'utf8')
-        return { ok: true, mode: 'pdf', savedPath: targetPath, warnings }
+        try {
+          // 先写临时文件再原子替换:任一步失败时原文件保持完好
+          if (entry.encrypted) {
+            if (writeSidecar) {
+              await writeFile(tmpSidecar, JSON.stringify(sidecar, null, 2), 'utf8')
+              await rename(tmpSidecar, sidecarPath)
+            }
+            return { ok: true, mode: 'sidecar', savedPath: targetPath }
+          }
+
+          const { bytes, warnings } = await writeAnnotations(entry.buffer, {
+            annotations: payload.annotations,
+            formValues: payload.formValues,
+            resolveImage: async (imgId, refPath) => getImageBuffer(imgId) ?? (await readImageBuffer(refPath))
+          })
+          await writeFile(tmpPath, bytes)
+          if (writeSidecar) await writeFile(tmpSidecar, JSON.stringify(sidecar, null, 2), 'utf8')
+          await rename(tmpPath, targetPath)
+          if (writeSidecar) await rename(tmpSidecar, sidecarPath)
+          entry.path = targetPath
+          return { ok: true, mode: 'pdf', savedPath: targetPath, warnings }
+        } catch (err) {
+          await cleanupTmp()
+          throw err
+        }
       })
     }
   )

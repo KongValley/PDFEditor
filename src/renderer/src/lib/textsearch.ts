@@ -85,10 +85,13 @@ function matchRects(index: PageTextIndex, start: number, end: number): Rect[] {
   return [...byLine.values()]
 }
 
-export async function searchDocument(query: string, limit = 200): Promise<SearchMatch[]> {
+export async function searchDocument(
+  query: string,
+  limit = 200
+): Promise<{ matches: SearchMatch[]; truncated: boolean }> {
   const results: SearchMatch[] = []
   const needle = query.toLowerCase()
-  if (!needle.trim()) return results
+  if (!needle.trim()) return { matches: results, truncated: false }
   for (let pageNumber = 1; pageNumber <= docState.pageCount; pageNumber++) {
     // 每 16 页让出主线程,避免大文档搜索时界面卡死
     if (pageNumber % 16 === 0) await new Promise((resolve) => setTimeout(resolve, 0))
@@ -103,9 +106,9 @@ export async function searchDocument(query: string, limit = 200): Promise<Search
         rects: matchRects(index, at, at + needle.length),
         snippet: index.text.slice(Math.max(0, at - 10), at + needle.length + 14).trim()
       })
-      if (results.length >= limit) return results
+      if (results.length >= limit) return { matches: results, truncated: true }
       from = at + 1
     }
   }
-  return results
+  return { matches: results, truncated: false }
 }

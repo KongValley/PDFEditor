@@ -5,10 +5,12 @@ import { docState, pinThumbPages } from '../store/document'
 import { scrollToPage } from '../store/viewer'
 import {
   deletePages,
+  dropTargetIndex,
   extractPages,
   exportPagesAsImages,
   insertBlankPage,
   mergePdfs,
+  movePage,
   rotatePages,
   splitPdfs
 } from '../lib/actions'
@@ -86,13 +88,13 @@ async function onRangeAction(action: PagesAction): Promise<void> {
       clearSelection()
       break
     case 'extract':
-      await extractPages(pages)
+      await extractPages(pages, result.includeAnnotations)
       break
     case 'export':
       if (result.format === 'png') {
-        await exportPagesAsImages(pages, result.mode ?? 'each', result.direction)
+        await exportPagesAsImages(pages, result.mode ?? 'each', result.direction, result.includeAnnotations)
       } else {
-        await extractPages(pages)
+        await extractPages(pages, result.includeAnnotations)
       }
       break
   }
@@ -113,6 +115,48 @@ async function onMerge(): Promise<void> {
 async function onSplit(): Promise<void> {
   await splitPdfs()
 }
+
+/* --------------------------- 拖拽排序 --------------------------- */
+
+let dragPage: number | null = null
+
+function onThumbDragStart(page: number, event: DragEvent): void {
+  dragPage = page
+  event.dataTransfer?.setData('text/plain', String(page))
+  if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move'
+}
+
+function onThumbDragEnd(): void {
+  dragPage = null
+}
+
+async function onThumbDrop(target: number, event: DragEvent): Promise<void> {
+  if (dragPage === null) return
+  const el = event.currentTarget as HTMLElement
+  const after = event.clientY - el.getBoundingClientRect().top > el.clientHeight / 2
+  const from = dragPage - 1
+  const to = dropTargetIndex(dragPage, target, after)
+  dragPage = null
+  if (to === null) return
+  await movePage(from, to)
+  scrollToPage(to + 1)
+}
+
+/* --------------------------- 主视图滚动 → 侧栏跟随 --------------------------- */
+
+watch(
+  () => docState.currentPage,
+  async (page) => {
+    const root = containerEl.value
+    if (!root || !docState.pdfDoc) return
+    await nextTick()
+    const el = root.querySelector<HTMLElement>(`[data-thumb="${page}"]`)
+    if (!el) return
+    const delta = el.getBoundingClientRect().top - root.getBoundingClientRect().top
+    const target = root.scrollTop + delta - root.clientHeight / 2 + el.clientHeight / 2
+    if (Math.abs(root.scrollTop - target) > 2) root.scrollTop = Math.max(0, target)
+  }
+)
 
 onMounted(() => {
   setupObserver()
@@ -163,7 +207,12 @@ watch(
           class="thumb"
           :class="{ current: item.page === docState.currentPage, selected: selected.has(item.page) }"
           :data-thumb="item.page"
+          draggable="true"
           @click="scrollToPage(item.page)"
+          @dragstart="onThumbDragStart(item.page, $event)"
+          @dragend="onThumbDragEnd"
+          @dragover.prevent
+          @drop.prevent="onThumbDrop(item.page, $event)"
         >
           <div class="thumb-box" :style="{ width: item.w + 'px', height: item.h + 'px' }">
             <PageThumb

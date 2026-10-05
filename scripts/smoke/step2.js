@@ -18,10 +18,10 @@ check('page1 rendered', canvas1 && canvas1.width > 1000, canvas1 ? canvas1.width
 const textSpans = document.querySelectorAll('.textLayer span').length
 check('text layer spans', textSpans >= 5, textSpans)
 
-const hits = await t.search('编辑器')
-check('search hits', hits.length === 2, hits.length)
+const search = await t.search('编辑器')
+check('search hits', search.matches.length === 2, search.matches.length)
 t.searchState.query = '编辑器'
-t.searchState.results = hits
+t.searchState.results = search.matches
 t.searchState.current = 0
 await sleep(400)
 const overlayRects = document.querySelectorAll('.page-wrap svg rect').length
@@ -55,7 +55,7 @@ check('thumbnails rendered', thumbSizes.every((s) => s.startsWith('84x')), thumb
 return {
   pageCount: t.docState.pageCount,
   textSpans,
-  searchHits: hits.length,
+  searchHits: search.matches.length,
   overlayRects,
   zoomCanvas: `${canvas1b.width}x${canvas1b.height}`,
   rotatedWrap: `${wrap.clientWidth}x${wrap.clientHeight}`,

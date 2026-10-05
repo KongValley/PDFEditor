@@ -47,6 +47,8 @@ export interface AnnotationBase {
   /** 0-1 */
   opacity: number
   createdAt: number
+  /** 锁定后画布上不可拖动/缩放/编辑(属性面板不受限) */
+  locked?: boolean
 }
 
 export interface HighlightAnnotation extends AnnotationBase {
@@ -197,6 +199,8 @@ export interface OpenResult {
   buffer?: ArrayBuffer
   pageCount?: number
   encrypted?: boolean
+  /** 从 PDF /Annots 提取的本应用批注(加密文档为空数组) */
+  annotations?: Annotation[]
   sidecar?: SidecarData | null
 }
 
@@ -207,6 +211,8 @@ export interface PageOpResult {
   pageCount?: number
   /** pageMap[oldIndex] = newIndex | -1 */
   pageMap?: number[]
+  /** 本次页面操作是否记录了主进程快照(超大文档跳过 → 渲染层不应记入撤销栈) */
+  snapshotted?: boolean
   savedPath?: string
 }
 
@@ -233,8 +239,17 @@ export type PageOp =
   | { kind: 'delete'; pages: number[] }
   | { kind: 'rotate'; pages: number[]; delta: number }
   | { kind: 'insertBlank'; afterIndex: number }
+  | { kind: 'move'; from: number; to: number }
   | { kind: 'append'; files: AppendFileSpec[] }
-  | { kind: 'export'; pages: number[]; targetPath: string }
+  | {
+      kind: 'export'
+      pages: number[]
+      targetPath: string
+      /** 导出是否包含注释(默认 true;false = 剥离全部批注) */
+      includeAnnotations?: boolean
+      /** 勾选「包含注释」时按输出页序重建的本应用批注 */
+      annotations?: Annotation[]
+    }
 
 export interface SaveResult {
   ok: boolean

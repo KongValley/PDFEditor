@@ -136,7 +136,7 @@ check('sidecar 恢复 10 条注释', t.annotState.items.length === 10, t.annotSt
 const imageRestored = t.annotState.items.find((a) => a.kind === 'image')
 check('图片注释 dataUrl 已恢复', !!t.annotState.imageUrls[imageRestored.imgId], null)
 
-// 4) 再保存一份不含 sidecar 的副本,用于校验烘焙进 PDF 的内容
+// 4) 再保存一份不含 sidecar 的副本:批注以真实 PDF 批注对象(/Annots)存储
 const save2 = await window.pdfAPI.invoke('save:saveAs', {
   docId: t.docState.docId,
   defaultPath: 'e2e-baked.pdf',
@@ -149,66 +149,42 @@ check('二次保存成功', save2.ok === true, save2)
 
 await t.openPath(`${__smokeRoot}/tmp/e2e-baked.pdf`)
 await sleep(1500)
-check('无 sidecar 时注释为空', t.annotState.items.length === 0, t.annotState.items.length)
+check('无 sidecar 时从 PDF 恢复 10 条注释', t.annotState.items.length === 10, t.annotState.items.length)
 
-// 等待页面真正渲染完成(并发/冷启动下固定 sleep 不可靠):以“便签处出现黄色像素”为准
-// 采样点每次重新计算:首次布局较慢时 scale 可能变化,固定坐标会漂移
-function sampleAt(pdfX, pdfYTop) {
-  const c = document.querySelector('[data-page="1"] .page-canvas')
-  if (!c || c.width === 0) return new Uint8ClampedArray([0, 0, 0, 0])
-  const scale = t.docState.scale
-  const ratio = c.width / parseFloat(c.style.width || '1')
-  const x = Math.round(pdfX * scale * ratio)
-  const y = Math.round(pdfYTop * scale * ratio)
-  if (x < 0 || y < 0 || x >= c.width || y >= c.height) return new Uint8ClampedArray([0, 0, 0, 0])
-  return c.getContext('2d').getImageData(x, y, 1, 1).data
-}
-const isYellowPixel = (p) => p[0] > 200 && p[1] > 170 && p[2] < 160
+// 覆盖层渲染校验:真实批注对象路径下屏幕由 SVG 覆盖层绘制(页面画布不含批注)
+const noteAnn = t.annotState.items.find((a) => a.kind === 'note')
+check('便签注释已恢复', !!noteAnn, null)
 
-const deadline = Date.now() + 15000
-let notePx = sampleAt(493, 88)
-while (!isYellowPixel(notePx) && Date.now() < deadline) {
+const overlayDeadline = Date.now() + 10000
+let noteEl = null
+while (Date.now() < overlayDeadline) {
+  noteEl = document.querySelector(`[data-page="1"] .ann-layer rect[fill="${noteAnn.color}"]`)
+  if (noteEl) break
   await sleep(150)
-  notePx = sampleAt(493, 88)
 }
+check('便签渲染在注释覆盖层', !!noteEl, null)
 
-// 便签位于 PDF (480,740)-(506,766):屏幕 y = (841-766)=75 → 中心 (493, 88)
-check('便签烘焙位置正确(黄色)', isYellowPixel(notePx), [notePx[0], notePx[1], notePx[2]])
+// 便签位于 PDF (480,740)-(506,766):屏幕中心 (493*scale, 88.9*scale)
+const scale = t.docState.scale
+const wrapRect = document.querySelector('[data-page="1"]').getBoundingClientRect()
+const noteRect = noteEl.getBoundingClientRect()
+const noteCx = (noteRect.left + noteRect.right) / 2 - wrapRect.left
+const noteCy = (noteRect.top + noteRect.bottom) / 2 - wrapRect.top
+check(
+  '便签渲染位置与保存前一致(±6px)',
+  Math.abs(noteCx - 493 * scale) < 6 && Math.abs(noteCy - 88.9 * scale) < 6,
+  { noteCx, noteCy, scale }
+)
 
-// 图片位于 PDF (420,480)-(540,600);图标圆角外沿透明,取左侧深蓝底区域(px 100,250 → PDF 443,300)
-const imgPx = sampleAt(443, 300)
-const isDark = imgPx[0] < 120 && imgPx[1] < 120 && imgPx[2] < 160
-check('图片已烘焙(图标底色)', isDark, [imgPx[0], imgPx[1], imgPx[2]])
-
-// 文字位于 PDF (60,420)-(300,480):首行基线距页顶 377 → 扫描该行区域找墨迹像素
-function countDarkPixels(pdfX, pdfYTop, pdfW, pdfH) {
-  const c = document.querySelector('[data-page="1"] .page-canvas')
-  if (!c || c.width === 0) return 0
-  const scale = t.docState.scale
-  const ratio = c.width / parseFloat(c.style.width || '1')
-  const x = Math.max(0, Math.round(pdfX * scale * ratio))
-  const y = Math.max(0, Math.round(pdfYTop * scale * ratio))
-  const w = Math.max(1, Math.round(pdfW * scale * ratio))
-  const h = Math.max(1, Math.round(pdfH * scale * ratio))
-  if (x + w > c.width || y + h > c.height) return 0
-  const data = c.getContext('2d').getImageData(x, y, w, h).data
-  let dark = 0
-  for (let i = 0; i < data.length; i += 4) {
-    if (data[i] < 180 && data[i + 1] < 180) dark++
-  }
-  return dark
-}
-const textDeadline = Date.now() + 10000
-let darkPixels = countDarkPixels(60, 360, 60, 20)
-while (darkPixels <= 10 && Date.now() < textDeadline) {
-  await sleep(150)
-  darkPixels = countDarkPixels(60, 360, 60, 20)
-}
-check('文字已烘焙', darkPixels > 10, darkPixels)
+// 图片与文字同样回到覆盖层
+const imgEl = document.querySelector('[data-page="1"] .ann-layer image')
+check('图片注释渲染在覆盖层', !!imgEl && (imgEl.getAttribute('href') ?? '').startsWith('data:image/png'), null)
+const textEls = [...document.querySelectorAll('[data-page="1"] .ann-layer text.text-ann')]
+check('文字注释渲染在覆盖层', textEls.some((el) => (el.textContent ?? '').includes('端到端测试')), textEls.map((el) => el.textContent))
 
 return {
   kinds: t.annotState.items.length,
-  notePixel: [notePx[0], notePx[1], notePx[2]],
-  imagePixel: [imgPx[0], imgPx[1], imgPx[2]],
-  darkPixels
+  noteCenter: [Math.round(noteCx), Math.round(noteCy)],
+  scale,
+  textEls: textEls.length
 }

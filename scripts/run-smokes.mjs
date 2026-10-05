@@ -24,12 +24,20 @@ const scripts = [
   'step10-mem.js',
   'step11-doccycle.js',
   'step12-pages-range.js',
-  'step13-batch.js'
+  'step13-batch.js',
+  'step14-ux.js',
+  'step15-annots.js'
 ]
 
 if (!existsSync(join(root, 'samples', 'sample-zh.pdf'))) {
   console.error('缺少 samples/,请先运行 npm run samples')
   process.exit(1)
+}
+
+// 单步脚本超时(毫秒):默认 60s;重负载步骤(批量拆分/批注往返)给更宽裕的上限
+const STEP_TIMEOUTS = {
+  'step13-batch.js': '120000',
+  'step15-annots.js': '120000'
 }
 
 let failed = 0
@@ -44,7 +52,8 @@ for (const script of scripts) {
       PDF_EDITOR_SMOKE: '1',
       PDF_EDITOR_SMOKE_SCRIPT: join('scripts', 'smoke', script),
       PDF_EDITOR_SMOKE_OUT: outFile,
-      PDF_EDITOR_SMOKE_ROOT: root
+      PDF_EDITOR_SMOKE_ROOT: root,
+      PDF_EDITOR_SMOKE_TIMEOUT: STEP_TIMEOUTS[script] ?? '60000'
     },
     stdio: 'ignore'
   })

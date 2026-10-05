@@ -53,6 +53,17 @@ export function withIdentity(ann: NewAnnotation): Annotation {
   return { ...ann, id: crypto.randomUUID(), createdAt: Date.now() } as Annotation
 }
 
+/** 文本修改的通用补丁:文字注释按内容重估高度(渲染层按宽度自动换行) */
+export function textPatch(ann: Annotation, text: string): Partial<Annotation> {
+  const patch: Partial<Annotation> = { text }
+  if (ann.kind === 'text') {
+    const lineCount = Math.max(text.split('\n').length, 1)
+    const needed = ann.fontSize * 1.2 * lineCount + 6
+    if (needed > ann.bbox.h) patch.bbox = { ...ann.bbox, h: needed }
+  }
+  return patch
+}
+
 /** 注释类型中文名 */
 export const KIND_LABEL: Record<Annotation['kind'], string> = {
   highlight: '高亮',

@@ -3,13 +3,17 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { PDFDocument } from 'pdf-lib'
-import type { OpenResult, SidecarData } from '@shared/types'
+import type { Annotation, OpenResult, SidecarData } from '@shared/types'
+import { extractEditorAnnotations } from './pdflibwrite'
 
 export interface DocEntry {
   path: string
   buffer: Buffer
   encrypted: boolean
   pageCount: number
+  /** 页面操作快照栈(撤销/重做);与渲染层 page 历史条目 LIFO 对齐 */
+  undoBuffers: Array<{ buffer: Buffer; pageCount: number }>
+  redoBuffers: Array<{ buffer: Buffer; pageCount: number }>
 }
 
 const docs = new Map<string, DocEntry>()
@@ -27,6 +31,11 @@ function evictDocs(): void {
 
 export function getDocEntry(docId: string): DocEntry | undefined {
   return docs.get(docId)
+}
+
+/** 释放文档缓存条目(渲染层加载失败/取消时的兜底,避免打开失败占满缓存淘汰旧文档) */
+export function releaseDocument(docId: string): void {
+  docs.delete(docId)
 }
 
 export function setDocBuffer(docId: string, buffer: Buffer, pageCount: number): void {
@@ -71,6 +80,27 @@ export function uniqueFilePath(dir: string, fileName: string): string {
   return target
 }
 
+const SNAPSHOT_MAX_COUNT = 5
+const SNAPSHOT_MAX_BYTES = 64 * 1024 * 1024
+const SNAPSHOT_SKIP_ABOVE = 128 * 1024 * 1024
+
+/** 限制快照栈:条数 ≤5 且总量 ≤64MB(至少保 1 条) */
+export function pruneBufferStack(stack: Array<{ buffer: Buffer; pageCount: number }>): void {
+  const total = (): number => stack.reduce((sum, item) => sum + item.buffer.byteLength, 0)
+  while ((stack.length > SNAPSHOT_MAX_COUNT || total() > SNAPSHOT_MAX_BYTES) && stack.length > 1) {
+    stack.shift()
+  }
+}
+
+/** 页面操作前记录当前 buffer 快照;超大文档(>128MB)不记快照,返回是否已记录 */
+export function pushBufferSnapshot(entry: DocEntry): boolean {
+  if (entry.buffer.byteLength > SNAPSHOT_SKIP_ABOVE) return false
+  entry.undoBuffers.push({ buffer: entry.buffer, pageCount: entry.pageCount })
+  entry.redoBuffers.length = 0
+  pruneBufferStack(entry.undoBuffers)
+  return true
+}
+
 /** 读取任意 PDF 的页数(不进入文档缓存);加密或损坏返回 error */
 export async function readPdfPageCount(
   filePath: string
@@ -100,18 +130,21 @@ export async function openDocument(filePath: string): Promise<OpenResult> {
 
   let encrypted = false
   let pageCount = 0
+  let annotations: Annotation[] = []
   try {
     // 用 ignoreEncryption 加载并读取 isEncrypted:pdf-lib 的 EncryptedPDFError 在
     // CJS/ES5 构建下 instanceof 判定不可靠(Error.call 返回新对象导致原型丢失)
     const parsed = await PDFDocument.load(buffer, { ignoreEncryption: true })
     encrypted = parsed.isEncrypted
     pageCount = parsed.getPageCount()
+    // 加密文档不提取(无法可靠解析批注结构,沿用 sidecar 注释)
+    if (!encrypted) annotations = extractEditorAnnotations(parsed)
   } catch (err) {
     return { ok: false, error: 'corrupt', errorMessage: `无法解析 PDF:${(err as Error).message}` }
   }
 
   const docId = randomUUID()
-  docs.set(docId, { path: filePath, buffer, encrypted, pageCount })
+  docs.set(docId, { path: filePath, buffer, encrypted, pageCount, undoBuffers: [], redoBuffers: [] })
   evictDocs()
   return {
     ok: true,
@@ -120,6 +153,7 @@ export async function openDocument(filePath: string): Promise<OpenResult> {
     buffer: toArrayBuffer(buffer),
     pageCount,
     encrypted,
+    annotations,
     sidecar: readSidecar(filePath)
   }
 }

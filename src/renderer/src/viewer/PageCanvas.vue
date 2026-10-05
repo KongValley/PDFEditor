@@ -4,7 +4,7 @@ import type { PDFPageProxy, PageViewport, RenderTask, TextLayerRenderTask } from
 import type { Rect } from '@shared/types'
 import { docState, getPage, pageDisplaySize } from '../store/document'
 import { searchState } from '../store/search'
-import { addAnnotation, addAnnotations } from '../store/annotations'
+import { addAnnotation, addAnnotations, selectAnnotation } from '../store/annotations'
 import { ui } from '../store/ui'
 import { getPageViewport, pdfjs } from '../lib/pdfjs'
 import { pdfRectToScreen, rectFromPoints, screenPointToPdf, type ScreenRect } from '../lib/geo'
@@ -26,16 +26,19 @@ let seq = 0
 
 const size = computed(() => pageDisplaySize(props.pageNumber - 1))
 
-/** 搜索命中高亮(仅本页,换算到屏幕坐标) */
-const searchRects = computed<ScreenRect[]>(() => {
+/** 搜索命中高亮(仅本页,换算到屏幕坐标;区分当前命中) */
+const searchRects = computed<Array<{ rect: ScreenRect; current: boolean }>>(() => {
   const vp = viewport.value
   if (!vp || !rendered.value) return []
-  const rects: ScreenRect[] = []
-  for (const match of searchState.results) {
+  const items: Array<{ rect: ScreenRect; current: boolean }> = []
+  for (let index = 0; index < searchState.results.length; index++) {
+    const match = searchState.results[index]
     if (match.page !== props.pageNumber - 1) continue
-    for (const rect of match.rects) rects.push(pdfRectToScreen(vp, rect))
+    for (const rect of match.rects) {
+      items.push({ rect: pdfRectToScreen(vp, rect), current: index === searchState.current })
+    }
   }
-  return rects
+  return items
 })
 
 async function renderTextLayer(page: PDFPageProxy, vp: PageViewport): Promise<void> {
@@ -80,7 +83,9 @@ async function renderPage(): Promise<void> {
   renderTask = page.render({
     canvasContext: ctx,
     viewport: vp,
-    transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : undefined
+    transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : undefined,
+    // 批注由本应用 SVG 覆盖层绘制:pdf.js 默认会把 /Annots 画进位图 → 同屏两遍
+    annotationMode: pdfjs.AnnotationMode.DISABLE
   })
   try {
     await renderTask.promise
@@ -161,6 +166,11 @@ function selectionRectsToPdf(selection: Selection, vp: PageViewport): Rect[] {
 }
 
 function onPagePointerDown(event: PointerEvent): void {
+  if (ui.tool === 'select') {
+    // 空白处点击清空注释选中(注释自身的 pointerdown 已 stopPropagation)
+    if (!event.shiftKey) selectAnnotation(null)
+    return
+  }
   if (ui.tool !== 'highlight' || !viewport.value) return
   highlightStart.value = { x: event.clientX, y: event.clientY }
 }
@@ -242,13 +252,13 @@ defineExpose({ rendered, viewport })
     <div ref="textLayerEl" class="textLayer"></div>
     <svg class="search-layer" :width="size.w" :height="size.h">
       <rect
-        v-for="(rect, index) in searchRects"
+        v-for="(item, index) in searchRects"
         :key="index"
-        :x="rect.x"
-        :y="rect.y"
-        :width="rect.w"
-        :height="rect.h"
-        fill="rgba(255, 196, 0, 0.45)"
+        :x="item.rect.x"
+        :y="item.rect.y"
+        :width="item.rect.w"
+        :height="item.rect.h"
+        :fill="item.current ? 'rgba(255, 120, 0, 0.5)' : 'rgba(255, 196, 0, 0.45)'"
       />
     </svg>
     <FormOverlay v-if="viewport && docState.formFields.length > 0" :page-number="pageNumber" :viewport="viewport" />

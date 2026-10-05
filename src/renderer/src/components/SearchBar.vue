@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 import { docState } from '../store/document'
-import { searchState } from '../store/search'
-import { scrollToPage } from '../store/viewer'
+import { searchGoTo, searchState, searchStep } from '../store/search'
 import { clearSearchIndex, searchDocument } from '../lib/textsearch'
 import { ui } from '../store/ui'
 
@@ -13,30 +12,33 @@ const counter = computed(() => {
   if (!searchState.query.trim()) return ''
   if (searchState.searching) return '搜索中…'
   if (searchState.results.length === 0) return '无结果'
-  return `${searchState.current + 1} / ${searchState.results.length}`
+  return `${searchState.current + 1} / ${searchState.results.length}${searchState.truncated ? '+' : ''}`
 })
+
+const counterTitle = computed(() => (searchState.truncated ? '已达 200 条上限,可能还有更多' : ''))
+
+let searchSeq = 0
 
 async function runSearch(): Promise<void> {
   const query = searchState.query.trim()
+  const seq = ++searchSeq
   searchState.results = []
   searchState.current = -1
-  if (!query) return
+  searchState.truncated = false
+  if (!query) {
+    searchState.searching = false
+    return
+  }
   searchState.searching = true
   try {
-    const results = await searchDocument(query)
-    searchState.results = results
-    if (results.length > 0) goTo(0)
+    const { matches, truncated } = await searchDocument(query)
+    if (seq !== searchSeq) return
+    searchState.results = matches
+    searchState.truncated = truncated
+    if (matches.length > 0) void searchGoTo(0)
   } finally {
-    searchState.searching = false
+    if (seq === searchSeq) searchState.searching = false
   }
-}
-
-function goTo(index: number): void {
-  const total = searchState.results.length
-  if (total === 0) return
-  searchState.current = ((index % total) + total) % total
-  const match = searchState.results[searchState.current]
-  scrollToPage(match.page + 1)
 }
 
 function onInput(): void {
@@ -48,7 +50,7 @@ function onKeyDown(event: KeyboardEvent): void {
   if (event.key === 'Enter') {
     event.preventDefault()
     if (searchState.results.length === 0) void runSearch()
-    else goTo(searchState.current + (event.shiftKey ? -1 : 1))
+    else searchStep(event.shiftKey ? -1 : 1)
   } else if (event.key === 'Escape') {
     close()
   }
@@ -68,6 +70,7 @@ watch(
     } else {
       searchState.results = []
       searchState.current = -1
+      searchState.truncated = false
       searchState.query = ''
     }
   }
@@ -79,6 +82,7 @@ watch(
     clearSearchIndex()
     searchState.results = []
     searchState.current = -1
+    searchState.truncated = false
     searchState.query = ''
   }
 )
@@ -95,11 +99,11 @@ watch(
       @input="onInput"
       @keydown="onKeyDown"
     />
-    <span class="counter">{{ counter }}</span>
-    <button :disabled="searchState.results.length === 0" title="上一个" @click="goTo(searchState.current - 1)">
+    <span class="counter" :title="counterTitle">{{ counter }}</span>
+    <button :disabled="searchState.results.length === 0" title="上一个 (Shift+F3)" @click="searchStep(-1)">
       上一个
     </button>
-    <button :disabled="searchState.results.length === 0" title="下一个" @click="goTo(searchState.current + 1)">
+    <button :disabled="searchState.results.length === 0" title="下一个 (F3)" @click="searchStep(1)">
       下一个
     </button>
     <button @click="close">关闭</button>

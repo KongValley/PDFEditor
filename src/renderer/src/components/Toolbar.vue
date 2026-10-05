@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { docState } from '../store/document'
-import { ui, type Tool } from '../store/ui'
+import { setTool, ui, type Tool } from '../store/ui'
 import { canRedo, canUndo, removeSelected, redo, undo } from '../store/annotations'
 import { fitPage, fitWidth, rotateView, scrollToPage, zoomAt, zoomBy } from '../store/viewer'
-import { exportCurrentPageImage, openFileDialog, saveDocument } from '../lib/actions'
+import { exportCurrentPageImage, openFileDialog, saveDocument, saveDocumentAs } from '../lib/actions'
 import { STAMPS, STAMP_KEYS } from '../lib/annots'
 
 const ZOOM_PRESETS = [25, 50, 75, 100, 125, 150, 200, 300]
@@ -45,13 +45,14 @@ function onPageCommit(event: Event): void {
       <span class="app-title">PDF 编辑器</span>
       <button title="打开 PDF (Ctrl+O)" @click="openFileDialog">打开</button>
       <button :disabled="!hasDoc" title="保存 PDF (Ctrl+S)" @click="saveDocument">保存</button>
+      <button :disabled="!hasDoc" title="另存为 (Ctrl+Shift+S)" @click="saveDocumentAs">另存为</button>
       <button :disabled="!hasDoc" title="导出当前页为 PNG (Ctrl+E)" @click="exportCurrentPageImage">导出图片</button>
 
       <span class="divider"></span>
 
       <button :disabled="!canUndo" title="撤销 (Ctrl+Z)" @click="undo">撤销</button>
       <button :disabled="!canRedo" title="重做 (Ctrl+Y)" @click="redo">重做</button>
-      <button :disabled="!ui.selectedAnnotationId" title="删除选中 (Delete)" @click="removeSelected">删除</button>
+      <button :disabled="ui.selectedAnnotationIds.length === 0" title="删除选中 (Delete)" @click="removeSelected">删除</button>
 
       <span class="divider"></span>
 
@@ -95,7 +96,7 @@ function onPageCommit(event: Event): void {
         :disabled="!hasDoc"
         :class="{ active: ui.tool === item.tool }"
         :title="item.title"
-        @click="ui.tool = item.tool"
+        @click="setTool(item.tool)"
       >
         {{ item.label }}
       </button>

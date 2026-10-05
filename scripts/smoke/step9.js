@@ -44,7 +44,7 @@ if (!editor) {
     activeElement: document.activeElement?.tagName ?? '?',
     shapes: document.querySelectorAll('.ann-layer > g.shape').length,
     layers: document.querySelectorAll('.ann-layer').length,
-    selected: t.ui.selectedAnnotationId
+    selected: t.ui.selectedAnnotationIds[0] ?? null
   })
 }
 editor.value = '双击编辑内容'
@@ -80,7 +80,7 @@ check('修改已提交', t.annotState.items[0].text === '修改后的文字', {
 })
 
 // 3) 属性面板改色
-t.ui.selectedAnnotationId = textAnn.id
+t.ui.selectedAnnotationIds = [textAnn.id]
 await sleep(200)
 const swatches = document.querySelectorAll('.props .swatch')
 check('色板渲染', swatches.length >= 8, swatches.length)

@@ -2,7 +2,7 @@ import { markRaw, reactive } from 'vue'
 import { loadPdfDocument, type PDFDocumentProxy, type PDFPageProxy } from '../lib/pdfjs'
 import { loadOutline } from '../lib/outline'
 import { discoverFormFields } from '../lib/forms'
-import type { FormFieldInfo, FormValue, OpenResult, OutlineNode, SidecarData } from '@shared/types'
+import type { Annotation, FormFieldInfo, FormValue, OpenResult, OutlineNode, SidecarData } from '@shared/types'
 
 export interface PageBox {
   w: number
@@ -28,6 +28,10 @@ interface DocState {
   formFields: FormFieldInfo[]
   /** 文档大纲(书签) */
   outline: OutlineNode[]
+  /** 是否有未保存的更改(注释/表单/页面操作) */
+  dirty: boolean
+  /** 打开时从 PDF /Annots 提取的本应用批注(sidecar 兜底前的首选来源) */
+  pdfAnnotations: Annotation[]
 }
 
 export const docState = reactive<DocState>({
@@ -45,8 +49,23 @@ export const docState = reactive<DocState>({
   sidecar: null,
   formValues: {},
   formFields: [],
-  outline: []
+  outline: [],
+  dirty: false,
+  pdfAnnotations: []
 })
+
+/** 编辑版本号:保存期间注释变化 → 不清脏标记(替代无条件清 0) */
+let editVersionCounter = 0
+
+/** 标记未保存更改(唯一入口;同时推进编辑版本号) */
+export function markDirty(): void {
+  docState.dirty = true
+  editVersionCounter++
+}
+
+export function editVersion(): number {
+  return editVersionCounter
+}
 
 let pageCache = new Map<number, PDFPageProxy>()
 
@@ -66,6 +85,12 @@ export function pinViewerPages(pages: Iterable<number>): void {
 export function pinThumbPages(pages: Iterable<number>): void {
   thumbPinned.clear()
   for (const page of pages) thumbPinned.add(page)
+}
+
+/** 清空两处可见页 pin(换文档/页面重建时调用,避免旧文档页号豁免新文档回收) */
+export function clearViewerPins(): void {
+  viewerPinned.clear()
+  thumbPinned.clear()
 }
 
 function evictPages(): void {
@@ -162,7 +187,15 @@ export async function openByPath(path: string, options: OpenOptions = {}): Promi
       return false
     }
 
-    const pdfDoc = await loadPdfDocument(result.buffer, { onPassword: options.onPassword })
+    let pdfDoc: PDFDocumentProxy
+    try {
+      pdfDoc = await loadPdfDocument(result.buffer, { onPassword: options.onPassword })
+    } catch (err) {
+      // 加载失败/用户取消:释放主进程条目,避免打开失败占满缓存把已打开的文档挤掉
+      docState.loadError = err instanceof Error ? err.message : String(err)
+      void window.pdfAPI.invoke('doc:release', result.docId)
+      return false
+    }
 
     pageCache = new Map()
     docState.docId = result.docId
@@ -174,8 +207,7 @@ export async function openByPath(path: string, options: OpenOptions = {}): Promi
     }
     docState.pdfDoc = markRaw(pdfDoc)
     // 旧文档的可见/pin 页号残留会让新文档的同号页被豁免回收,换文档时一并清空
-    viewerPinned.clear()
-    thumbPinned.clear()
+    clearViewerPins()
     docState.pageCount = pdfDoc.numPages
     docState.currentPage = 1
     docState.rotationView = 0
@@ -194,6 +226,8 @@ export async function openByPath(path: string, options: OpenOptions = {}): Promi
       if (field.value !== undefined) values[field.fullName] = field.value
     }
     docState.formValues = { ...values, ...(result.sidecar?.formValues ?? {}) }
+    docState.dirty = false
+    docState.pdfAnnotations = result.annotations ?? []
 
     docState.outline = await loadOutline(pdfDoc)
     return true
@@ -207,6 +241,8 @@ export async function openByPath(path: string, options: OpenOptions = {}): Promi
 
 /** 页面操作后:以新 buffer 重开 pdf.js 文档(保持缩放与视图旋转) */
 export async function reloadDocument(buffer: ArrayBuffer): Promise<void> {
+  // 页面重建后旧 pin 页号失效:不清理会让新文档同号页被豁免回收
+  clearViewerPins()
   const pdfDoc = await loadPdfDocument(buffer)
   const previous = docState.pdfDoc
   pageCache = new Map()
@@ -234,4 +270,6 @@ export function closeDocument(): void {
   docState.formFields = []
   docState.outline = []
   docState.loadError = null
+  docState.dirty = false
+  docState.pdfAnnotations = []
 }
