@@ -13,7 +13,18 @@
 
 平台四种组合:**Win7-32 位 / Win7-64 位 / Win10-32 位 / Win10-64 位**。
 下载地址:https://github.com/KongValley/PDFEditor/releases (建议选 `Latest` 一版)。
-Win7 与 Win10 版本面向不同系统内核与架构,请按自己的系统选择;选错的症状是启动即报错或黑屏。
+Win7 与 Win10 两套名称的构建内容相同(同为 Electron 22,仅按 32/64 位架构区分),两边的系统都可安装;32 位系统选 32 位包,64 位系统两种均可。
+
+**Windows 7 前置要求**:需 **Windows 7 SP1**,并按下表补齐补丁(内网机器若长期未更新,先补再装);内网分发的安装包文件夹里已附带「前置补丁」子文件夹(32 位目录放 x86、64 位目录放 x64,含各 `.msu` 与《安装说明.txt》);从 GitHub 下载的机器按下表自行补装:
+
+| 补丁 | 必要性 | 官方下载地址 | 作用 |
+|---|---|---|---|
+| KB2533623 | 强烈建议 | [KB2533623 支持页(含 x86/x64 下载入口)](https://support.microsoft.com/kb/2533623) | 提供 DLL 安全加载 API(`SetDefaultDllDirectories`);缺失时应用按旧式加载运行,老系统若报「无法定位程序输入点…KERNEL32.dll」补装它即可 |
+| KB2670838 | 推荐 | [x86+x64](https://www.microsoft.com/en-us/download/details.aspx?id=36805) | Windows 7 平台更新(DirectWrite 1.1);未装时页面文字可能渲染模糊 |
+| KB4490628 | 推荐 | [Update Catalog](https://www.catalog.update.microsoft.com/Search.aspx?q=KB4490628) | 维护堆栈(KB4474419 的前置),先装 |
+| KB4474419 | 推荐 | [Update Catalog](https://www.catalog.update.microsoft.com/Search.aspx?q=KB4474419) | SHA-2 代码签名支持;企业内网更新分发与签名校验链路需要 |
+
+> 应用完全离线运行,不依赖网络与代码签名验证;补丁需按系统位数分别下载(分发目录中已按架构放好),Win10 及以上系统无此要求。
 
 卸载:控制面板「程序和功能」中卸载;便携版直接删除文件即可。
 
@@ -263,6 +274,9 @@ Win7 与 Win10 版本面向不同系统内核与架构,请按自己的系统选�
 
 **Q:图片注释显示为空白?**
 图片注释保存的是磁盘路径引用;原图片文件被移动/删除后无法恢复,重开时会提示「图片注释丢失」。
+
+**Q:在 Windows 7 上双击没反应 / 提示找不到 KERNEL32.dll 的程序输入点?**
+系统缺少 KB2533623(未更新或精简版系统未集成)。确认系统为 Windows 7 SP1 后补装 KB2533623;若装好能打开但文字发虚,再装 KB2670838。
 
 ---
 
