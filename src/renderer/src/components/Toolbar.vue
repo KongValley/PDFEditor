@@ -3,7 +3,7 @@ import { computed } from 'vue'
 import { docState } from '../store/document'
 import { setTool, ui, type Tool } from '../store/ui'
 import { canRedo, canUndo, removeSelected, redo, undo } from '../store/annotations'
-import { fitPage, fitWidth, rotateView, scrollToPage, zoomAt, zoomBy } from '../store/viewer'
+import { fitPage, fitWidth, rotateView, scrollToPage, setViewMode, stepPage, zoomAt, zoomBy } from '../store/viewer'
 import { exportCurrentPageImage, openFileDialog, saveDocument, saveDocumentAs } from '../lib/actions'
 import { STAMPS, STAMP_KEYS } from '../lib/annots'
 
@@ -56,7 +56,7 @@ function onPageCommit(event: Event): void {
 
       <span class="divider"></span>
 
-      <button :disabled="!hasDoc" title="上一页" @click="scrollToPage(docState.currentPage - 1)">上一页</button>
+      <button :disabled="!hasDoc" title="上一页" @click="stepPage(-1)">上一页</button>
       <input
         class="page-input"
         type="text"
@@ -66,7 +66,34 @@ function onPageCommit(event: Event): void {
         @blur="onPageCommit"
       />
       <span class="page-total">/ {{ docState.pageCount || '-' }}</span>
-      <button :disabled="!hasDoc" title="下一页" @click="scrollToPage(docState.currentPage + 1)">下一页</button>
+      <button :disabled="!hasDoc" title="下一页" @click="stepPage(1)">下一页</button>
+
+      <span class="divider"></span>
+
+      <button
+        :disabled="!hasDoc"
+        :class="{ active: docState.viewMode === 'continuous' }"
+        title="连续阅读"
+        @click="setViewMode('continuous')"
+      >
+        连续
+      </button>
+      <button
+        :disabled="!hasDoc"
+        :class="{ active: docState.viewMode === 'single' }"
+        title="单页阅览"
+        @click="setViewMode('single')"
+      >
+        单页
+      </button>
+      <button
+        :disabled="!hasDoc"
+        :class="{ active: docState.viewMode === 'two' }"
+        title="双页阅览"
+        @click="setViewMode('two')"
+      >
+        双页
+      </button>
 
       <span class="divider"></span>
 
@@ -77,8 +104,9 @@ function onPageCommit(event: Event): void {
         <option value="">预设</option>
         <option v-for="preset in ZOOM_PRESETS" :key="preset" :value="preset">{{ preset }}%</option>
       </select>
-      <button :disabled="!hasDoc" title="适应宽度 (Ctrl+0)" @click="fitWidth">适应宽度</button>
-      <button :disabled="!hasDoc" title="适应页面" @click="fitPage">适应页面</button>
+      <button :disabled="!hasDoc" title="实际大小 (1:1)" @click="zoomAt(1)">实际大小</button>
+      <button :disabled="!hasDoc" title="适合页面" @click="fitPage">适合页面</button>
+      <button :disabled="!hasDoc" title="适合宽度 (Ctrl+0)" @click="fitWidth">适合宽度</button>
 
       <span class="divider"></span>
 

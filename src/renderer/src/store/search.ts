@@ -4,7 +4,7 @@ import { clearSearchIndex } from '../lib/textsearch'
 import { docState, getPage } from './document'
 import { getPageViewport } from '../lib/pdfjs'
 import { pdfRectToScreen } from '../lib/geo'
-import { pageOffsetTop, viewerContainer } from './viewer'
+import { scrollToPagePosition } from './viewer'
 
 interface SearchState {
   query: string
@@ -38,13 +38,12 @@ export async function searchGoTo(index: number): Promise<void> {
   searchState.current = ((index % total) + total) % total
   const match = searchState.results[searchState.current]
   const rect = match.rects[0]
-  const container = viewerContainer()
-  if (!rect || !container) return
+  if (!rect) return
   try {
     const page = await getPage(match.page + 1)
     const { viewport } = getPageViewport(page, docState.scale, docState.rotationView)
     const screen = pdfRectToScreen(viewport, rect)
-    container.scrollTop = Math.max(0, pageOffsetTop(match.page) + screen.y - container.clientHeight * 0.3)
+    scrollToPagePosition(match.page + 1, screen.y)
   } catch {
     // 页面已变化/索引失效:静默忽略,不打断用户操作
   }

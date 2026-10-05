@@ -9,6 +9,9 @@ export interface PageBox {
   h: number
 }
 
+/** 阅读视图模式:连续阅读 / 单页阅览 / 双页阅览 */
+export type ViewMode = 'continuous' | 'single' | 'two'
+
 interface DocState {
   docId: string | null
   filePath: string | null
@@ -20,6 +23,8 @@ interface DocState {
   currentPage: number
   scale: number
   rotationView: number
+  /** 阅读视图模式(跨文档保留,与 scale 同策略) */
+  viewMode: ViewMode
   encrypted: boolean
   sidecar: SidecarData | null
   /** 表单字段值(字段全名 → 值) */
@@ -45,6 +50,7 @@ export const docState = reactive<DocState>({
   currentPage: 1,
   scale: 1,
   rotationView: 0,
+  viewMode: 'continuous',
   encrypted: false,
   sidecar: null,
   formValues: {},
