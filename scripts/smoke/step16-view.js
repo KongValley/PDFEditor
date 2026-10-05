@@ -7,8 +7,8 @@ const check = (name, cond, extra) => {
   if (!cond) throw new Error(`断言失败: ${name} ${extra === undefined ? '' : JSON.stringify(extra)}`)
 }
 const btn = (title) => {
-  const el = document.querySelector(`.toolbar button[title="${title}"]`)
-  check(`按钮存在:${title}`, !!el)
+  const el = document.querySelector(`.status-bar button[title="${title}"]`)
+  check(`状态栏按钮存在:${title}`, !!el)
   return el
 }
 const viewerEl = () => document.querySelector('.viewer')

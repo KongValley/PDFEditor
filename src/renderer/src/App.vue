@@ -11,10 +11,26 @@ import PagesRangeDialog from './components/PagesRangeDialog.vue'
 import PdfViewer from './viewer/PdfViewer.vue'
 import { docState } from './store/document'
 import { showToast, ui } from './store/ui'
+import { fitPage, fitWidth, scrollToPage, setViewMode, stepPage, zoomAt, zoomBy } from './store/viewer'
 import { confirmDiscardChanges, openPath } from './lib/actions'
 import { useGlobalKeymap } from './lib/keymap'
 
 useGlobalKeymap()
+
+const ZOOM_PRESETS = [25, 50, 75, 100, 125, 150, 200, 300]
+const zoomPercent = computed(() => Math.round(docState.scale * 100))
+
+function onZoomPreset(event: Event): void {
+  const value = Number((event.target as HTMLSelectElement).value)
+  ;(event.target as HTMLSelectElement).value = ''
+  if (value > 0) zoomAt(value / 100)
+}
+
+function onPageCommit(event: Event): void {
+  const value = Number((event.target as HTMLInputElement).value)
+  if (Number.isFinite(value) && value >= 1) scrollToPage(Math.floor(value))
+  ;(event.target as HTMLInputElement).value = ''
+}
 
 const dragging = ref(false)
 let dragDepth = 0
@@ -86,8 +102,49 @@ watch(
 
     <footer class="status-bar">
       <span class="status-file" :title="docState.filePath ?? ''">{{ fileName || '未打开文件' }}</span>
-      <span v-if="docState.pdfDoc">第 {{ docState.currentPage }} / {{ docState.pageCount }} 页</span>
-      <span v-if="docState.pdfDoc">缩放 {{ Math.round(docState.scale * 100) }}%</span>
+
+      <template v-if="docState.pdfDoc">
+        <button title="上一页" @click="stepPage(-1)">上一页</button>
+        <input
+          class="page-input"
+          type="text"
+          :placeholder="String(docState.currentPage)"
+          @keydown.enter="onPageCommit"
+          @blur="onPageCommit"
+        />
+        <span class="page-total">/ {{ docState.pageCount }}</span>
+        <button title="下一页" @click="stepPage(1)">下一页</button>
+
+        <span class="status-divider"></span>
+
+        <button
+          :class="{ active: docState.viewMode === 'continuous' }"
+          title="连续阅读"
+          @click="setViewMode('continuous')"
+        >
+          连续
+        </button>
+        <button :class="{ active: docState.viewMode === 'single' }" title="单页阅览" @click="setViewMode('single')">
+          单页
+        </button>
+        <button :class="{ active: docState.viewMode === 'two' }" title="双页阅览" @click="setViewMode('two')">
+          双页
+        </button>
+
+        <span class="status-divider"></span>
+
+        <button title="缩小 (Ctrl+-)" @click="zoomBy(1 / 1.1)">−</button>
+        <span class="zoom-value">{{ zoomPercent }}%</span>
+        <button title="放大 (Ctrl+=)" @click="zoomBy(1.1)">+</button>
+        <select class="zoom-preset" @change="onZoomPreset">
+          <option value="">预设</option>
+          <option v-for="preset in ZOOM_PRESETS" :key="preset" :value="preset">{{ preset }}%</option>
+        </select>
+        <button title="实际大小 (1:1)" @click="zoomAt(1)">实际大小</button>
+        <button title="适合页面" @click="fitPage">适合页面</button>
+        <button title="适合宽度 (Ctrl+0)" @click="fitWidth">适合宽度</button>
+      </template>
+
       <span v-if="docState.dirty" class="status-dirty">未保存</span>
       <span v-if="docState.encrypted" class="status-warn">加密文档</span>
     </footer>
@@ -139,14 +196,51 @@ watch(
 .status-bar {
   display: flex;
   align-items: center;
-  gap: 16px;
-  height: 26px;
-  padding: 0 12px;
+  gap: 8px;
+  min-height: 30px;
+  padding: 2px 12px;
   background: var(--toolbar-bg);
   border-top: 1px solid var(--panel-border);
   color: var(--toolbar-fg-dim);
   font-size: 12px;
   flex: none;
+  flex-wrap: wrap; /* 窄窗口下控件换行,不裁切 */
+}
+
+.status-bar button {
+  padding: 2px 6px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.status-divider {
+  width: 1px;
+  height: 16px;
+  background: var(--panel-border);
+  flex: none;
+}
+
+.status-bar .page-input {
+  width: 44px;
+  padding: 2px 4px;
+  text-align: center;
+  font-size: 12px;
+}
+
+.page-total,
+.zoom-value {
+  color: var(--toolbar-fg-dim);
+  white-space: nowrap;
+}
+
+.zoom-value {
+  min-width: 42px;
+  text-align: center;
+}
+
+.status-bar .zoom-preset {
+  padding: 1px 2px;
+  font-size: 12px;
 }
 
 .status-file {

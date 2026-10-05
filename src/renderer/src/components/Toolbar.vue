@@ -3,11 +3,9 @@ import { computed } from 'vue'
 import { docState } from '../store/document'
 import { setTool, ui, type Tool } from '../store/ui'
 import { canRedo, canUndo, removeSelected, redo, undo } from '../store/annotations'
-import { fitPage, fitWidth, rotateView, scrollToPage, setViewMode, stepPage, zoomAt, zoomBy } from '../store/viewer'
+import { rotateView } from '../store/viewer'
 import { exportCurrentPageImage, openFileDialog, saveDocument, saveDocumentAs } from '../lib/actions'
 import { STAMPS, STAMP_KEYS } from '../lib/annots'
-
-const ZOOM_PRESETS = [25, 50, 75, 100, 125, 150, 200, 300]
 
 const TOOLS: Array<{ tool: Tool; label: string; title: string }> = [
   { tool: 'select', label: '选择', title: '选择 / 移动注释' },
@@ -23,20 +21,7 @@ const TOOLS: Array<{ tool: Tool; label: string; title: string }> = [
   { tool: 'image', label: '图片', title: '插入图片(PNG/JPEG)' }
 ]
 
-const zoomPercent = computed(() => Math.round(docState.scale * 100))
 const hasDoc = computed(() => docState.pdfDoc !== null)
-
-function onZoomPreset(event: Event): void {
-  const value = Number((event.target as HTMLSelectElement).value)
-  ;(event.target as HTMLSelectElement).value = ''
-  if (value > 0) zoomAt(value / 100)
-}
-
-function onPageCommit(event: Event): void {
-  const value = Number((event.target as HTMLInputElement).value)
-  if (Number.isFinite(value) && value >= 1) scrollToPage(Math.floor(value))
-  ;(event.target as HTMLInputElement).value = ''
-}
 </script>
 
 <template>
@@ -53,60 +38,6 @@ function onPageCommit(event: Event): void {
       <button :disabled="!canUndo" title="撤销 (Ctrl+Z)" @click="undo">撤销</button>
       <button :disabled="!canRedo" title="重做 (Ctrl+Y)" @click="redo">重做</button>
       <button :disabled="ui.selectedAnnotationIds.length === 0" title="删除选中 (Delete)" @click="removeSelected">删除</button>
-
-      <span class="divider"></span>
-
-      <button :disabled="!hasDoc" title="上一页" @click="stepPage(-1)">上一页</button>
-      <input
-        class="page-input"
-        type="text"
-        :placeholder="String(docState.currentPage)"
-        :disabled="!hasDoc"
-        @keydown.enter="onPageCommit"
-        @blur="onPageCommit"
-      />
-      <span class="page-total">/ {{ docState.pageCount || '-' }}</span>
-      <button :disabled="!hasDoc" title="下一页" @click="stepPage(1)">下一页</button>
-
-      <span class="divider"></span>
-
-      <button
-        :disabled="!hasDoc"
-        :class="{ active: docState.viewMode === 'continuous' }"
-        title="连续阅读"
-        @click="setViewMode('continuous')"
-      >
-        连续
-      </button>
-      <button
-        :disabled="!hasDoc"
-        :class="{ active: docState.viewMode === 'single' }"
-        title="单页阅览"
-        @click="setViewMode('single')"
-      >
-        单页
-      </button>
-      <button
-        :disabled="!hasDoc"
-        :class="{ active: docState.viewMode === 'two' }"
-        title="双页阅览"
-        @click="setViewMode('two')"
-      >
-        双页
-      </button>
-
-      <span class="divider"></span>
-
-      <button :disabled="!hasDoc" title="缩小 (Ctrl+-)" @click="zoomBy(1 / 1.1)">−</button>
-      <span class="zoom-value">{{ hasDoc ? zoomPercent + '%' : '-' }}</span>
-      <button :disabled="!hasDoc" title="放大 (Ctrl+=)" @click="zoomBy(1.1)">+</button>
-      <select class="zoom-preset" :disabled="!hasDoc" @change="onZoomPreset">
-        <option value="">预设</option>
-        <option v-for="preset in ZOOM_PRESETS" :key="preset" :value="preset">{{ preset }}%</option>
-      </select>
-      <button :disabled="!hasDoc" title="实际大小 (1:1)" @click="zoomAt(1)">实际大小</button>
-      <button :disabled="!hasDoc" title="适合页面" @click="fitPage">适合页面</button>
-      <button :disabled="!hasDoc" title="适合宽度 (Ctrl+0)" @click="fitWidth">适合宽度</button>
 
       <span class="divider"></span>
 
@@ -168,23 +99,6 @@ function onPageCommit(event: Event): void {
   flex: none;
 }
 
-.page-input {
-  width: 48px;
-  text-align: center;
-}
-
-.page-total {
-  color: var(--toolbar-fg-dim);
-  white-space: nowrap;
-}
-
-.zoom-value {
-  min-width: 48px;
-  text-align: center;
-  color: var(--toolbar-fg-dim);
-}
-
-.zoom-preset,
 .stamp-select {
   padding: 3px 4px;
 }
