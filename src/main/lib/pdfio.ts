@@ -14,6 +14,8 @@ export interface DocEntry {
   /** 页面操作快照栈(撤销/重做);与渲染层 page 历史条目 LIFO 对齐 */
   undoBuffers: Array<{ buffer: Buffer; pageCount: number }>
   redoBuffers: Array<{ buffer: Buffer; pageCount: number }>
+  /** 渲染层正以 range 方式读取:evictDocs 跳过(否则分段读取会读到错误内容) */
+  pinned?: boolean
 }
 
 const docs = new Map<string, DocEntry>()
@@ -21,11 +23,20 @@ const docs = new Map<string, DocEntry>()
 /** 主进程文档缓存上限(低内存机器:避免多开文档累积整份 buffer) */
 const MAX_DOCS = 3
 
+/** ≥ 该值且非加密时,渲染层改用按需分段读取(避免整份字节走 IPC);小文件走原路以免无谓分块 */
+export const RANGE_MIN_FILE_SIZE = 8 * 1024 * 1024
+
 function evictDocs(): void {
   while (docs.size > MAX_DOCS) {
-    const oldest = docs.keys().next().value
-    if (oldest === undefined) break
-    docs.delete(oldest)
+    let victim: string | undefined
+    for (const [id, entry] of docs) {
+      if (!entry.pinned) {
+        victim = id
+        break
+      }
+    }
+    if (victim === undefined) return
+    docs.delete(victim)
   }
 }
 
@@ -150,17 +161,45 @@ export async function openDocument(filePath: string): Promise<OpenResult> {
     return { ok: false, error: 'corrupt', errorMessage: `无法解析 PDF:${(err as Error).message}` }
   }
 
+  const useRange = !encrypted && buffer.byteLength >= RANGE_MIN_FILE_SIZE
+  // 只有当前文档可能被 range 读取:新开文档时解除其它文档的 pin,否则淘汰会失效
+  for (const other of docs.values()) other.pinned = false
   const docId = randomUUID()
-  docs.set(docId, { path: filePath, buffer, encrypted, pageCount, undoBuffers: [], redoBuffers: [] })
+  docs.set(docId, {
+    path: filePath,
+    buffer,
+    encrypted,
+    pageCount,
+    undoBuffers: [],
+    redoBuffers: [],
+    pinned: useRange
+  })
   evictDocs()
   return {
     ok: true,
     docId,
     path: filePath,
-    buffer: toArrayBuffer(buffer),
+    buffer: useRange ? undefined : toArrayBuffer(buffer),
+    fileSize: buffer.byteLength,
+    stream: useRange ? 'range' : 'buffer',
     pageCount,
     encrypted,
     annotations,
     sidecar: readSidecar(filePath)
   }
+}
+
+/** 读取当前文档的字节区间(渲染层 range 流式加载用);未知 docId 返回错误 */
+export function readDocRange(
+  docId: string,
+  begin: number,
+  end: number
+): { ok: true; bytes: Uint8Array } | { ok: false; error: string } {
+  const entry = docs.get(docId)
+  if (!entry) return { ok: false, error: '文档已关闭' }
+  const total = entry.buffer.byteLength
+  const from = Math.max(0, Math.min(Math.floor(begin), total))
+  const to = Math.max(from, Math.min(Math.floor(end), total))
+  // 复制而非视图:避免 Buffer 池化内存随 IPC 外泄
+  return { ok: true, bytes: new Uint8Array(entry.buffer.subarray(from, to)) }
 }

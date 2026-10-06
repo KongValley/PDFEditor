@@ -7,6 +7,7 @@ import { PDFDocument } from 'pdf-lib'
 import {
   openDocument,
   getDocEntry,
+  readDocRange,
   readPdfPageCount,
   releaseDocument,
   sidecarPathFor,
@@ -24,6 +25,7 @@ import type {
   FormValue,
   PageOp,
   PageOpResult,
+  RangeReadResult,
   SaveResult,
   SidecarData,
   SplitTask,
@@ -72,6 +74,12 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   })
 
   ipcMain.handle('doc:open', async (_e, filePath: string) => openDocument(filePath))
+
+  ipcMain.handle(
+    'doc:readRange',
+    (_e, payload: { docId: string; begin: number; end: number }): Promise<RangeReadResult> =>
+      guard(() => readDocRange(String(payload?.docId), Number(payload?.begin), Number(payload?.end)))
+  )
 
   ipcMain.handle('doc:release', (_e, docId: string): { ok: boolean } => {
     releaseDocument(docId)

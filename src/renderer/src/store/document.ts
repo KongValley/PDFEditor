@@ -1,12 +1,28 @@
 import { markRaw, reactive } from 'vue'
-import { loadPdfDocument, type PDFDocumentProxy, type PDFPageProxy } from '../lib/pdfjs'
+import { loadPdfDocument, loadPdfDocumentByRange, type PDFDocumentProxy, type PDFPageProxy } from '../lib/pdfjs'
 import { loadOutline } from '../lib/outline'
 import { discoverFormFields } from '../lib/forms'
-import type { Annotation, FormFieldInfo, FormValue, OpenResult, OutlineNode, SidecarData } from '@shared/types'
+import type {
+  Annotation,
+  FormFieldInfo,
+  FormValue,
+  OpenResult,
+  OutlineNode,
+  RangeReadResult,
+  SidecarData
+} from '@shared/types'
 
 export interface PageBox {
   w: number
   h: number
+}
+
+/** 打开方式与分段读取统计(冒烟断言用;不参与运行逻辑) */
+export const rangeStreamStats: { mode: 'range' | 'buffer'; reads: number; bytes: number; fileSize: number } = {
+  mode: 'buffer',
+  reads: 0,
+  bytes: 0,
+  fileSize: 0
 }
 
 /** 阅读视图模式:连续阅读 / 单页阅览 / 双页阅览 */
@@ -188,14 +204,37 @@ export async function openByPath(path: string, options: OpenOptions = {}): Promi
   docState.loadError = null
   try {
     const result = (await window.pdfAPI.invoke('doc:open', path)) as OpenResult
-    if (!result.ok || !result.buffer || !result.docId || !result.pageCount) {
+    if (!result.ok || !result.docId || !result.pageCount || (!result.buffer && result.stream !== 'range')) {
       docState.loadError = result.errorMessage ?? '打开文件失败'
       return false
     }
 
     let pdfDoc: PDFDocumentProxy
     try {
-      pdfDoc = await loadPdfDocument(result.buffer, { onPassword: options.onPassword })
+      if (result.stream === 'range' && result.fileSize) {
+        const docId = result.docId
+        rangeStreamStats.mode = 'range'
+        rangeStreamStats.reads = 0
+        rangeStreamStats.bytes = 0
+        rangeStreamStats.fileSize = result.fileSize
+        pdfDoc = await loadPdfDocumentByRange({
+          length: result.fileSize,
+          requestRange: async (begin, end) => {
+            const res = (await window.pdfAPI.invoke('doc:readRange', { docId, begin, end })) as RangeReadResult
+            if (!res.ok || !res.bytes) throw new Error(res.error ?? '分段读取失败')
+            rangeStreamStats.reads++
+            rangeStreamStats.bytes += res.bytes.byteLength
+            return res.bytes
+          },
+          onPassword: options.onPassword
+        })
+      } else {
+        rangeStreamStats.mode = 'buffer'
+        rangeStreamStats.reads = 0
+        rangeStreamStats.bytes = 0
+        rangeStreamStats.fileSize = result.fileSize ?? 0
+        pdfDoc = await loadPdfDocument(result.buffer as ArrayBuffer, { onPassword: options.onPassword })
+      }
     } catch (err) {
       // 加载失败/用户取消:释放主进程条目,避免打开失败占满缓存把已打开的文档挤掉
       docState.loadError = err instanceof Error ? err.message : String(err)

@@ -31,12 +31,25 @@ const scripts = [
   'step17-render.js',
   'step18-print.js',
   'step19-nav.js',
-  'step20-about.js'
+  'step20-about.js',
+  'step21-range.js'
 ]
 
 if (!existsSync(join(root, 'samples', 'sample-zh.pdf'))) {
   console.error('缺少 samples/,请先运行 npm run samples')
   process.exit(1)
+}
+
+// 大文件夹具(range 流式加载冒烟用):缺失时现场生成(≈30MB,约 2s)
+if (!existsSync(join(root, 'tmp', 'large.pdf'))) {
+  const gen = spawnSync(process.execPath, [join(root, 'scripts', 'make-large-sample.mjs')], {
+    cwd: root,
+    stdio: 'inherit'
+  })
+  if (gen.status !== 0) {
+    console.error('生成 tmp/large.pdf 失败')
+    process.exit(1)
+  }
 }
 
 // 单步脚本超时(毫秒):默认 60s;重负载步骤给更宽裕的上限
@@ -45,7 +58,8 @@ if (!existsSync(join(root, 'samples', 'sample-zh.pdf'))) {
 const STEP_TIMEOUTS = {
   'step13-batch.js': '120000',
   'step14-ux.js': '120000',
-  'step15-annots.js': '300000'
+  'step15-annots.js': '300000',
+  'step21-range.js': '180000'
 }
 
 let failed = 0

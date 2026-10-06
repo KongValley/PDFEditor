@@ -202,6 +202,17 @@ export interface OpenResult {
   /** 从 PDF /Annots 提取的本应用批注(加密文档为空数组) */
   annotations?: Annotation[]
   sidecar?: SidecarData | null
+  /** 'range' = 渲染层按需分段读取(大文件);'buffer' = 随 IPC 传整份字节(现状) */
+  stream?: 'range' | 'buffer'
+  /** 文件总字节数(stream='range' 时必需) */
+  fileSize?: number
+}
+
+/** 渲染层按需分段读取(大文件 Range 流式加载)的返回 */
+export interface RangeReadResult {
+  ok: boolean
+  bytes?: Uint8Array
+  error?: string
 }
 
 export interface PageOpResult {

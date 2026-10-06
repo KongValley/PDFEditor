@@ -19,7 +19,7 @@ import {
   splitPdfs
 } from './lib/actions'
 import { parsePageRange, splitPageSegments } from '@shared/text'
-import { docState, cachedPageCount, pinnedPageCounts, docCleanupCount } from './store/document'
+import { docState, cachedPageCount, pinnedPageCounts, docCleanupCount, rangeStreamStats } from './store/document'
 import { invalidateSearch, searchState } from './store/search'
 import { mergeDialogState, splitDialogState, ui } from './store/ui'
 import { searchDocument } from './lib/textsearch'
@@ -118,6 +118,7 @@ export function installTestApi(): void {
     cachedPageCount,
     pinnedPageCounts,
     cleanupCount: docCleanupCount,
+    rangeStreamStats,
     invalidateSearch,
     search: (query: string, limit?: number) => searchDocument(query, limit),
     // 冒烟用:以 pdf.js 原生批注绘制(annotationMode ENABLE)做「其它阅读器可见」的独立验证

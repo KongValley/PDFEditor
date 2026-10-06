@@ -1,6 +1,7 @@
 import * as pdfjs from 'pdfjs-dist'
-import type { PDFDocumentProxy, PDFPageProxy, PageViewport } from 'pdfjs-dist'
+import type { PDFDocumentLoadingTask, PDFDocumentProxy, PDFPageProxy, PageViewport } from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.js?url'
+import { DocRangeTransport } from './range-transport'
 
 export { pdfjs }
 export type { PDFDocumentProxy, PDFPageProxy, PageViewport }
@@ -29,6 +30,36 @@ export async function loadPdfDocument(
   // pdf.js 的密码回调挂在 loadingTask 上(v3/v6 一致)
   if (options.onPassword) task.onPassword = options.onPassword
   return task.promise
+}
+
+export interface RangeLoadOptions extends LoadDocumentOptions {
+  /** 文件总字节数(交给 pdf.js 作为 rangeTransport.length) */
+  length: number
+  requestRange: (begin: number, end: number) => Promise<Uint8Array>
+}
+
+/** 大文件按需分段加载:不传 data,由 DocRangeTransport 驱动(避免整份字节走 IPC) */
+export async function loadPdfDocumentByRange(options: RangeLoadOptions): Promise<PDFDocumentProxy> {
+  let fatal: Error | null = null
+  let task: PDFDocumentLoadingTask
+  const transport = new DocRangeTransport(options.length, options.requestRange, (err) => {
+    fatal = err
+    void task.destroy()
+  })
+  task = pdfjs.getDocument({
+    range: transport,
+    cMapUrl: `${assetBase}cmaps/`,
+    cMapPacked: true,
+    standardFontDataUrl: `${assetBase}standard_fonts/`
+  })
+  // pdf.js 的密码回调挂在 loadingTask 上(v3/v6 一致)
+  if (options.onPassword) task.onPassword = options.onPassword
+  try {
+    return await task.promise
+  } catch (err) {
+    // 分段读取失败时 pdf.js 抛的是 AbortException:以真实原因上报
+    throw fatal ?? err
+  }
 }
 
 export interface PageViewportInfo {
