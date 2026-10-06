@@ -3,7 +3,7 @@ import { basename, dirname, join } from 'node:path'
 import { PDFDocument, degrees } from 'pdf-lib'
 import { getDocEntry, pruneBufferStack, pushBufferSnapshot, setDocBuffer, toArrayBuffer, uniqueFilePath } from './pdfio'
 import { getImageBuffer, readImageBuffer } from './images'
-import { createAnnotContext, mergeAcroForm, replaceOwnAnnotations, stripAllAnnotations } from './pdflibwrite'
+import { createAnnotContext, mergeAcroForm, needsCjkFont, replaceOwnAnnotations, stripAllAnnotations } from './pdflibwrite'
 import type { Annotation, PageOp, PageOpResult, SplitTask, SplitTaskResult } from '@shared/types'
 
 function identityMap(count: number): number[] {
@@ -99,7 +99,8 @@ export async function applyPageOp(docId: string, op: PageOp): Promise<PageOpResu
           const { ctx } = await createAnnotContext(
             out,
             async (imgId, refPath) => getImageBuffer(imgId) ?? (await readImageBuffer(refPath)),
-            warnings
+            warnings,
+            { skipCjkFont: !needsCjkFont(op.annotations) }
           )
           // 页码映射到输出页序:未导出的页上注释自然丢弃
           await replaceOwnAnnotations(
@@ -219,7 +220,8 @@ export async function splitPdfTasks(
           const { ctx } = await createAnnotContext(
             out,
             async (imgId, refPath) => getImageBuffer(imgId) ?? (await readImageBuffer(refPath)),
-            warnings
+            warnings,
+            { skipCjkFont: !needsCjkFont(options.annotations) }
           )
           await replaceOwnAnnotations(
             out,

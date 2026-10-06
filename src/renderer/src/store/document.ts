@@ -245,8 +245,13 @@ export async function openByPath(path: string, options: OpenOptions = {}): Promi
   }
 }
 
-/** 页面操作后:以新 buffer 重开 pdf.js 文档(保持缩放与视图旋转) */
-export async function reloadDocument(buffer: ArrayBuffer): Promise<void> {
+/** 页面操作后:以新 buffer 重开 pdf.js 文档(保持缩放与视图旋转)。
+ * incremental:rotate 专用 —— 只重算被旋转页的尺寸,表单字段沿用旧值(页序不变);
+ * 免掉全量 N 次 getPage + N 次 getAnnotations,长度异常时自动回退全量。 */
+export async function reloadDocument(
+  buffer: ArrayBuffer,
+  incremental?: { rotatedPages: number[] }
+): Promise<void> {
   // 页面重建后旧 pin 页号失效:不清理会让新文档同号页被豁免回收
   clearViewerPins()
   const pdfDoc = await loadPdfDocument(buffer)
@@ -254,9 +259,18 @@ export async function reloadDocument(buffer: ArrayBuffer): Promise<void> {
   pageCache = new Map()
   docState.pdfDoc = markRaw(pdfDoc)
   docState.pageCount = pdfDoc.numPages
-  docState.pageBoxes = await fillPageBoxes(pdfDoc)
-  // 页面/合并操作会改变表单控件集合:重新发现,否则合并进来的字段不显示也无法填写
-  docState.formFields = await discoverFormFields(pdfDoc)
+  if (incremental && incremental.rotatedPages.length > 0) {
+    const rotated = new Set(incremental.rotatedPages)
+    docState.pageBoxes = docState.pageBoxes.map((box, i) => (rotated.has(i) ? { w: box.h, h: box.w } : box))
+    if (docState.pageBoxes.length !== pdfDoc.numPages) {
+      // rotate 不改页数;长度不符说明状态异常,回退全量
+      docState.pageBoxes = await fillPageBoxes(pdfDoc)
+    }
+  } else {
+    docState.pageBoxes = await fillPageBoxes(pdfDoc)
+    // 页面/合并操作会改变表单控件集合:重新发现,否则合并进来的字段不显示也无法填写
+    docState.formFields = await discoverFormFields(pdfDoc)
+  }
   docState.currentPage = Math.min(Math.max(docState.currentPage, 1), pdfDoc.numPages)
   if (previous) void previous.cleanup()
 }

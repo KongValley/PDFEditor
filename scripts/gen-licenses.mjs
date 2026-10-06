@@ -1,19 +1,38 @@
-// 生成随包第三方许可清单:生产依赖(electron-builder 打进 asar)+ Vite 打进 bundle 的 vue 运行时 + 内置字体/CMaps
-// 输出:src/renderer/public/third-party-notices.json(应用内「关于」读取;并作为 extraResources 随安装包附带)
+// 生成随包第三方许可清单:Vite 打进 bundle 的运行时依赖 + electron 运行时 + 内置字体/CMaps
+// 注:所有包都在 devDependencies(依赖全部由 electron-vite 打进 out/,asar 不含 node_modules,
+// 见 README「10. 构建」),因此按「是否打进产物」界定,不再看 dependencies/dev 标记。
 import { readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-const lock = JSON.parse(readFileSync(join(root, 'package-lock.json'), 'utf8'))
 
-/** Vite 会把这些 devDependencies 编译进 bundle,但不随 node_modules 分发,需单列 */
-const BUNDLED_DEV = ['vue', '@vue/runtime-dom', '@vue/runtime-core', '@vue/reactivity', '@vue/shared']
+/** Vite 打进 bundle 的运行时包(直接依赖);构建工具(vite/electron-builder/vue-tsc 等)不随包分发,传递闭包在下方遍历补齐 */
+const BUNDLED_RUNTIME = [
+  'vue',
+  '@vue/runtime-dom',
+  '@vue/runtime-core',
+  '@vue/reactivity',
+  '@vue/shared',
+  'pdfjs-dist',
+  'pdf-lib',
+  '@pdf-lib/fontkit'
+]
+
+/** 个别包的 LICENSE 不在包根(记录其相对路径) */
+const LICENSE_PATH_OVERRIDES = {}
 
 const LICENSE_FILE_RE = /^(licen[cs]e|copying|notice)/i
 const MAX_TEXT = 100000
 
-function licenseText(pkgDir) {
+function licenseText(pkgDir, override) {
+  if (override) {
+    try {
+      return readFileSync(join(pkgDir, override), 'utf8')
+    } catch {
+      // 指定路径读取失败时退回目录扫描
+    }
+  }
   let names = []
   try {
     names = readdirSync(pkgDir)
@@ -26,6 +45,21 @@ function licenseText(pkgDir) {
   return text.length > MAX_TEXT ? `${text.slice(0, MAX_TEXT)}\n…(截断)` : text
 }
 
+/** 包内无 LICENSE 文件时:从 README 提取「License」小节,再不行给 SPDX 短语(条目不缺文本) */
+function licenseTextFallback(name, dir, spdx) {
+  try {
+    const readme = readFileSync(join(dir, 'README.md'), 'utf8')
+    const at = readme.toLowerCase().lastIndexOf('## license')
+    if (at >= 0) {
+      const section = readme.slice(at, at + 4000).trim()
+      return `${section}\n\n(${name} 包内无独立 LICENSE 文件,以上摘自其 README)`
+    }
+  } catch {
+    // README 也没有:落到 SPDX 短语
+  }
+  return `${spdx ?? 'Unknown'} License — ${name} 随应用二进制分发,著作权归原作者所有。`
+}
+
 function packageEntry(name, dir, version) {
   let pkg = {}
   try {
@@ -34,25 +68,33 @@ function packageEntry(name, dir, version) {
     // 包目录缺失时降级为 lockfile 信息
   }
   const license = pkg.license ?? (Array.isArray(pkg.licenses) ? pkg.licenses.map((l) => l.type).join(' OR ') : null)
-  return { name, version: version ?? pkg.version ?? '', license, homepage: pkg.homepage ?? null, text: licenseText(dir) }
+  const text = licenseText(dir, LICENSE_PATH_OVERRIDES[name])
+  return {
+    name,
+    version: version ?? pkg.version ?? '',
+    license,
+    homepage: pkg.homepage ?? null,
+    text: text ?? licenseTextFallback(name, dir, license)
+  }
 }
 
 const entries = []
-// 1) 生产依赖树(lockfile v3 packages 中非 dev 条目;含 pdfjs-dist 的 optional 依赖)
-for (const [key, meta] of Object.entries(lock.packages ?? {})) {
-  if (!key || meta.dev) continue
-  entries.push(packageEntry(key.split('node_modules/').pop(), join(root, key), meta.version))
-}
-// 2) 打进 bundle 的 vue 运行时(devDependencies)
-for (const name of BUNDLED_DEV) {
-  const dir = join(root, 'node_modules', name)
+// 1) 打进 bundle 的运行时依赖及其传递闭包(node_modules 实目录遍历)
+const runtimeClosure = new Set()
+const visit = (name) => {
+  if (runtimeClosure.has(name)) return
+  const pkgPath = join(root, 'node_modules', name)
+  let pkg = null
   try {
-    statSync(dir)
+    pkg = JSON.parse(readFileSync(join(pkgPath, 'package.json'), 'utf8'))
   } catch {
-    continue
+    return
   }
-  entries.push(packageEntry(name, dir, null))
+  runtimeClosure.add(name)
+  for (const dep of Object.keys(pkg.dependencies ?? {})) visit(dep)
 }
+for (const name of BUNDLED_RUNTIME) visit(name)
+for (const name of runtimeClosure) entries.push(packageEntry(name, join(root, 'node_modules', name), null))
 // 3) 内置资源许可(pdf.js 标准字体 / CMaps)
 const ASSETS = [
   {

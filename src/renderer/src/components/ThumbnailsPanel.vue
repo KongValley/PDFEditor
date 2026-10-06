@@ -304,6 +304,8 @@ watch(
   position: relative;
   overflow: hidden;
   background: #fff;
+  /* 离屏缩略图跳过子树布局/绘制;尺寸由内联 width/height 显式给出 */
+  content-visibility: auto;
 }
 
 .thumb-check {

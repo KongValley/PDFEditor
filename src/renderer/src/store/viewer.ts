@@ -17,6 +17,9 @@ export function attachContainer(el: HTMLElement | null): void {
   container = el
 }
 
+/** 缩放来源标记:Ctrl+滚轮置位,PageCanvas 据此对连续 scale 变更做 120ms 渲染去抖 */
+export const zoomWheelAt = { active: false }
+
 export function rowCount(): number {
   return Math.ceil(docState.pageCount / TWO_UP)
 }
@@ -38,27 +41,94 @@ export function rowHeight(row: number): number {
   return height
 }
 
-export function contentHeight(): number {
-  let total = 0
-  if (docState.viewMode === 'two') {
-    for (let row = 0; row < rowCount(); row++) total += rowHeight(row) + PAGE_GAP
+/* ---------------- 前缀和几何(pageBoxes/scale/rotationView/viewMode 变化时重建) ---------------- */
+
+/** rows[row] = [顶部 y, 行高];pages[i] = [顶部 y, 页高](含 PAGE_GAP,与 DOM 累加一致) */
+let rowTops: number[] = []
+let rowHeights: number[] = []
+let pageTops: number[] = []
+
+/** 重建前缀和(渲染层在 docState.pageBoxes/scale/rotationView/viewMode 变化后调用) */
+export function rebuildLayoutCache(): void {
+  const two = docState.viewMode === 'two'
+  if (two) {
+    rowTops = []
+    rowHeights = []
+    let top = 0
+    for (let row = 0; row < rowCount(); row++) {
+      const height = rowHeight(row)
+      rowTops.push(top)
+      rowHeights.push(height)
+      top += height + PAGE_GAP
+    }
+    pageTops = []
   } else {
+    rowTops = []
+    rowHeights = []
+    pageTops = []
+    let top = 0
     for (let i = 0; i < docState.pageCount; i++) {
-      total += pageDisplaySize(i).h + PAGE_GAP
+      pageTops.push(top)
+      top += pageDisplaySize(i).h + PAGE_GAP
     }
   }
-  return Math.max(total, 0)
+}
+
+/** 缓存签名:pageBoxes 长度+页数×缩放×视图旋转×模式;变化或换文档即失效 */
+let cacheSignature = ''
+
+function currentSignature(): string {
+  return `${docState.docId ?? ''}|${docState.pageBoxes.length}|${docState.scale}|${docState.rotationView}|${docState.viewMode}`
+}
+
+/** 数组失效兜底:签名不符(文档/页数/缩放/旋转/模式变化)时重建一次 */
+function ensureLayoutCache(): void {
+  if (cacheSignature !== currentSignature()) {
+    cacheSignature = currentSignature()
+    rebuildLayoutCache()
+  }
+}
+
+export function contentHeight(): number {
+  ensureLayoutCache()
+  if (docState.viewMode === 'two') {
+    const rows = rowTops.length
+    if (rows === 0) return 0
+    return rowTops[rows - 1] + rowHeights[rows - 1] + PAGE_GAP
+  }
+  if (pageTops.length === 0) return 0
+  const last = docState.pageCount - 1
+  return pageTops[last] + pageDisplaySize(last).h + PAGE_GAP
 }
 
 export function pageOffsetTop(index: number): number {
-  let top = 0
-  if (docState.viewMode === 'two') {
-    const row = Math.floor(index / TWO_UP)
-    for (let r = 0; r < row; r++) top += rowHeight(r) + PAGE_GAP
-    return top
+  ensureLayoutCache()
+  if (docState.viewMode === 'two') return rowTops[Math.floor(index / TWO_UP)] ?? 0
+  return pageTops[index] ?? 0
+}
+
+/** 二分:第一个 顶部 y > probe 的条目前一个 */
+export function floorIndex(tops: number[], probe: number): number {
+  let lo = 0
+  let hi = tops.length - 1
+  if (hi < 0 || probe < tops[0]) return 0
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1
+    if (tops[mid] <= probe) lo = mid
+    else hi = mid - 1
   }
-  for (let i = 0; i < index; i++) top += pageDisplaySize(i).h + PAGE_GAP
-  return top
+  return lo
+}
+
+/** 前缀和只读出口(PdfViewer 几何播种用);未重建时按需重建 */
+export function rowTopsOf(): number[] {
+  ensureLayoutCache()
+  return rowTops
+}
+
+export function pageTopsOf(): number[] {
+  ensureLayoutCache()
+  return pageTops
 }
 
 export function scrollToPage(pageNumber: number): void {
@@ -91,23 +161,18 @@ export function scrollToPagePosition(pageNumber: number, offsetY: number): void 
 export function computeCurrentPage(): number {
   if (!container || docState.pageCount === 0) return 1
   if (docState.viewMode === 'single') return docState.currentPage
+  ensureLayoutCache()
   const probe = container.scrollTop + container.clientHeight * 0.35
-  let acc = 0
   if (docState.viewMode === 'two') {
-    for (let row = 0; row < rowCount(); row++) {
-      acc += rowHeight(row) + PAGE_GAP
-      if (probe < acc) return rowPages(row)[0] + 1
-    }
-    return rowPages(rowCount() - 1)[0] + 1
+    if (rowTops.length === 0) return 1
+    return rowPages(floorIndex(rowTops, probe))[0] + 1
   }
-  for (let i = 0; i < docState.pageCount; i++) {
-    acc += pageDisplaySize(i).h + PAGE_GAP
-    if (probe < acc) return i + 1
-  }
-  return docState.pageCount
+  if (pageTops.length === 0) return 1
+  return floorIndex(pageTops, probe) + 1
 }
 
-export function zoomAt(newScale: number, clientY?: number): void {
+export function zoomAt(newScale: number, clientY?: number, source?: 'wheel'): void {
+  zoomWheelAt.active = source === 'wheel'
   // 上限 4 倍:再放大单页位图会超过 30MB(低内存机器上不可接受)
   const clamped = Math.min(Math.max(newScale, 0.25), 4)
   fitMode = 'none'
@@ -119,6 +184,7 @@ export function zoomAt(newScale: number, clientY?: number): void {
   const anchorY = clientY === undefined ? container.clientHeight / 2 : clientY - rect.top
   const oldHeight = contentHeight()
   const ratio = oldHeight > 0 ? (container.scrollTop + anchorY) / oldHeight : 0
+  rebuildLayoutCache()
   docState.scale = clamped
   void nextTick(() => {
     if (!container) return
@@ -184,6 +250,7 @@ export function stepPage(dir: 1 | -1): void {
 
 export function rotateView(delta: number): void {
   docState.rotationView = (((docState.rotationView + delta) % 360) + 360) % 360
+  rebuildLayoutCache()
   void nextTick(() => {
     if (fitMode === 'width') fitWidth()
     else if (fitMode === 'page') fitPage()

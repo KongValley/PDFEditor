@@ -7,9 +7,13 @@ import {
   attachContainer,
   computeCurrentPage,
   fitWidth,
+  floorIndex,
+  pageTopsOf,
+  rebuildLayoutCache,
   rowCount,
   rowHeight,
   rowPages,
+  rowTopsOf,
   scrollToPage,
   zoomAt
 } from '../store/viewer'
@@ -84,7 +88,7 @@ function handleScroll(): void {
 function handleWheel(event: WheelEvent): void {
   if (event.ctrlKey || event.metaKey) {
     event.preventDefault()
-    zoomAt(docState.scale * (event.deltaY < 0 ? 1.1 : 1 / 1.1), event.clientY)
+    zoomAt(docState.scale * (event.deltaY < 0 ? 1.1 : 1 / 1.1), event.clientY, 'wheel')
     return
   }
   if (docState.viewMode !== 'single' || event.deltaY === 0) return
@@ -140,23 +144,16 @@ function seedVisiblePages(): void {
     pinViewerPages(visiblePages)
     return
   }
-  const top = root.scrollTop
-  const bottom = top + root.clientHeight
-  if (docState.viewMode === 'two') {
-    let acc = 0
-    for (let row = 0; row < rowCount(); row++) {
-      const height = rowHeight(row) + PAGE_GAP
-      if (acc + height >= top - 200 && acc <= bottom + 200) {
-        for (const index of rowPages(row)) visiblePages.add(index + 1)
-      }
-      acc += height
-    }
-  } else {
-    let acc = 0
-    for (let i = 0; i < docState.pageCount; i++) {
-      const height = pageDisplaySize(i).h + PAGE_GAP
-      if (acc + height >= top - 200 && acc <= bottom + 200) visiblePages.add(i + 1)
-      acc += height
+  rebuildLayoutCache()
+  const tops = docState.viewMode === 'two' ? rowTopsOf() : pageTopsOf()
+  const top = root.scrollTop - 200
+  const bottom = root.scrollTop + root.clientHeight + 200
+  const stride = docState.viewMode === 'two' ? 2 : 1
+  for (let s = floorIndex(tops, top); s < tops.length; s++) {
+    if (tops[s] > bottom) break
+    for (let i = 0; i < stride; i++) {
+      const index = s * stride + i
+      if (index < docState.pageCount) visiblePages.add(index + 1)
     }
   }
   pinViewerPages(visiblePages)

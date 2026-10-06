@@ -6,7 +6,7 @@ import { docState, getPage, pageDisplaySize } from '../store/document'
 import { searchState } from '../store/search'
 import { addAnnotation, addAnnotations, selectAnnotation } from '../store/annotations'
 import { ui } from '../store/ui'
-import { renderWatchdog } from '../store/viewer'
+import { renderWatchdog, zoomWheelAt } from '../store/viewer'
 import { getPageViewport, pdfjs } from '../lib/pdfjs'
 import { pdfRectToScreen, rectFromPoints, screenPointToPdf, type ScreenRect } from '../lib/geo'
 import { TOOL_DEFAULTS, withIdentity } from '../lib/annots'
@@ -24,6 +24,9 @@ const viewport = ref<PageViewport | null>(null)
 let renderTask: RenderTask | null = null
 let textLayer: TextLayerRenderTask | null = null
 let seq = 0
+
+/** 缩放去抖计时器(标志位在 store/viewer.ts 的 zoomWheelAt) */
+let scaleTimer = 0
 
 const size = computed(() => pageDisplaySize(props.pageNumber - 1))
 
@@ -261,8 +264,25 @@ function onPagePointerUp(event: PointerEvent): void {
 watch(
   [() => props.visible, () => docState.scale, () => docState.rotationView, () => props.pageNumber],
   () => {
-    if (props.visible) void renderPage()
-    else clearPage()
+    if (!props.visible) {
+      clearPage()
+      return
+    }
+    if (scaleTimer !== 0) {
+      clearTimeout(scaleTimer)
+      scaleTimer = 0
+    }
+    // Ctrl+滚轮逐事件改 scale:连续触发会反复 cancel/重启渲染,该来源去抖 120ms;
+    // 可见性/旋转/换页/一次性缩放(菜单、按钮)仍立即渲染。
+    if (zoomWheelAt.active) {
+      scaleTimer = window.setTimeout(() => {
+        scaleTimer = 0
+        zoomWheelAt.active = false
+        void renderPage()
+      }, 120)
+      return
+    }
+    void renderPage()
   },
   { immediate: true }
 )
@@ -272,6 +292,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  if (scaleTimer !== 0) clearTimeout(scaleTimer)
   clearPage()
 })
 
@@ -318,6 +339,8 @@ defineExpose({ rendered, viewport })
   background: #fff;
   box-shadow: var(--page-shadow);
   flex: none;
+  /* 离屏页跳过子树布局/绘制;尺寸由内联 width/height 显式给出,滚动几何不受影响 */
+  content-visibility: auto;
 }
 
 .page-canvas {

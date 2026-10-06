@@ -39,18 +39,18 @@ export async function preparePrintJob(payload: {
   return { ok: true, jobId }
 }
 
-/** 逐页落盘(渲染层每页渲染完立即调用,内存峰值只占一页) */
+/** 逐页落盘(渲染层每页渲染完立即调用,内存峰值只占一页;bytes = PNG 原始字节) */
 export async function addPrintPage(payload: {
   jobId: string
   index: number
-  dataUrl: string
+  bytes: Uint8Array
 }): Promise<{ ok: boolean; error?: string }> {
   const job = jobs.get(payload?.jobId)
   if (!job) return { ok: false, error: '打印任务已过期' }
   const index = Math.floor(Number(payload.index))
   if (!Number.isFinite(index) || index < 0 || index >= job.files.length) return { ok: false, error: '打印页码越界' }
   const file = join(job.dir, `page-${index + 1}.png`)
-  await writeFile(file, Buffer.from(String(payload.dataUrl).split(',')[1] ?? '', 'base64'))
+  await writeFile(file, payload.bytes)
   job.files[index] = file
   return { ok: true }
 }

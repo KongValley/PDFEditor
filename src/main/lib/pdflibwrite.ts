@@ -65,18 +65,31 @@ function hexToRgb(hex: string): { r: number; g: number; b: number } {
 
 /**
  * 读取中文字体字节(约 10MB)。
- * 不做模块级缓存:低内存机器上常驻 10MB 不划算,保存是低频操作,按需读盘即可。
+ * 字节做模块级缓存:批量拆分/连续保存/逐块导出时,重复读盘(每次 10MB)成本
+ * 远高于常驻 10MB(进程退出即释放)。
  */
+let cachedFontBytes: Buffer | null = null
+
 function loadCjkFontBytes(): Buffer | null {
+  if (cachedFontBytes) return cachedFontBytes
   for (const path of CJK_FONT_CANDIDATES) {
     try {
       if (!existsSync(path)) continue
-      return readFileSync(path)
+      cachedFontBytes = readFileSync(path)
+      return cachedFontBytes
     } catch {
       // 继续尝试下一个候选字体
     }
   }
   return null
+}
+
+/** 该批注集是否需要中文字体(只有含文本绘制的类型需要;图形类不需要) */
+export function needsCjkFont(annotations: Annotation[]): boolean {
+  for (const ann of annotations) {
+    if (ann.kind === 'text' || ann.kind === 'note' || ann.kind === 'stamp' || ann.kind === 'measure') return true
+  }
+  return false
 }
 
 async function embedCjkFont(doc: PDFDocument, warnings: string[]): Promise<PDFFont | null> {
@@ -93,14 +106,15 @@ async function embedCjkFont(doc: PDFDocument, warnings: string[]): Promise<PDFFo
   }
 }
 
-/** 准备批注外观绘制上下文:嵌入中文字体(失败退 Helvetica) */
+/** 准备批注外观绘制上下文:嵌入中文字体(失败退 Helvetica);skipCjkFont=true 时只嵌 Helvetica(图形批注够用) */
 export async function createAnnotContext(
   doc: PDFDocument,
   resolveImage: WriteOptions['resolveImage'],
-  warnings: string[]
+  warnings: string[],
+  options: { skipCjkFont?: boolean } = {}
 ): Promise<{ ctx: AnnotWriteContext; cjkFont: PDFFont | null }> {
   doc.registerFontkit(fontkit)
-  const cjkFont = await embedCjkFont(doc, warnings)
+  const cjkFont = options.skipCjkFont ? null : await embedCjkFont(doc, warnings)
   const font = cjkFont ?? (await doc.embedFont(StandardFonts.Helvetica))
   return { ctx: { font, resolveImage, warnings }, cjkFont }
 }
@@ -649,7 +663,9 @@ function applyFormValues(
 export async function writeAnnotations(buffer: Buffer, options: WriteOptions): Promise<WriteResult> {
   const warnings: string[] = []
   const doc = await PDFDocument.load(buffer, { ignoreEncryption: true })
-  const { ctx, cjkFont } = await createAnnotContext(doc, options.resolveImage, warnings)
+  // 图形批注 + 无表单值时跳过 9.75MB 中文字体的读盘/解析/子集嵌入
+  const skipCjk = !needsCjkFont(options.annotations) && Object.keys(options.formValues).length === 0
+  const { ctx, cjkFont } = await createAnnotContext(doc, options.resolveImage, warnings, { skipCjkFont: skipCjk })
   await replaceOwnAnnotations(doc, options.annotations, (page) => page, ctx)
   applyFormValues(doc, options.formValues, cjkFont, warnings)
 

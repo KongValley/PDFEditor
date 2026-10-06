@@ -14,6 +14,8 @@ check('空页面被拒绝', empty.ok === false && !!empty.error, empty)
 // 2) 分页传输(真实渲染管线产出 PNG)+ 干跑提交
 await t.openPath(`${__smokeRoot}/samples/sample-zh.pdf`)
 await sleep(1500)
+// dataUrl → bytes:传输协议从 base64 改为 Uint8Array 结构化克隆
+const pngBytes = (dataUrl) => new Uint8Array(atob(String(dataUrl).split(',')[1] ?? '').split('').map((c) => c.charCodeAt(0)))
 const rendered = await t.renderPageWithAnnotations(`${__smokeRoot}/samples/sample-zh.pdf`, 1, true)
 const prepared = await invoke('app:printPrepare', {
   jobName: 'smoke-print',
@@ -21,8 +23,8 @@ const prepared = await invoke('app:printPrepare', {
   sizesMm: [{ w: 210, h: 297 }, { w: 210, h: 297 }]
 })
 check('创建打印任务', prepared.ok === true && !!prepared.jobId, prepared)
-check('第一页写入成功', (await invoke('app:printAddPage', { jobId: prepared.jobId, index: 0, dataUrl: rendered.dataUrl })).ok === true)
-check('第二页写入成功', (await invoke('app:printAddPage', { jobId: prepared.jobId, index: 1, dataUrl: rendered.dataUrl })).ok === true)
+check('第一页写入成功', (await invoke('app:printAddPage', { jobId: prepared.jobId, index: 0, bytes: pngBytes(rendered.dataUrl) })).ok === true)
+check('第二页写入成功', (await invoke('app:printAddPage', { jobId: prepared.jobId, index: 1, bytes: pngBytes(rendered.dataUrl) })).ok === true)
 const dry = await invoke('app:printCommit', { jobId: prepared.jobId, dryRun: true })
 check('干跑成功', dry.ok === true && dry.pageCount === 2, dry.error ?? dry.pageCount)
 check('打印 HTML 含 2 张页面图', (String(dry.html).match(/<img /g) ?? []).length === 2, String(dry.html).slice(0, 120))
@@ -30,7 +32,7 @@ check('打印 HTML 使用页面尺寸', String(dry.html).includes('210.0mm 297.0
 
 // 3) 缺页提交被拒绝,且任务已清理
 const partial = await invoke('app:printPrepare', { jobName: 'smoke-partial', pageCount: 2, sizesMm: [] })
-await invoke('app:printAddPage', { jobId: partial.jobId, index: 0, dataUrl: rendered.dataUrl })
+await invoke('app:printAddPage', { jobId: partial.jobId, index: 0, bytes: pngBytes(rendered.dataUrl) })
 const badCommit = await invoke('app:printCommit', { jobId: partial.jobId, dryRun: true })
 check('缺页提交被拒绝', badCommit.ok === false && !!badCommit.error, badCommit)
 check('被拒绝后任务已清理', (await invoke('app:printCommit', { jobId: partial.jobId, dryRun: true })).ok === false)
@@ -38,26 +40,28 @@ check('被拒绝后任务已清理', (await invoke('app:printCommit', { jobId: p
 // 4) 未知任务 / 越界页码 / abort
 check(
   '未知任务被拒绝',
-  (await invoke('app:printAddPage', { jobId: 'missing', index: 0, dataUrl: rendered.dataUrl })).ok === false
+  (await invoke('app:printAddPage', { jobId: 'missing', index: 0, bytes: pngBytes(rendered.dataUrl) })).ok === false
 )
 const bounded = await invoke('app:printPrepare', { jobName: 'smoke-oob', pageCount: 1, sizesMm: [] })
 check(
   '越界页码被拒绝',
-  (await invoke('app:printAddPage', { jobId: bounded.jobId, index: 5, dataUrl: rendered.dataUrl })).ok === false
+  (await invoke('app:printAddPage', { jobId: bounded.jobId, index: 5, bytes: pngBytes(rendered.dataUrl) })).ok === false
 )
 check('abort 成功', (await invoke('app:printAbort', { jobId: bounded.jobId })).ok === true)
 check('abort 后提交失败', (await invoke('app:printCommit', { jobId: bounded.jobId, dryRun: true })).ok === false)
 
 // 5) 清晰度:标准 2×(≈144dpi)与高清 300dpi 的实际像素尺寸
-const measure = (url) =>
-  new Promise((resolve) => {
-    const img = new Image()
-    img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight })
-    img.onerror = () => resolve({ w: 0, h: 0 })
-    img.src = url
-  })
+const measure = (bytes) => {
+  if (!(bytes instanceof Uint8Array) || bytes.length < 24) return { w: 0, h: 0, png: false }
+  // PNG 魔数 + IHDR 宽高(字节 16-23 大端):不解码整图即可校验清晰度
+  const png = bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  return { w: view.getUint32(16), h: view.getUint32(20), png }
+}
 const stdPng = await measure(await t.renderPrintPageDataUrl(1, true, 'standard'))
 const hiPng = await measure(await t.renderPrintPageDataUrl(1, true, 'high'))
+check('标准输出为 PNG 字节', stdPng.png === true, stdPng)
+check('高清输出为 PNG 字节', hiPng.png === true, hiPng)
 check('标准清晰度 ≈ 144dpi', stdPng.w > 1100 && stdPng.w < 1300, stdPng)
 check('高清清晰度 ≈ 300dpi', hiPng.w > 2350 && hiPng.w < 2600, hiPng)
 

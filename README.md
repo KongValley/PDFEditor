@@ -1,6 +1,6 @@
 # PDF 编辑器 操作手册
 
-基于 Electron 的 Windows 桌面 PDF 阅读与标注编辑器。当前版本 **v1.4.0**。
+基于 Electron 的 Windows 桌面 PDF 阅读与标注编辑器。
 
 ---
 
@@ -8,8 +8,8 @@
 
 | 方式 | 文件 | 说明 |
 |---|---|---|
-| 安装版 | `pdf-editor-setup-1.4.0-<平台>.exe` | 双击安装,可选安装目录、自动创建桌面快捷方式 |
-| 便携版 | `pdf-editor-portable-1.4.0-<平台>.exe` | 免安装,双击直接运行 |
+| 安装版 | `pdf-editor-setup-<版本>-<平台>.exe` | 双击安装,可选安装目录、自动创建桌面快捷方式 |
+| 便携版 | `pdf-editor-portable-<版本>-<平台>.exe` | 免安装,双击直接运行 |
 
 平台四种组合:**Win7-32 位 / Win7-64 位 / Win10-32 位 / Win10-64 位**。
 下载地址:https://github.com/KongValley/PDFEditor/releases (建议选 `Latest` 一版)。
@@ -289,3 +289,10 @@ Win7 与 Win10 两套名称的构建内容相同(同为 Electron 22,仅按 32/64
 - 只读打开时不会写任何文件;保存/导出只在用户选择的路径与同名 sidecar 位置写入。
 - 缓存策略面向低内存机器:文档缓存 3 份、页面缓存 12 页、图片缓存 20 张,超出自动回收。
 - 随包附带第三方开源组件许可清单:应用内「关于 / 开源许可」可查看,安装目录 `resources/THIRD-PARTY-NOTICES.json` 为同一份文件。
+
+
+## 10. 构建(开发者)
+
+- 依赖全部由 electron-vite 打进 `out/`(主进程只 `require("electron")` 与 node 内置模块),因此 `package.json` 里没有运行时 `dependencies`、所有包都在 `devDependencies`——electron-builder 据此不再把 `node_modules` 打进 `app.asar`(打包体积从 65.5 MB 降到约 6 MB)。
+- 若将来改用 `externalizeDepsPlugin` 外置依赖,必须同时把对应包从 `devDependencies` 移回 `dependencies`,否则运行时缺包。
+- 本地打包:`npm run dist`(四组合齐跑,输出到 `release/<平台>/`,资产名不含中文);CI 由 `v*` tag 触发同一流程并发布 GitHub Release。

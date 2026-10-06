@@ -51,7 +51,12 @@ function normalizeValue(type: FormFieldType, raw: unknown): FormValue | undefine
  * 解析 AcroForm 字段(渲染进程侧,复用已加载的 pdf.js 文档,避免主进程二次解析整份 PDF)。
  * 字段全名通过 getFieldObjects() 的 id → name 映射还原。
  */
-export async function discoverFormFields(doc: PDFDocumentProxy): Promise<FormFieldInfo[]> {
+export async function discoverFormFields(
+  doc: PDFDocumentProxy,
+  /** 页子集(1-based;缺省 = 全部页)——增量重建时只扫受影响页 */
+  pageNumbers?: number[]
+): Promise<FormFieldInfo[]> {
+  const targetPages = pageNumbers ?? Array.from({ length: doc.numPages }, (_, i) => i + 1)
   const fieldObjects = await doc.getFieldObjects()
   const fullNameById = new Map<string, string>()
   const objectTypeById = new Map<string, string>()
@@ -67,7 +72,7 @@ export async function discoverFormFields(doc: PDFDocumentProxy): Promise<FormFie
   }
 
   const fields: FormFieldInfo[] = []
-  for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber++) {
+  for (const pageNumber of targetPages) {
     const page = await doc.getPage(pageNumber)
     const annotations = (await page.getAnnotations({ intent: 'display' })) as unknown as WidgetLike[]
     for (const widget of annotations) {

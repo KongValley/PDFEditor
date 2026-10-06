@@ -322,7 +322,22 @@ function shiftAnnotation(before: Annotation, dx: number, dy: number): Partial<An
   return { bbox: { ...before.bbox, x: before.bbox.x + dx, y: before.bbox.y + dy } }
 }
 
+/** 最近一次 pointermove(rAF 攒批:reactive 写会触发各层 filter 全量重算,每帧最多提交一次) */
+let pendingDragEvent: PointerEvent | null = null
+let dragFrame = 0
+
 function onDragMove(event: PointerEvent): void {
+  pendingDragEvent = event
+  if (dragFrame !== 0) return
+  dragFrame = requestAnimationFrame(() => {
+    dragFrame = 0
+    const ev = pendingDragEvent
+    pendingDragEvent = null
+    if (ev) applyDragMove(ev)
+  })
+}
+
+function applyDragMove(event: PointerEvent): void {
   const state = drag.value
   const vp = props.viewport
   if (!state || !vp) return
@@ -370,6 +385,18 @@ function onDragEnd(): void {
   window.removeEventListener('pointermove', onDragMove)
   window.removeEventListener('pointerup', onDragEnd)
   window.removeEventListener('pointercancel', onDragEnd)
+  // 冲刷最后一帧:快速单击/程序化移动时 rAF 可能还没跑,丢了就少一段位移
+  if (dragFrame !== 0) {
+    cancelAnimationFrame(dragFrame)
+    dragFrame = 0
+  }
+  if (pendingDragEvent) {
+    const ev = pendingDragEvent
+    pendingDragEvent = null
+    applyDragMove(ev)
+  }
+  // 冲刷后的遗留帧不再跑(commitCommands 以最终模型为准)
+  pendingDragEvent = null
   drag.value = null
   if (!state) return
   try {
@@ -515,6 +542,8 @@ const endpointHandles = computed(() => {
 })
 
 onBeforeUnmount(() => {
+  if (dragFrame !== 0) cancelAnimationFrame(dragFrame)
+  pendingDragEvent = null
   window.removeEventListener('pointermove', onLayerPointerMove)
   window.removeEventListener('pointerup', onLayerPointerUp)
   window.removeEventListener('pointermove', onDragMove)

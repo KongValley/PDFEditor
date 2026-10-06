@@ -190,7 +190,8 @@ async function runPageOp(op: PageOp, options: { recordHistory?: boolean } = {}):
     return false
   }
   if (result.pageMap) applyPageMap(result.pageMap)
-  await reloadDocument(result.buffer)
+  // rotate:只重算被旋转页尺寸,表单字段页序不变可沿用(免全量 N 次 getPage)
+  await reloadDocument(result.buffer, op.kind === 'rotate' ? { rotatedPages: op.pages } : undefined)
   invalidateSearch()
   markDirty()
   if (recordHistory) {
@@ -533,15 +534,17 @@ export async function exportPagesAsImages(
   }
 }
 
-/** 打印单页 PNG dataURL:标准 2×(≈144dpi)、高清 300dpi */
+/** 打印单页 PNG 字节:标准 2×(≈144dpi)、高清 300dpi(Uint8Array 走结构化克隆,免 base64×1.33) */
 export async function renderPrintPageDataUrl(
   pageNumber: number,
   includeAnnotations: boolean,
   quality: PrintQuality
-): Promise<string | null> {
+): Promise<Uint8Array | null> {
   const scale = quality === 'high' ? 300 / 72 : 2
   const canvas = await renderPageToCanvas(pageNumber, includeAnnotations, scale)
-  return canvas ? canvas.toDataURL('image/png') : null
+  if (!canvas) return null
+  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'))
+  return blob ? new Uint8Array(await blob.arrayBuffer()) : null
 }
 
 /** 打印:逐页渲染并即传主进程(峰值只占一页),最后提交给系统打印对话框 */
@@ -574,12 +577,12 @@ export async function printPages(
     jobId = prepared.jobId
     for (const [i, index] of pages.entries()) {
       showToast(`正在渲染打印页面 ${i + 1} / ${pages.length}…`)
-      const dataUrl = await renderPrintPageDataUrl(index + 1, includeAnnotations, quality)
-      if (!dataUrl) throw new Error(`第 ${index + 1} 页渲染失败`)
+      const bytes = await renderPrintPageDataUrl(index + 1, includeAnnotations, quality)
+      if (!bytes) throw new Error(`第 ${index + 1} 页渲染失败`)
       const added = (await window.pdfAPI.invoke('app:printAddPage', {
         jobId,
         index: i,
-        dataUrl
+        bytes
       })) as { ok: boolean; error?: string }
       if (!added.ok) throw new Error(added.error ?? '打印页面写入失败')
     }
