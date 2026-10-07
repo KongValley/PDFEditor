@@ -38,6 +38,28 @@ export async function runSmoke(win: BrowserWindow): Promise<void> {
     console.log('[smoke] ' + text)
   }
 
+  /**
+   * 进程级度量(仅冒烟):每个 Electron 进程的工作集内存 + CPU 占用。
+   * CPU 用运行期间的峰值(settle 后采样必然接近 0,无法反映负载)。
+   */
+  const cpuPeak = new Map<string, number>()
+  const sampler = setInterval(() => {
+    for (const m of app.getAppMetrics()) {
+      const pct = m.cpu?.percentCPUUsage ?? 0
+      if (pct > (cpuPeak.get(m.type) ?? 0)) cpuPeak.set(m.type, pct)
+    }
+  }, 100)
+
+  const collectMetrics = (): Record<string, unknown> => ({
+    processes: app.getAppMetrics().map((m) => ({
+      type: m.type,
+      pid: m.pid,
+      rssMB: Math.round(((m.memory?.workingSetSize ?? 0) / 1024) * 10) / 10,
+      cpuPeakPercent: Math.round((cpuPeak.get(m.type) ?? 0) * 10) / 10
+    })),
+    mainCpu: process.getCPUUsage()
+  })
+
   try {
     if (!scriptPath) throw new Error('缺少 PDF_EDITOR_SMOKE_SCRIPT')
     const code = readFileSync(scriptPath, 'utf8')
@@ -55,11 +77,12 @@ export async function runSmoke(win: BrowserWindow): Promise<void> {
 
     await new Promise((resolve) => setTimeout(resolve, settleMs))
     await captureShot()
-    report({ ok: true, result })
+    report({ ok: true, result, metrics: collectMetrics() })
   } catch (err) {
     await captureShot()
-    report({ ok: false, error: err instanceof Error ? err.message : String(err) })
+    report({ ok: false, error: err instanceof Error ? err.message : String(err), metrics: collectMetrics() })
   } finally {
+    clearInterval(sampler)
     app.quit()
   }
 }
