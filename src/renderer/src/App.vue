@@ -9,13 +9,14 @@ import MergeDialog from './components/MergeDialog.vue'
 import SplitDialog from './components/SplitDialog.vue'
 import AboutDialog from './components/AboutDialog.vue'
 import PagesRangeDialog from './components/PagesRangeDialog.vue'
+import PageContextMenu from './components/PageContextMenu.vue'
 import ZoomControl from './components/ZoomControl.vue'
 import PdfViewer from './viewer/PdfViewer.vue'
-import { docState } from './store/document'
+import { docReady, docState } from './store/document'
 import { showToast, ui } from './store/ui'
 import { fitPage, fitWidth, scrollToPage, setViewMode, stepPage, zoomAt } from './store/viewer'
 import { goBack, goForward, readingState, useReading } from './store/reading'
-import { confirmDiscardChanges, openPath } from './lib/actions'
+import { confirmDiscardChanges, openFileDialog, openPath, rotatePages } from './lib/actions'
 import { useGlobalKeymap } from './lib/keymap'
 
 useGlobalKeymap()
@@ -25,6 +26,11 @@ function onPageCommit(event: Event): void {
   const value = Number((event.target as HTMLInputElement).value)
   if (Number.isFinite(value) && value >= 1) scrollToPage(Math.floor(value))
   ;(event.target as HTMLInputElement).value = ''
+}
+
+/** 状态栏旋转当前页(与快捷键 [ / ] 同源) */
+function rotateCurrent(delta: number): void {
+  void rotatePages([docState.currentPage - 1], delta)
 }
 
 const dragging = ref(false)
@@ -70,6 +76,43 @@ function onDrop(event: DragEvent): void {
 
 const fileName = computed(() => docState.filePath?.split(/[\\/]/).pop() ?? '')
 
+/* ---------- 窗口标题:文件名 + 未保存标记(任务栏可区分多份文档) ---------- */
+function syncTitle(): void {
+  const name = fileName.value
+  void window.pdfAPI.invoke('app:setTitle', name ? `${name}${docState.dirty ? ' *' : ''} — PDF 编辑器` : 'PDF 编辑器')
+}
+
+watch(() => [docState.filePath, docState.dirty] as const, syncTitle, { immediate: true })
+
+/* ---------- 空状态的最近文件(recent.json 本来就在写,只是从没被读过) ---------- */
+interface RecentItem {
+  path: string
+  page: number
+}
+const recentFiles = ref<RecentItem[]>([])
+
+function baseNameOf(path: string): string {
+  return path.split(/[\\/]/).pop() ?? path
+}
+
+async function loadRecentFiles(): Promise<void> {
+  try {
+    const list = (await window.pdfAPI.invoke('app:recentList')) as RecentItem[]
+    recentFiles.value = Array.isArray(list) ? list : []
+  } catch {
+    recentFiles.value = []
+  }
+}
+
+function openRecent(item: RecentItem): void {
+  if (!confirmDiscardChanges()) return
+  void openPath(item.path)
+}
+
+watch(docReady, (ready) => {
+  if (!ready) void loadRecentFiles()
+}, { immediate: true })
+
 // 脏标记同步主进程(关窗确认用)
 watch(
   () => docState.dirty,
@@ -86,19 +129,27 @@ watch(
     <SearchBar />
 
     <div class="main-row">
-      <ThumbnailsPanel v-if="docState.pdfDoc" />
-      <PdfViewer v-if="docState.pdfDoc" />
-      <RightPanel v-if="docState.pdfDoc" />
-      <div v-else class="empty-area">
-        <div class="empty-hint">{{ docState.loading ? '加载中…' : '打开或拖入 PDF 文件' }}</div>
+      <ThumbnailsPanel v-if="docReady && ui.showThumbnails" />
+      <PdfViewer v-if="docReady" />
+      <RightPanel v-if="docReady && ui.showRightPanel" />
+      <div v-if="!docReady" class="empty-area">
+        <div class="empty-hint">{{ docState.loading ? (docState.loadProgress ?? '加载中…') : '打开或拖入 PDF 文件' }}</div>
         <div v-if="docState.loadError" class="empty-error">{{ docState.loadError }}</div>
+        <button v-if="!docState.loading && !docState.loadError" class="empty-open" @click="openFileDialog">打开文件</button>
+        <div v-if="!docState.loading && !docState.loadError && recentFiles.length > 0" class="recent-list">
+          <div class="recent-title">最近打开</div>
+          <button v-for="item in recentFiles" :key="item.path" class="recent-item" :title="item.path" @click="openRecent(item)">
+            <span class="recent-name">{{ baseNameOf(item.path) }}</span>
+            <span v-if="item.page > 0" class="recent-page">第 {{ item.page }} 页</span>
+          </button>
+        </div>
       </div>
     </div>
 
     <footer class="status-bar">
       <span class="status-file" :title="docState.filePath ?? ''">{{ fileName || '未打开文件' }}</span>
 
-      <template v-if="docState.pdfDoc">
+      <template v-if="docReady">
         <button :disabled="!readingState.canBack" title="后退 (Alt+←)" @click="goBack">后退</button>
         <button :disabled="!readingState.canForward" title="前进 (Alt+→)" @click="goForward">前进</button>
 
@@ -114,6 +165,9 @@ watch(
         />
         <span class="page-total">/ {{ docState.pageCount }}</span>
         <button title="下一页" @click="stepPage(1)">下一页</button>
+
+        <button title="左旋当前页 ([)" @click="rotateCurrent(-90)">⟲</button>
+        <button title="右旋当前页 (])" @click="rotateCurrent(90)">⟳</button>
 
         <span class="status-divider"></span>
 
@@ -139,6 +193,7 @@ watch(
         <button title="适合宽度 (Ctrl+0)" @click="fitWidth">适合宽度</button>
       </template>
 
+      <span v-if="ui.busy" class="status-busy">{{ ui.busy }}</span>
       <span v-if="docState.dirty" class="status-dirty">未保存</span>
       <span v-if="docState.encrypted" class="status-warn">加密文档</span>
     </footer>
@@ -149,6 +204,7 @@ watch(
     <PagesRangeDialog />
     <SplitDialog />
     <AboutDialog />
+    <PageContextMenu />
     <div v-if="ui.toast" class="toast" :class="ui.toast.kind">{{ ui.toast.text }}</div>
   </div>
 </template>
@@ -174,6 +230,58 @@ watch(
   justify-content: center;
   gap: 12px;
   background: var(--viewer-bg);
+}
+
+/* 最近文件区在大屏上按左对齐成列表,避免长路径把布局撑开 */
+.recent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: min(560px, 70%);
+  margin-top: 8px;
+  max-height: 40%;
+  overflow: auto;
+}
+
+.recent-title {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 0 8px 4px;
+}
+
+.recent-item {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fg);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.recent-item:hover {
+  background: var(--surface);
+}
+
+.recent-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-page {
+  color: var(--muted);
+  font-size: 12px;
+  flex: none;
+}
+
+.empty-open {
+  margin-top: 4px;
 }
 
 .empty-hint {
@@ -240,6 +348,10 @@ watch(
 
 .status-dirty {
   color: #f0c36d;
+}
+
+.status-busy {
+  color: #8fd0ff;
 }
 
 .drop-mask {

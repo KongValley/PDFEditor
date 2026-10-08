@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 import { splitDialogState, submitSplitWork, type SplitRow } from '../store/ui'
-import { pickPdfFileEntries } from '../lib/actions'
+import { cancelSplit, pickPdfFileEntries } from '../lib/actions'
 import { parsePageRange, splitPageSegments } from '@shared/text'
 import type { SplitTask } from '@shared/types'
 
@@ -123,9 +123,40 @@ function confirm(): void {
 function cancel(): void {
   submitSplitWork(null)
 }
+
+/** 「停止」:主进程在下一个文件边界停下,已写出的文件保留 */
+function stopSplit(): void {
+  void cancelSplit()
+}
 </script>
 
 <template>
+  <!-- 拆分执行中:对话框已关闭,这里单独显示进度与「停止」 -->
+  <div v-if="splitDialogState.running" class="mask">
+    <div class="dialog running">
+      <div class="title">正在拆分</div>
+      <div class="running-text">
+        文件 {{ splitDialogState.progress?.processed ?? 0 }} / {{ splitDialogState.progress?.total ?? 0 }},已输出
+        {{ splitDialogState.progress?.outputs ?? 0 }} 个文件
+      </div>
+      <div class="running-bar">
+        <div
+          class="running-fill"
+          :style="{
+            width: `${
+              splitDialogState.progress?.total
+                ? Math.min(100, ((splitDialogState.progress?.processed ?? 0) / splitDialogState.progress.total) * 100)
+                : 0
+            }%`
+          }"
+        ></div>
+      </div>
+      <div class="actions">
+        <button @click="stopSplit">停止</button>
+      </div>
+    </div>
+  </div>
+
   <div v-if="splitDialogState.open" class="mask">
     <div ref="dialogEl" class="dialog" @keydown.esc="cancel">
       <div class="title">拆分页面</div>
@@ -232,6 +263,30 @@ function cancel(): void {
 
 .title {
   font-weight: 600;
+}
+
+/* 运行中的拆分遮罩:进度条 + 停止 */
+.dialog.running {
+  width: 380px;
+}
+
+.running-text {
+  margin: 12px 0 8px;
+  font-size: 13px;
+  color: var(--toolbar-fg-dim);
+}
+
+.running-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--panel-border);
+  overflow: hidden;
+}
+
+.running-fill {
+  height: 100%;
+  background: #4c8dff;
+  transition: none;
 }
 
 .grid-row {

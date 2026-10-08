@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 import { docState } from '../store/document'
+import { parsePageRange } from '@shared/text'
 import {
   pagesDialogState,
   submitPagesRange,
@@ -44,7 +45,12 @@ watch(
   }
 )
 
+/** 实时解析:无效时红框 + 禁用「确定」,不再等关窗后由调用方报错 */
+const parsed = computed(() => (value.value.trim() ? parsePageRange(value.value, docState.pageCount) : null))
+const invalid = computed(() => value.value.trim().length > 0 && parsed.value === null)
+
 function confirm(): void {
+  if (!parsed.value) return
   submitPagesRange({
     input: value.value,
     format: format.value,
@@ -62,16 +68,17 @@ function cancel(): void {
 
 <template>
   <div v-if="pagesDialogState.open" class="mask">
-    <div class="dialog">
+    <div class="dialog" @keydown.enter="confirm" @keydown.esc="cancel">
       <div class="title">{{ TITLES[pagesDialogState.action] }}</div>
       <div class="message">共 {{ docState.pageCount }} 页,输入页码范围</div>
       <input
         ref="inputEl"
         v-model="value"
+        :class="{ invalid }"
         placeholder="如 1-3,5,7-9"
-        @keydown.enter="confirm"
-        @keydown.esc="cancel"
       />
+      <div v-if="invalid" class="range-error">页码范围无效</div>
+      <div v-else-if="parsed" class="range-hint">将处理 {{ parsed.length }} 页</div>
       <template v-if="isExport">
         <div class="row">
           <span class="label">格式</span>
@@ -110,7 +117,7 @@ function cancel(): void {
       </label>
       <div class="actions">
         <button @click="cancel">取消</button>
-        <button class="primary" @click="confirm">确定</button>
+        <button class="primary" :disabled="!parsed" @click="confirm">确定</button>
       </div>
     </div>
   </div>
@@ -145,6 +152,21 @@ function cancel(): void {
 
 .message {
   color: var(--toolbar-fg-dim);
+}
+
+/* 实时校验:与拆分/合并对话框同一套红框语义 */
+input.invalid {
+  border-color: #e5534b;
+}
+
+.range-error {
+  color: #ffb4b4;
+  font-size: 12px;
+}
+
+.range-hint {
+  color: var(--toolbar-fg-dim);
+  font-size: 12px;
 }
 
 .row {

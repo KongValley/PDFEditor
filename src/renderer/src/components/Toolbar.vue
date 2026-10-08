@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { docState } from '../store/document'
+import { docReady } from '../store/document'
 import { setTool, ui, type Tool } from '../store/ui'
 import { canRedo, canUndo, removeSelected, redo, undo } from '../store/annotations'
 import { rotateView } from '../store/viewer'
@@ -21,7 +21,9 @@ const TOOLS: Array<{ tool: Tool; label: string; title: string }> = [
   { tool: 'image', label: '图片', title: '插入图片(PNG/JPEG)' }
 ]
 
-const hasDoc = computed(() => docState.pdfDoc !== null)
+const hasDoc = computed(() => docReady.value)
+/** 长操作(保存/拆分/合并/打印/导出)执行中:入口置灰,防止重复启动 */
+const busy = computed(() => ui.busy !== null)
 </script>
 
 <template>
@@ -29,10 +31,10 @@ const hasDoc = computed(() => docState.pdfDoc !== null)
     <div class="toolbar-row">
       <span class="app-title">PDF 编辑器</span>
       <button title="打开 PDF (Ctrl+O)" @click="openFileDialog">打开</button>
-      <button :disabled="!hasDoc" title="保存 PDF (Ctrl+S)" @click="saveDocument">保存</button>
-      <button :disabled="!hasDoc" title="另存为 (Ctrl+Shift+S)" @click="saveDocumentAs">另存为</button>
-      <button :disabled="!hasDoc" title="导出当前页为 PNG (Ctrl+E)" @click="exportCurrentPageImage">导出图片</button>
-      <button :disabled="!hasDoc" title="打印 (Ctrl+P)" @click="printPagesDialog">打印</button>
+      <button :disabled="!hasDoc || busy" title="保存 PDF (Ctrl+S)" @click="saveDocument">保存</button>
+      <button :disabled="!hasDoc || busy" title="另存为 (Ctrl+Shift+S)" @click="saveDocumentAs">另存为</button>
+      <button :disabled="!hasDoc || busy" title="导出当前页为 PNG (Ctrl+E)" @click="exportCurrentPageImage">导出图片</button>
+      <button :disabled="!hasDoc || busy" title="打印 (Ctrl+P)" @click="printPagesDialog">打印</button>
 
       <span class="divider"></span>
 
@@ -48,6 +50,20 @@ const hasDoc = computed(() => docState.pdfDoc !== null)
         搜索
       </button>
       <button title="关于 / 开源许可" @click="ui.aboutOpen = true">关于</button>
+      <button
+        :class="{ active: ui.showThumbnails }"
+        title="显示/隐藏缩略图栏 (Ctrl+B)"
+        @click="ui.showThumbnails = !ui.showThumbnails"
+      >
+        缩略图
+      </button>
+      <button
+        :class="{ active: ui.showRightPanel }"
+        title="显示/隐藏右侧面板 (Ctrl+Shift+B)"
+        @click="ui.showRightPanel = !ui.showRightPanel"
+      >
+        侧栏
+      </button>
     </div>
 
     <div class="toolbar-row">

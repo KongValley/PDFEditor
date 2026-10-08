@@ -10,6 +10,46 @@
   --accent: #4a8fe7;
   --danger: #e05c5c;
   --page-shadow: 0 2px 12px rgba(0, 0, 0, 0.45);
+  /* 滚动条:中灰半透明,在深色面板(#232733)与浅灰视图区(#4a4f5c)上都清晰 */
+  --scrollbar-thumb: rgba(255, 255, 255, 0.22);
+  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.4);
+}
+
+/* 滚动条(Electron 22 / Chromium 108 不支持 scrollbar-color,只能用 -webkit- 伪元素) */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  /* 透明边框 + padding-box 裁切:让滑块比轨道窄,视觉内缩 */
+  background: var(--scrollbar-thumb);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+  border-radius: 6px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:active {
+  background: var(--accent);
+  background-clip: padding-box;
+}
+
+/* 去掉两端的箭头按钮与两轴交角,避免默认样式在深色主题下突兀 */
+::-webkit-scrollbar-button {
+  display: none;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 * {

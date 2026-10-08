@@ -14,10 +14,13 @@ import {
   rotatePages,
   splitPdfs
 } from '../lib/actions'
-import { requestPagesRange, showToast, type PagesAction } from '../store/ui'
+import { requestPagesRange, showToast, ui, type PagesAction } from '../store/ui'
 import { parsePageRange } from '@shared/text'
 
 const THUMB_WIDTH = 84
+
+/** 长操作(保存/拆分/合并/导出)执行中:页面操作入口置灰,防止并发两批任务 */
+const busy = computed(() => ui.busy !== null)
 
 const containerEl = ref<HTMLElement | null>(null)
 const visibleThumbs = reactive(new Set<number>())
@@ -43,6 +46,11 @@ function toggleSelect(page: number): void {
   if (next.has(page)) next.delete(page)
   else next.add(page)
   selected.value = next
+}
+
+/** 右键缩略图:打开页面菜单(位置为视口坐标) */
+function openThumbMenu(page: number, event: MouseEvent): void {
+  ui.pageMenu = { open: true, page, x: event.clientX, y: event.clientY }
 }
 
 function clearSelection(): void {
@@ -119,24 +127,76 @@ async function onSplit(): Promise<void> {
 /* --------------------------- 拖拽排序 --------------------------- */
 
 let dragPage: number | null = null
+/** 拖动中的源页号(1-based);null = 未在拖动 */
+const draggingPage = ref<number | null>(null)
+/** 落点提示:{ page, after } | null */
+const dropHint = ref<{ page: number; after: boolean } | null>(null)
+
+/** 拖动到列表上/下边缘时的自动滚动(rAF 循环,一次只有一个) */
+let autoScrollRaf = 0
+/** 最新指针 Y(视口坐标);rAF 循环每帧读取 */
+let autoScrollY = 0
+/** 每帧最大滚动步长(px);按指针到边缘的距离线性缩放 */
+const AUTO_SCROLL_MAX_STEP = 14
+/** 触发自动滚动的边缘感应带宽度(px) */
+const AUTO_SCROLL_EDGE = 40
+
+function stopAutoScroll(): void {
+  if (autoScrollRaf) cancelAnimationFrame(autoScrollRaf)
+  autoScrollRaf = 0
+}
+
+function autoScrollStep(): void {
+  const root = containerEl.value
+  autoScrollRaf = 0
+  if (!root) return
+  const rect = root.getBoundingClientRect()
+  const above = rect.top + AUTO_SCROLL_EDGE - autoScrollY // >0:进入上边缘带
+  const below = autoScrollY - (rect.bottom - AUTO_SCROLL_EDGE) // >0:进入下边缘带
+  if (above <= 0 && below <= 0) return
+  const ratio = Math.min(Math.max(above, below) / AUTO_SCROLL_EDGE, 1)
+  root.scrollTop += Math.ceil(ratio * AUTO_SCROLL_MAX_STEP) * (above > 0 ? -1 : 1)
+  autoScrollRaf = requestAnimationFrame(autoScrollStep)
+}
+
+/** 落点是否在目标项下半区(dragover 与 drop 共用,避免判定分叉) */
+function isAfterMidpoint(el: HTMLElement, clientY: number): boolean {
+  const rect = el.getBoundingClientRect()
+  return clientY - rect.top > rect.height / 2
+}
 
 function onThumbDragStart(page: number, event: DragEvent): void {
   dragPage = page
+  draggingPage.value = page
   event.dataTransfer?.setData('text/plain', String(page))
   if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move'
 }
 
 function onThumbDragEnd(): void {
   dragPage = null
+  draggingPage.value = null
+  dropHint.value = null
+  stopAutoScroll()
+}
+
+function onThumbDragOver(target: number, event: DragEvent): void {
+  if (dragPage === null) return
+  const el = event.currentTarget as HTMLElement
+  dropHint.value = dragPage === target ? null : { page: target, after: isAfterMidpoint(el, event.clientY) }
+  autoScrollY = event.clientY
+  if (!autoScrollRaf) autoScrollRaf = requestAnimationFrame(autoScrollStep)
 }
 
 async function onThumbDrop(target: number, event: DragEvent): Promise<void> {
   if (dragPage === null) return
   const el = event.currentTarget as HTMLElement
-  const after = event.clientY - el.getBoundingClientRect().top > el.clientHeight / 2
+  const after = isAfterMidpoint(el, event.clientY)
   const from = dragPage - 1
   const to = dropTargetIndex(dragPage, target, after)
   dragPage = null
+  draggingPage.value = null
+  dropHint.value = null
+  stopAutoScroll()
   if (to === null) return
   await movePage(from, to)
   scrollToPage(to + 1)
@@ -174,6 +234,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   observer?.disconnect()
   resizeObserver?.disconnect()
+  stopAutoScroll()
 })
 
 watch(
@@ -190,14 +251,14 @@ watch(
 <template>
   <aside class="thumbs">
     <div class="pages-toolbar">
-      <button title="按页码范围删除页面" @click="onRangeAction('delete')">删除</button>
-      <button title="按页码范围提取为新 PDF" @click="onRangeAction('extract')">提取</button>
-      <button title="批量拆分 PDF 页面" @click="onSplit">拆分</button>
-      <button title="按范围导出(PDF / PNG多图 / 长图)" @click="onRangeAction('export')">导出</button>
+      <button :disabled="busy" title="按页码范围删除页面" @click="onRangeAction('delete')">删除</button>
+      <button :disabled="busy" title="按页码范围提取为新 PDF" @click="onRangeAction('extract')">提取</button>
+      <button :disabled="busy" title="批量拆分 PDF 页面" @click="onSplit">拆分</button>
+      <button :disabled="busy" title="按范围导出(PDF / PNG多图 / 长图)" @click="onRangeAction('export')">导出</button>
       <button title="左旋 90°(选中页或当前页)" @click="onRotate(-90)">左旋</button>
       <button title="右旋 90°(选中页或当前页)" @click="onRotate(90)">右旋</button>
       <button title="在当前页之后插入空白页" @click="onInsertBlank">空白页</button>
-      <button title="合并其他 PDF(可指定页码,另存为新文件)" @click="onMerge">合并</button>
+      <button :disabled="busy" title="合并其他 PDF(可指定页码,另存为新文件)" @click="onMerge">合并</button>
     </div>
     <div ref="containerEl" class="thumbs-scroll">
       <div class="thumbs-inner">
@@ -205,14 +266,21 @@ watch(
           v-for="item in items"
           :key="`${docState.docId}-${item.page}`"
           class="thumb"
-          :class="{ current: item.page === docState.currentPage, selected: selected.has(item.page) }"
+          :class="{
+            current: item.page === docState.currentPage,
+            selected: selected.has(item.page),
+            dragging: draggingPage === item.page,
+            'drop-before': dropHint?.page === item.page && dropHint.after === false,
+            'drop-after': dropHint?.page === item.page && dropHint.after === true
+          }"
           :data-thumb="item.page"
           draggable="true"
           @click="scrollToPage(item.page)"
           @dragstart="onThumbDragStart(item.page, $event)"
           @dragend="onThumbDragEnd"
-          @dragover.prevent
+          @dragover.prevent="onThumbDragOver(item.page, $event)"
           @drop.prevent="onThumbDrop(item.page, $event)"
+          @contextmenu.prevent="openThumbMenu(item.page, $event)"
         >
           <div class="thumb-box" :style="{ width: item.w + 'px', height: item.h + 'px' }">
             <PageThumb
@@ -298,6 +366,20 @@ watch(
 .thumb.selected {
   border-color: #f0c36d;
   background: var(--toolbar-hover);
+}
+
+/* 拖动中的源项:变淡以表明"正在搬运" */
+.thumb.dragging {
+  opacity: 0.4;
+}
+
+/* 插入位置指示线:用 inset box-shadow 而非 border,避免改变盒尺寸导致布局抖动 */
+.thumb.drop-before {
+  box-shadow: inset 0 2px 0 0 var(--accent);
+}
+
+.thumb.drop-after {
+  box-shadow: inset 0 -2px 0 0 var(--accent);
 }
 
 .thumb-box {

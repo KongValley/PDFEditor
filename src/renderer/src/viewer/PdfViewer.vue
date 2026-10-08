@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import PageCanvas from './PageCanvas.vue'
-import { docState, pageDisplaySize, pinViewerPages } from '../store/document'
+import { docReady, docState, pageDisplaySize, pinViewerPages } from '../store/document'
 import {
   PAGE_GAP,
   attachContainer,
@@ -28,6 +28,8 @@ const spreadRows = computed(() =>
 let observer: IntersectionObserver | null = null
 let resizeObserver: ResizeObserver | null = null
 let rafPending = false
+/** seedVisiblePages 的布局未就绪重试计数(避免持续重排时无限 rAF) */
+let seedRetries = 0
 
 /* --------------------------- 空格/中键拖拽平移 --------------------------- */
 
@@ -126,7 +128,9 @@ function setupObserver(): void {
       }
       pinViewerPages(visiblePages)
     },
-    { root, rootMargin: '200px 0px' }
+    // 双页模式一屏就是 2 页,200px 缓冲会把 6 页拉进可见集合 → 渲染队列堆积;
+    // 60px 只保留一点预读余量,模式切换时 refreshVisiblePages → setupObserver 会重建。
+    { root, rootMargin: `${docState.viewMode === 'two' ? 60 : 200}px 0px` }
   )
   for (const el of root.querySelectorAll<HTMLElement>('[data-page]')) observer.observe(el)
 }
@@ -139,6 +143,17 @@ function setupObserver(): void {
 function seedVisiblePages(): void {
   const root = containerEl.value
   if (!root || docState.pageBoxes.length !== docState.pageCount || docState.pageCount === 0) return
+  // 布局未就绪(页高为 0)时几何播种会漏标页 → 该页 data-visible=0 → PageCanvas 走 clearPage
+  // → 白页。与 setupObserver 同策略:下一帧重试,最多 5 次(避免持续重排时无限 rAF 循环)。
+  const sample = root.querySelector<HTMLElement>('[data-page]')
+  if (sample && sample.getBoundingClientRect().height === 0) {
+    if (seedRetries < 5) {
+      seedRetries++
+      requestAnimationFrame(() => seedVisiblePages())
+    }
+    return
+  }
+  seedRetries = 0
   if (docState.viewMode === 'single') {
     visiblePages.add(docState.currentPage)
     pinViewerPages(visiblePages)
@@ -163,6 +178,7 @@ function seedVisiblePages(): void {
 function refreshVisiblePages(): void {
   visiblePages.clear()
   pinViewerPages(visiblePages)
+  seedRetries = 0
   setupObserver()
   seedVisiblePages()
 }
@@ -175,11 +191,21 @@ onMounted(() => {
   pointerDownListener?.addEventListener('pointerdown', onPanPointerDown, true)
   window.addEventListener('keydown', onSpaceDown)
   window.addEventListener('keyup', onSpaceUp)
-  // 首次布局完成/窗口尺寸变化时重建观察器:否则初始 0 高度会让所有页被判为可见
+  // 首次布局完成/窗口尺寸变化时重新播种可见页。
+  // 这里刻意不用 refreshVisiblePages:清空可见页集会让每个 PageCanvas 走 clearPage(),
+  // 拖窗口大边时每个 resize 帧都全量重新光栅化(页面白闪 + 队列排不空)。
+  // 保留集合,让 IntersectionObserver 在 resize 后自行重算 isIntersecting 校正。
   const root = containerEl.value
   if (root && typeof ResizeObserver !== 'undefined') {
-    resizeObserver = new ResizeObserver(refreshVisiblePages)
+    resizeObserver = new ResizeObserver(seedVisiblePages)
     resizeObserver.observe(root)
+  }
+  // 组件只在几何就绪(docReady)后才挂载,所以 docId / pageBoxes 的 watcher 在挂载时
+  // 已经"错过"了文档打开那一刻,不会替我们做默认缩放 —— 这里补上,否则新文档会以
+  // 100% 而不是"适应宽度"打开(大纲跳转 / 页码定位的坐标也随之偏移)。
+  if (docReady.value) {
+    fitWidth()
+    void nextTick(() => seedVisiblePages())
   }
 })
 
@@ -198,14 +224,22 @@ onBeforeUnmount(() => {
 
 watch(
   () => [docState.docId, docState.pageBoxes.length] as const,
-  async () => {
+  async ([docId, pageCount], [prevDocId, prevPageCount]) => {
     visiblePages.clear()
+    pinViewerPages(visiblePages)
+    // 仅当文档身份或页数变化(真换文档 / 增删页)才归零:
+    // 页面移动等"原地重建"不再把视图甩回顶部(这是"闪几下"的直接来源)
+    const identityChanged = docId !== prevDocId || pageCount !== prevPageCount
     await nextTick()
-    // 换文档时滚动位置必须归零:旧文档的 scrollTop 会让新文档首页落在视口外,首页永不渲染
-    if (containerEl.value) containerEl.value.scrollTop = 0
-    setupObserver()
-    if (docState.docId && docState.pageBoxes.length === docState.pageCount) fitWidth()
-    await nextTick()
+    if (identityChanged) {
+      if (containerEl.value) containerEl.value.scrollTop = 0
+      setupObserver()
+      if (docState.docId && docState.pageBoxes.length === docState.pageCount) fitWidth()
+      await nextTick()
+    } else {
+      setupObserver()
+    }
+    // 两种分支都重新播种可见页(内部会重建几何缓存)
     seedVisiblePages()
   }
 )

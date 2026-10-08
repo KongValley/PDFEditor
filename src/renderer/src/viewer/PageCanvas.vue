@@ -6,7 +6,7 @@ import { docState, getPage, pageDisplaySize } from '../store/document'
 import { searchState } from '../store/search'
 import { addAnnotation, addAnnotations, selectAnnotation } from '../store/annotations'
 import { ui } from '../store/ui'
-import { renderWatchdog, zoomWheelAt } from '../store/viewer'
+import { acquireRenderSlot, releaseRenderSlot, renderWatchdog, zoomWheelAt } from '../store/viewer'
 import { getPageViewport, pdfjs } from '../lib/pdfjs'
 import { pdfRectToScreen, rectFromPoints, screenPointToPdf, type ScreenRect } from '../lib/geo'
 import { TOOL_DEFAULTS, withIdentity } from '../lib/annots'
@@ -14,6 +14,14 @@ import AnnotationLayer from './AnnotationLayer.vue'
 import FormOverlay from './FormOverlay.vue'
 
 const props = defineProps<{ pageNumber: number; visible: boolean }>()
+
+/** 离屏页不画投影:软件光栅下每帧混合 N 个模糊投影是滚动卡顿的主因 */
+const shadowClass = computed(() => ({ 'page-noshadow': !props.visible }))
+
+/** 右键该页:打开页面菜单(位置为视口坐标) */
+function openPageMenu(event: MouseEvent): void {
+  ui.pageMenu = { open: true, page: props.pageNumber, x: event.clientX, y: event.clientY }
+}
 
 const wrapEl = ref<HTMLElement | null>(null)
 const canvasEl = ref<HTMLCanvasElement | null>(null)
@@ -27,6 +35,11 @@ let seq = 0
 
 /** 缩放去抖计时器(标志位在 store/viewer.ts 的 zoomWheelAt) */
 let scaleTimer = 0
+
+/** 渲染超时后的最大重试次数(不含首次);慢机/大位图下排队时间会超过看门狗预算 */
+const RENDER_MAX_RETRY = 3
+/** 重试前的退避基数(ms):第 n 次重试等待 n * 该值,给 worker 队列排空的时间 */
+const RENDER_RETRY_BACKOFF_MS = 400
 
 const size = computed(() => pageDisplaySize(props.pageNumber - 1))
 
@@ -83,6 +96,32 @@ function settleWithin<T>(promise: Promise<T>, ms: number): Promise<T | 'timeout'
   })
 }
 
+/**
+ * 超时后的重试:先退避再重来,给已拥塞的 worker 队列排空的时间。
+ *
+ * 关键:超时会取消渲染任务,pdf.js 此时已经把画布改成目标尺寸但还没画内容 —— 留下一块
+ * "有尺寸但全白"的画布。所以只要该页仍然可见就必须保证最终画出内容:被更新的渲染
+ * 取代(seq 变化)时,只有当那一轮已经把内容画出来才交给它,否则自己补一次。
+ * 连续 RENDER_MAX_RETRY 次仍超时才放弃,并把画布归零(不留白页)。
+ */
+async function retryAfterTimeout(attempt: number, mySeq: number): Promise<void> {
+  if (!props.visible) return
+  // 已有更新的渲染接管,且它画出了内容 → 本轮无需再画
+  if (mySeq !== seq && rendered.value) return
+  if (attempt >= RENDER_MAX_RETRY) {
+    console.warn(`[render] 第 ${props.pageNumber} 页连续 ${RENDER_MAX_RETRY + 1} 次超时,标记为未渲染`)
+    const canvas = canvasEl.value
+    if (canvas) {
+      canvas.width = 0
+      canvas.height = 0
+    }
+    return
+  }
+  await new Promise((resolve) => setTimeout(resolve, (attempt + 1) * RENDER_RETRY_BACKOFF_MS))
+  if (!props.visible) return
+  return renderPage(attempt + 1)
+}
+
 async function renderPage(attempt = 0): Promise<void> {
   const canvas = canvasEl.value
   if (!canvas || !props.visible) return
@@ -91,8 +130,7 @@ async function renderPage(attempt = 0): Promise<void> {
   if (page === 'timeout') {
     renderWatchdog.timeouts++
     console.warn(`[render] 第 ${props.pageNumber} 页 getPage 超时(${renderWatchdog.timeoutMs}ms)`)
-    if (attempt === 0 && mySeq === seq && props.visible) return renderPage(1)
-    return
+    return retryAfterTimeout(attempt, mySeq)
   }
   if (mySeq !== seq) return
 
@@ -106,40 +144,54 @@ async function renderPage(attempt = 0): Promise<void> {
   canvas.style.width = `${vp.width}px`
   canvas.style.height = `${vp.height}px`
 
-  renderTask?.cancel()
-  renderTask = page.render({
-    canvasContext: ctx,
-    viewport: vp,
-    transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : undefined,
-    // 批注由本应用 SVG 覆盖层绘制:pdf.js 默认会把 /Annots 画进位图 → 同屏两遍
-    annotationMode: pdfjs.AnnotationMode.DISABLE
-  })
-  const stalled = renderWatchdog.stallNext
-  if (stalled) renderWatchdog.stallNext = false
-  if (stalled) void renderTask.promise.catch(() => {}) // 冒烟模拟停摆:真实结果忽略,避免未处理拒绝
-  let outcome: 'ok' | 'timeout'
+  await acquireRenderSlot()
+  let timedOut = false
   try {
-    const result = await settleWithin(
-      stalled ? new Promise<never>(() => {}) : renderTask.promise,
-      renderWatchdog.timeoutMs
-    )
-    outcome = result === 'timeout' ? 'timeout' : 'ok'
-  } catch (err) {
-    if ((err as Error)?.name !== 'RenderingCancelledException') console.warn('页面渲染失败:', err)
-    return
+    // 排队期间可能已滚出视口或被新的渲染请求取代:直接释放槽,不做无用渲染
+    if (!props.visible || mySeq !== seq) return
+
+    renderTask?.cancel()
+    renderTask = page.render({
+      canvasContext: ctx,
+      viewport: vp,
+      transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : undefined,
+      // 批注由本应用 SVG 覆盖层绘制:pdf.js 默认会把 /Annots 画进位图 → 同屏两遍
+      annotationMode: pdfjs.AnnotationMode.DISABLE
+    })
+    const stalled = renderWatchdog.stallNext
+    if (stalled) renderWatchdog.stallNext = false
+    if (stalled) void renderTask.promise.catch(() => {}) // 冒烟模拟停摆:真实结果忽略,避免未处理拒绝
+    let outcome: 'ok' | 'timeout'
+    try {
+      const result = await settleWithin(
+        stalled ? new Promise<never>(() => {}) : renderTask.promise,
+        renderWatchdog.timeoutMs
+      )
+      outcome = result === 'timeout' ? 'timeout' : 'ok'
+    } catch (err) {
+      if ((err as Error)?.name !== 'RenderingCancelledException') console.warn('页面渲染失败:', err)
+      return
+    }
+    if (outcome === 'timeout') {
+      renderWatchdog.timeouts++
+      console.warn(`[render] 第 ${props.pageNumber} 页渲染超时(${renderWatchdog.timeoutMs}ms),取消并重试`)
+      renderTask.cancel()
+      // 只置标记,不在这里 return:return 会连同 finally 一起结束函数,走不到下面的重试。
+      // 重试必须等渲染槽归还之后再排队,否则会带着旧槽再申请一个 —— 多页同时超时会互相等死。
+      timedOut = true
+    } else {
+      if (mySeq !== seq) return
+      viewport.value = vp
+      rendered.value = true
+      renderWatchdog.renders++
+      // 文本层与光栅化共用同一个 pdf.js worker:在渲染槽内 await 会让下一页的位图排在
+      // 文本抽取之后(表现为"页面出现顺序错乱")。文本层不占槽,clearPage() 会 cancel 它。
+      void renderTextLayer(page, vp)
+    }
+  } finally {
+    releaseRenderSlot()
   }
-  if (outcome === 'timeout') {
-    renderWatchdog.timeouts++
-    console.warn(`[render] 第 ${props.pageNumber} 页渲染超时(${renderWatchdog.timeoutMs}ms),取消并重试`)
-    renderTask.cancel()
-    if (attempt === 0 && mySeq === seq && props.visible) return renderPage(1)
-    return
-  }
-  if (mySeq !== seq) return
-  viewport.value = vp
-  rendered.value = true
-  renderWatchdog.renders++
-  await renderTextLayer(page, vp)
+  if (timedOut) return retryAfterTimeout(attempt, mySeq)
 }
 
 function clearPage(): void {
@@ -303,11 +355,13 @@ defineExpose({ rendered, viewport })
   <div
     ref="wrapEl"
     class="page-wrap"
+    :class="shadowClass"
     :data-page="pageNumber"
     :data-visible="visible ? '1' : '0'"
     :style="{ width: size.w + 'px', height: size.h + 'px' }"
     @pointerdown="onPagePointerDown"
     @pointerup="onPagePointerUp"
+    @contextmenu.prevent="openPageMenu"
   >
     <canvas ref="canvasEl" class="page-canvas"></canvas>
     <div ref="textLayerEl" class="textLayer"></div>
@@ -341,6 +395,11 @@ defineExpose({ rendered, viewport })
   flex: none;
   /* 离屏页跳过子树布局/绘制;尺寸由内联 width/height 显式给出,滚动几何不受影响 */
   content-visibility: auto;
+}
+
+/* 离屏页不绘制投影:content-visibility 只跳过子树,元素自身的白底 + 阴影仍会被混合 */
+.page-wrap.page-noshadow {
+  box-shadow: none;
 }
 
 .page-canvas {
