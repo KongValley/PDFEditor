@@ -21,7 +21,9 @@ jobs:
 
       - uses: actions/setup-node@v5
         with:
-          node-version: 20
+          # Node 20 已于 2026-04 结束维护;与本地开发环境保持一致(本机 v24 验证过
+          # 构建与冒烟)。仓库无原生依赖(运行时 dependencies 为空),不存在 ABI 风险。
+          node-version: 24
           cache: npm
 
       - run: npm ci
