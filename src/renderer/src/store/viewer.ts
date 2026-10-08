@@ -279,6 +279,27 @@ export function setViewMode(mode: ViewMode): void {
   })
 }
 
+/**
+ * 容器首次布局完成(width>0)后补做一次适应宽度。
+ * 挂载时机早于布局时 fitWidth 会因 avail<=0 直接返回,导致新文档停在 100%;
+ * 用 needFitOnResize 标记避免覆盖用户的手动缩放。
+ */
+let needFitOnResize = false
+
+export function requestInitialFit(): void {
+  needFitOnResize = true
+  applyPendingFit()
+}
+
+/** 视口尺寸变化时调用:仅在"还没成功做过初始适应"且用户未手动缩放时重算 */
+export function applyPendingFit(): void {
+  if (!needFitOnResize || !container) return
+  if (fitMode !== 'none' && fitMode !== 'width') return
+  if (container.clientWidth <= 0) return
+  needFitOnResize = false
+  fitWidth()
+}
+
 /** 上一页/下一页:双页模式按整行步进(scrollToPage 自带 clamp) */
 export function stepPage(dir: 1 | -1): void {
   scrollToPage(docState.currentPage + dir * (docState.viewMode === 'two' ? 2 : 1))

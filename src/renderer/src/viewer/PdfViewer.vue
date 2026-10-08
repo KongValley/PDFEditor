@@ -4,12 +4,14 @@ import PageCanvas from './PageCanvas.vue'
 import { docReady, docState, pageDisplaySize, pinViewerPages } from '../store/document'
 import {
   PAGE_GAP,
+  applyPendingFit,
   attachContainer,
   computeCurrentPage,
   fitWidth,
   floorIndex,
   pageTopsOf,
   rebuildLayoutCache,
+  requestInitialFit,
   rowCount,
   rowHeight,
   rowPages,
@@ -197,14 +199,19 @@ onMounted(() => {
   // 保留集合,让 IntersectionObserver 在 resize 后自行重算 isIntersecting 校正。
   const root = containerEl.value
   if (root && typeof ResizeObserver !== 'undefined') {
-    resizeObserver = new ResizeObserver(seedVisiblePages)
+    // 尺寸变化时除播种外,还要补做挂载时可能因宽度为 0 而失败的初始适应宽度
+    resizeObserver = new ResizeObserver(() => {
+      seedVisiblePages()
+      applyPendingFit()
+    })
     resizeObserver.observe(root)
   }
   // 组件只在几何就绪(docReady)后才挂载,所以 docId / pageBoxes 的 watcher 在挂载时
   // 已经"错过"了文档打开那一刻,不会替我们做默认缩放 —— 这里补上,否则新文档会以
   // 100% 而不是"适应宽度"打开(大纲跳转 / 页码定位的坐标也随之偏移)。
+  // requestInitialFit 会在宽度就绪后由上面的 ResizeObserver 补做。
   if (docReady.value) {
-    fitWidth()
+    requestInitialFit()
     void nextTick(() => seedVisiblePages())
   }
 })
