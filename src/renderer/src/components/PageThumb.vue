@@ -32,8 +32,9 @@ async function renderThumb(): Promise<void> {
   try {
     const page = await getPage(props.pageNumber)
     if (mySeq !== seq) return
-    const view = page.view
-    const scale = props.thumbWidth / Math.max(view[2] - view[0], 1)
+    // 缩放比按「旋转后的显示宽度」算:用未旋转的原始宽度会让 /Rotate 90 的页缩略图偏小
+    const base = getPageViewport(page, 1, docState.rotationView).viewport
+    const scale = props.thumbWidth / Math.max(base.width, 1)
     const { viewport } = getPageViewport(page, scale, docState.rotationView)
     canvas.width = Math.floor(viewport.width)
     canvas.height = Math.floor(viewport.height)
@@ -55,12 +56,14 @@ async function renderThumb(): Promise<void> {
 }
 
 watch(
+  // geometryVersion:页面旋转/增删后缩略图内容变了但 pageBoxes 长度不变,没有它不重画
   [
     () => props.visible,
     () => props.thumbWidth,
     () => props.pageNumber,
     () => docState.rotationView,
-    () => docState.docId
+    () => docState.docId,
+    () => docState.geometryVersion
   ],
   () => {
     void renderThumb()

@@ -61,6 +61,8 @@ interface DocState {
   loadError: string | null
   pageCount: number
   pageBoxes: PageBox[]
+  /** pageBoxes 内容变更计数(旋转/增删/移动/重开):位图重绘的触发信号 */
+  geometryVersion: number
   currentPage: number
   scale: number
   rotationView: number
@@ -89,6 +91,7 @@ export const docState = reactive<DocState>({
   loadError: null,
   pageCount: 0,
   pageBoxes: [],
+  geometryVersion: 0,
   currentPage: 1,
   scale: 1,
   rotationView: 0,
@@ -315,6 +318,7 @@ export async function openByPath(path: string, options: OpenOptions = {}): Promi
       docState.loadProgress = `正在读取页面信息 ${done}/${total}`
     })
     docState.pageBoxes = boxes
+    docState.geometryVersion++
 
     // 表单字段:sidecar 值优先,其次用文档中的现有值作为初始值
     docState.formFields = await discoverFormFields(pdfDoc)
@@ -379,6 +383,7 @@ export async function reloadDocument(
 
   if (nextBoxes && nextBoxes.length === pdfDoc.numPages) {
     docState.pageBoxes = nextBoxes
+    docState.geometryVersion++
     // 增量分支不重建 pdf.js 文档内容,但页面重排后表单控件的页号必须跟着迁移,
     // 否则 FormOverlay 会把字段画到错误的页上(rotate 分支页序不变,不需要迁)
     const map = incremental?.pageMap ?? []
@@ -387,6 +392,7 @@ export async function reloadDocument(
       .filter((field) => field.page >= 0)
   } else {
     docState.pageBoxes = await fillPageBoxes(pdfDoc)
+    docState.geometryVersion++
     // 页面/合并操作会改变表单控件集合:重新发现,否则合并进来的字段不显示也无法填写
     docState.formFields = await discoverFormFields(pdfDoc)
   }

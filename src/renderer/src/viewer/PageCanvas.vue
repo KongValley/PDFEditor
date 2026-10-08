@@ -314,7 +314,15 @@ function onPagePointerUp(event: PointerEvent): void {
 }
 
 watch(
-  [() => props.visible, () => docState.scale, () => docState.rotationView, () => props.pageNumber],
+  // geometryVersion:页面旋转/增删/移动后 pageBoxes 内容变了但长度不变,
+  // 没有它位图会停留在旧朝向(旋转后"看起来没转")
+  [
+    () => props.visible,
+    () => docState.scale,
+    () => docState.rotationView,
+    () => props.pageNumber,
+    () => docState.geometryVersion
+  ],
   () => {
     if (!props.visible) {
       clearPage()
