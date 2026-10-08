@@ -60,7 +60,7 @@
       }
     ],
     "win": {
-      "target": ["nsis", "portable"],
+      "target": ["nsis", "zip"],
       "icon": "resources/icon.png"
     },
     "nsis": {

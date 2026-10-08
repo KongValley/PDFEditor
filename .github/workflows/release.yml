@@ -35,9 +35,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create $env:GITHUB_REF_NAME --title $env:GITHUB_REF_NAME --generate-notes release/Win7-32位/*.exe release/Win10-64位/*.exe release/Win10-32位/*.exe release/Win7-64位/*.exe
+          # 绿色版为 zip,安装包为 exe,两类产物都要上传
+          $assets = @(Get-ChildItem -Path release -Recurse -File -Include *.exe,*.zip | ForEach-Object { $_.FullName })
+          if ($assets.Count -eq 0) { Write-Error '未找到任何安装包/绿色版产物'; exit 1 }
+          gh release create $env:GITHUB_REF_NAME --title $env:GITHUB_REF_NAME --generate-notes @assets
           if ($LASTEXITCODE -ne 0) {
             # tag 已存在 Release(重复触发/重跑):改为增量上传
-            gh release upload $env:GITHUB_REF_NAME release/Win7-32位/*.exe release/Win10-64位/*.exe release/Win10-32位/*.exe release/Win7-64位/*.exe --clobber
+            gh release upload $env:GITHUB_REF_NAME @assets --clobber
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
