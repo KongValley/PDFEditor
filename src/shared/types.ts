@@ -259,7 +259,13 @@ export interface SplitTaskResult {
 /** 页面操作指令(main 侧 docops 执行) */
 export type PageOp =
   | { kind: 'delete'; pages: number[] }
-  | { kind: 'rotate'; pages: number[]; delta: number }
+  | {
+      kind: 'rotate'
+      pages: number[]
+      delta: number
+      /** 逐页增量(0-based 页序 → 度数),给出时覆盖 delta;用于一次操作里混合 90/180/270 */
+      deltas?: Record<number, number>
+    }
   | { kind: 'insertBlank'; afterIndex: number }
   | { kind: 'move'; from: number; to: number }
   | { kind: 'append'; files: AppendFileSpec[] }

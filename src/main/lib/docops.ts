@@ -32,9 +32,10 @@ export async function applyPageOp(docId: string, op: PageOp): Promise<PageOpResu
       break
     }
     case 'rotate': {
-      const delta = op.delta
       for (const index of op.pages) {
         if (index < 0 || index >= oldCount) continue
+        const delta = op.deltas?.[index] ?? op.delta
+        if (delta % 360 === 0) continue // 无实际旋转:不产生无效写入
         const page = doc.getPage(index)
         const current = page.getRotation().angle
         page.setRotation(degrees((((current + delta) % 360) + 360) % 360))
