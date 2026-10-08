@@ -82,7 +82,7 @@ export async function commitPrintJob(payload: { jobId: string; dryRun?: boolean 
       'img { display: block; width: 100%; page-break-after: always; }',
       'img:last-child { page-break-after: auto; }',
       '</style></head><body>',
-      files.map((file) => `<img src="${pathToFileURL(file).href}">`).join(''),
+      files.map((file) => `<img src="${pathToFileURL(file).href}" loading="eager">`).join(''),
       '</body></html>'
     ].join('')
     if (payload.dryRun) return { ok: true, pageCount: files.length, html }
@@ -91,9 +91,9 @@ export async function commitPrintJob(payload: { jobId: string; dryRun?: boolean 
     const win = new BrowserWindow({ show: false, width: 800, height: 600, webPreferences: { sandbox: true } })
     try {
       await win.loadFile(htmlPath)
-      // 图片解码完成前打印会出空白页
+      // 仅等首张解码完成即可开始打印:全量等待会在无 GPU 机上叠加全部图片的解码峰值
       await win.webContents.executeJavaScript(
-        'Promise.all([...document.images].map((img) => img.complete ? 1 : new Promise((r) => { img.onload = r; img.onerror = r })))'
+        'new Promise((resolve) => { const first = document.images[0]; const done = () => resolve(1); if (!first || first.complete) return done(); first.onload = done; first.onerror = done })'
       )
       const result = await new Promise<{ success: boolean; reason: string }>((resolve) => {
         // 作业名由打印 HTML 的 <title> 提供(Electron 22 的 print 选项无 jobName)

@@ -208,6 +208,17 @@ export interface OpenResult {
   fileSize?: number
 }
 
+/** 运行时机器画像(供渲染层按硬件调整上限) */
+export interface RuntimeInfo {
+  smoke: boolean
+  version: string
+  /** 'ia32' | 'x64' | 'arm64' */
+  arch: string
+  totalMemMB: number
+  /** 物理内存 ≤ 4GB,按省内存档处理 */
+  lowMem: boolean
+}
+
 /** 渲染层按需分段读取(大文件 Range 流式加载)的返回 */
 export interface RangeReadResult {
   ok: boolean

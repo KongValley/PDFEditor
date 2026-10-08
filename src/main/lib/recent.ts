@@ -52,3 +52,14 @@ export async function getRecentPage(filePath: string): Promise<number | null> {
   const entry = (await readStore()).files[filePath]
   return entry && Number.isFinite(entry.page) && entry.page > 0 ? entry.page : null
 }
+
+/** 最近打开的文件(按时间倒序;供空状态展示) */
+export async function listRecentFiles(
+  limit = 10
+): Promise<Array<{ path: string; page: number; at: number }>> {
+  const files = (await readStore()).files
+  return Object.entries(files)
+    .map(([path, entry]) => ({ path, page: entry.page, at: entry.at }))
+    .sort((a, b) => b.at - a.at)
+    .slice(0, limit)
+}

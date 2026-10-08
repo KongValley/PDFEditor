@@ -4,8 +4,9 @@ import { isRendererDirty, registerIpc, setRendererDirty } from './ipc'
 import { cleanupPrintJobs } from './lib/print'
 import { isSmokeMode, runSmoke } from './smoke'
 
-// 内网 32 位老机器优先稳定:禁用硬件加速(避免老显卡驱动导致的黑屏/崩溃)
-app.disableHardwareAcceleration()
+// 内网 32 位老机器优先稳定:默认禁用硬件加速(老显卡驱动黑屏/崩溃)。
+// 有独立显卡的新机器可用 PDF_EDITOR_HWACCEL=1 打开 —— 软件光栅之外最大的吞吐杠杆。
+if (process.env['PDF_EDITOR_HWACCEL'] !== '1') app.disableHardwareAcceleration()
 // 32 位进程地址空间有限(2GB),堆上限收紧到 512MB 避免地址空间耗尽;64 位放宽到 1GB
 app.commandLine.appendSwitch(
   'js-flags',

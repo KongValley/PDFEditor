@@ -24,8 +24,10 @@ function mimeOf(buffer: Buffer): string | null {
   return null
 }
 
-/** 读取图片并登记到内存,返回渲染所需的 dataUrl 与像素尺寸 */
-export async function importImage(refPath: string): Promise<ImageImport> {
+/** 读盘 + 解码 + 编码(两条导出共用) */
+async function loadImage(
+  refPath: string
+): Promise<{ info: ImageInfo; buffer: Buffer } | { error: string }> {
   let buffer: Buffer
   try {
     buffer = await readFile(refPath)
@@ -35,16 +37,36 @@ export async function importImage(refPath: string): Promise<ImageImport> {
   const mime = mimeOf(buffer)
   if (!mime) return { error: '仅支持 PNG/JPEG 格式图片' }
   const size = nativeImage.createFromBuffer(buffer).getSize()
-  const imgId = randomUUID()
-  images.set(imgId, buffer)
-  evictImages()
   return {
-    imgId,
-    refPath,
-    dataUrl: `data:${mime};base64,${buffer.toString('base64')}`,
-    width: size.width,
-    height: size.height
+    buffer,
+    info: {
+      imgId: '',
+      refPath,
+      dataUrl: `data:${mime};base64,${buffer.toString('base64')}`,
+      width: size.width,
+      height: size.height
+    }
   }
+}
+
+/**
+ * 只取图片信息,不占用内存缓存(imgId 固定为空串)。
+ * `img:getByPath` 走这条:渲染层用批注自己的 imgId 作键,这里生成的 UUID 会被丢弃,
+ * 写进缓存只会留下一份没人引用的重复 Buffer。
+ */
+export async function readImageInfo(refPath: string): Promise<ImageImport> {
+  const loaded = await loadImage(refPath)
+  return 'error' in loaded ? loaded : loaded.info
+}
+
+/** 读取并登记到内存缓存(用户新插入图片时用:保存阶段按 imgId 取 Buffer) */
+export async function importImage(refPath: string): Promise<ImageImport> {
+  const loaded = await loadImage(refPath)
+  if ('error' in loaded) return loaded
+  const imgId = randomUUID()
+  images.set(imgId, loaded.buffer)
+  evictImages()
+  return { ...loaded.info, imgId }
 }
 
 export function getImageBuffer(imgId: string): Buffer | undefined {

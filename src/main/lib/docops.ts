@@ -158,20 +158,33 @@ export function redoPageOp(docId: string): PageOpResult {
   return { ok: true, buffer: toArrayBuffer(next.buffer), pageCount: next.pageCount }
 }
 
-/** 批量拆分:每任务独立处理,失败不中断其它任务 */
+/**
+ * 批量拆分:每任务独立处理,失败不中断其它任务。
+ * hooks 用于进度上报与中途取消;进度按"已处理文件数 + 已输出文件数"统计 ——
+ * 不预先解析一遍来算 chunk 总数,那样每个文件会被读盘 + 解析两次。
+ */
 export async function splitPdfTasks(
   tasks: SplitTask[],
   outputDir: string | null,
-  options: { includeAnnotations?: boolean; annotations?: Annotation[] } = {}
+  options: { includeAnnotations?: boolean; annotations?: Annotation[] } = {},
+  hooks: {
+    onProgress?: (info: { processed: number; total: number; outputs: number }) => void
+    isCancelled?: () => boolean
+  } = {}
 ): Promise<SplitTaskResult[]> {
   const results: SplitTaskResult[] = []
+  let processed = 0
+  let outputs = 0
+  let cancelled = false
   for (const task of tasks) {
+    if (cancelled) break
     const entry = task.docId ? getDocEntry(task.docId) : undefined
     let bytes: Buffer
     try {
       bytes = entry?.buffer ?? (await readFile(task.path))
     } catch (err) {
       results.push({ path: task.path, ok: false, error: `无法读取文件:${(err as Error).message}` })
+      processed++
       continue
     }
     let src: PDFDocument
@@ -179,6 +192,7 @@ export async function splitPdfTasks(
       src = await PDFDocument.load(bytes)
     } catch {
       results.push({ path: task.path, ok: false, error: '无法解析 PDF(加密或损坏)' })
+      processed++
       continue
     }
     const count = src.getPageCount()
@@ -198,14 +212,19 @@ export async function splitPdfTasks(
     }
     if (chunks.length === 0) {
       results.push({ path: task.path, ok: false, error: '未指定要拆分的页面' })
+      processed++
       continue
     }
     try {
       const destDir = outputDir ?? dirname(task.path)
       await mkdir(destDir, { recursive: true })
       const stem = basename(task.path).replace(/\.pdf$/i, '') || 'document'
-      const outputs: string[] = []
+      const written: string[] = []
       for (const [i, chunk] of chunks.entries()) {
+        if (hooks.isCancelled?.()) {
+          cancelled = true
+          break
+        }
         const out = await PDFDocument.create()
         const copied = await out.copyPages(src, chunk)
         for (const page of copied) out.addPage(page)
@@ -236,12 +255,17 @@ export async function splitPdfTasks(
         }
         const target = uniqueFilePath(destDir, `${stem}-${i + 1}.pdf`)
         await writeFile(target, await out.save({ useObjectStreams: false }))
-        outputs.push(target)
+        written.push(target)
+        outputs++
+        hooks.onProgress?.({ processed: processed + 1, total: tasks.length, outputs })
       }
-      results.push({ path: task.path, ok: true, outputs })
+      if (written.length > 0) results.push({ path: task.path, ok: true, outputs: written })
     } catch (err) {
       results.push({ path: task.path, ok: false, error: `拆分失败:${(err as Error).message}` })
     }
+    processed++
+    if (cancelled) break
   }
+  if (cancelled) console.warn('[split] 用户中途停止:已输出', outputs, '个文件')
   return results
 }

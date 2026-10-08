@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { totalmem } from 'node:os'
 import { PDFDocument } from 'pdf-lib'
 import {
   openDocument,
@@ -14,9 +15,9 @@ import {
   uniqueFilePath
 } from './lib/pdfio'
 import { applyPageOp, redoPageOp, splitPdfTasks, undoPageOp } from './lib/docops'
-import { getImageBuffer, importImage, readImageBuffer, type ImageImport } from './lib/images'
+import { getImageBuffer, importImage, readImageBuffer, readImageInfo, type ImageImport } from './lib/images'
 import { abortPrintJob, addPrintPage, commitPrintJob, preparePrintJob } from './lib/print'
-import { getRecentPage, setRecentPage } from './lib/recent'
+import { getRecentPage, listRecentFiles, setRecentPage } from './lib/recent'
 import { isSmokeMode } from './smoke'
 import { extractEditorAnnotations, writeAnnotations } from './lib/pdflibwrite'
 import type {
@@ -26,11 +27,15 @@ import type {
   PageOp,
   PageOpResult,
   RangeReadResult,
+  RuntimeInfo,
   SaveResult,
   SidecarData,
   SplitTask,
   SplitTaskResult
 } from '@shared/types'
+
+/** 正在跑的拆分任务(供 pdf:splitCancel 置位;任务结束即删除) */
+const splitJobs = new Map<string, { cancelled: boolean }>()
 
 function resolveRendererAsset(url: string): string {
   if (url.startsWith('file://')) return fileURLToPath(url)
@@ -111,17 +116,42 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     async (
       _e,
       payload: {
+        jobId?: string
         tasks: SplitTask[]
         outputDir: string | null
         includeAnnotations?: boolean
         annotations?: Annotation[]
       }
-    ): Promise<SplitTaskResult[]> =>
-      splitPdfTasks(payload.tasks, payload.outputDir, {
-        includeAnnotations: payload.includeAnnotations,
-        annotations: payload.annotations
-      })
+    ): Promise<SplitTaskResult[]> => {
+      const win = getWindow()
+      const jobId = payload.jobId ?? ''
+      const job = { cancelled: false }
+      splitJobs.set(jobId, job)
+      try {
+        return await splitPdfTasks(
+          payload.tasks,
+          payload.outputDir,
+          {
+            includeAnnotations: payload.includeAnnotations,
+            annotations: payload.annotations
+          },
+          {
+            onProgress: (info) => win?.webContents.send('pdf:splitProgress', { jobId, ...info }),
+            isCancelled: () => job.cancelled
+          }
+        )
+      } finally {
+        splitJobs.delete(jobId)
+      }
+    }
   )
+
+  ipcMain.handle('pdf:splitCancel', (_e, payload: { jobId: string }): { ok: boolean } => {
+    const job = splitJobs.get(payload?.jobId ?? '')
+    if (!job) return { ok: false }
+    job.cancelled = true
+    return { ok: true }
+  })
 
   ipcMain.handle('app:chooseDir', async (): Promise<{ canceled: boolean; dir: string }> => {
     const win = getWindow()
@@ -310,12 +340,28 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
 
   ipcMain.handle(
     'app:runtimeInfo',
-    (): { smoke: boolean; version: string } => ({ smoke: isSmokeMode(), version: app.getVersion() })
+    (): RuntimeInfo => ({
+      smoke: isSmokeMode(),
+      version: app.getVersion(),
+      arch: process.arch,
+      totalMemMB: Math.round(totalmem() / 1048576),
+      // 物理内存 ≤ 4GB 的机器走"省内存"档,避免与开发机同参数
+      lowMem: totalmem() <= 4 * 1024 * 1024 * 1024
+    })
   )
 
   ipcMain.handle('app:recentGet', (_e, filePath: string) =>
     guard(async () => ({ ok: true, page: await getRecentPage(String(filePath)) }))
   )
+
+  ipcMain.handle('app:recentList', async (): Promise<Array<{ path: string; page: number; at: number }>> => {
+    return listRecentFiles()
+  })
+
+  ipcMain.handle('app:setTitle', (_e, title: string): { ok: boolean } => {
+    getWindow()?.setTitle(String(title ?? ''))
+    return { ok: true }
+  })
 
   ipcMain.handle('app:recentSet', async (_e, payload: { path: string; page: number }) => {
     if (!payload?.path || !(payload.page > 0)) return { ok: false, error: '无效的阅读位置' }
@@ -336,12 +382,21 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   })
 
   ipcMain.handle('img:getByPath', async (_e, refPath: string): Promise<ImageImport> => {
-    return importImage(refPath)
+    return readImageInfo(refPath)
   })
 
   ipcMain.handle(
     'app:saveImage',
     async (_e, payload: { defaultName: string; dataUrl: string; dir?: string }): Promise<SaveResult> => {
+      const base64 = payload.dataUrl.split(',')[1] ?? ''
+      // 冒烟:保存对话框会挂起渲染层的 executeJavaScript,直接落盘到项目 tmp 供断言
+      if (isSmokeMode()) {
+        const dir = join(app.getAppPath(), 'tmp')
+        await mkdir(dir, { recursive: true })
+        const target = join(dir, payload.defaultName)
+        await writeFile(target, Buffer.from(base64, 'base64'))
+        return { ok: true, savedPath: target }
+      }
       const win = getWindow()
       const options = {
         title: '导出图片',
@@ -350,7 +405,6 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       }
       const result = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options)
       if (result.canceled || !result.filePath) return { ok: false, canceled: true }
-      const base64 = payload.dataUrl.split(',')[1] ?? ''
       await writeFile(result.filePath, Buffer.from(base64, 'base64'))
       return { ok: true, savedPath: result.filePath }
     }
