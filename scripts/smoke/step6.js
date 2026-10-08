@@ -52,7 +52,15 @@ const restoredAgree = restored.find((f) => f.name === 'agree')
 check('文本值已写回 PDF', restoredName?.value === '张三', restoredName?.value)
 check('复选框已勾选写回 PDF', restoredAgree?.value === true, restoredAgree?.value)
 
+/* ---------- 最近文件:空状态可见(先记录一次阅读位置) ---------- */
+await window.pdfAPI.invoke('app:recentSet', { path: `${__smokeRoot}/samples/sample-form.pdf`, page: 1 })
+await sleep(300)
+const recent = await window.pdfAPI.invoke('app:recentList')
+check('最近文件列表可用', Array.isArray(recent) && recent.length > 0, recent)
+check('最近文件含本次打开的样本', recent.some((item) => String(item.path).includes('sample-form.pdf')), recent)
+
 return {
   fields: fields.map((f) => `${f.name}:${f.type}`),
-  restoredValues: { name: restoredName?.value, agree: restoredAgree?.value }
+  restoredValues: { name: restoredName?.value, agree: restoredAgree?.value },
+  recentCount: recent.length
 }

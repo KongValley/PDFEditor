@@ -25,9 +25,13 @@ await sleep(150)
 check('高亮已创建', t.annotState.items.length === 1, t.annotState.items.length)
 
 // 2) 程序化补齐其余类型(含图片)
+// img:getByPath 只回传图片信息、不占主进程缓存(渲染层用批注自己的 imgId),故 imgId 为空串;
+// 这里给批注一个自造 id,等价于"从 PDF 恢复出来的图片批注"这条真实路径。
 const info = await window.pdfAPI.invoke('img:getByPath', `${__smokeRoot}/resources/icon.png`)
-check('图片导入成功', !!info.imgId, info.error ?? null)
-t.annotState.imageUrls[info.imgId] = info.dataUrl
+check('图片读取成功', !info.error && !!info.dataUrl, info.error ?? null)
+check('img:getByPath 不再写入缓存(imgId 为空串)', info.imgId === '', info.imgId)
+const imageId = `smoke-img-${Date.now()}`
+t.annotState.imageUrls[imageId] = info.dataUrl
 
 const page = 0
 t.addAnnotation(t.withIdentity({ kind: 'rect', page, bbox: { x: 60, y: 700, w: 160, h: 60 }, color: '#e03131', opacity: 1, thickness: 2 }))
@@ -110,7 +114,7 @@ t.addAnnotation(
     bbox: { x: 420, y: 480, w: 120, h: 120 },
     color: '#212529',
     opacity: 1,
-    imgId: info.imgId,
+    imgId: imageId,
     refPath: info.refPath
   })
 )

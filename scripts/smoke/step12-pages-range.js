@@ -62,9 +62,46 @@ await t.deletePages([0])
 await sleep(600)
 check('删空被拒绝,仍剩 1 页', t.docState.pageCount === 1, t.docState.pageCount)
 
+/* ---------- 5. 页码范围对话框:实时校验 + Esc 关闭 ---------- */
+await t.openPath(`${__smokeRoot}/samples/sample-zh.pdf`)
+await sleep(1200)
+const exportBtn = () => document.querySelector('.thumbs .pages-toolbar button[title^="按范围导出"]')
+const dialog = () => document.querySelector('.mask .dialog')
+const actionBtn = (label) => [...document.querySelectorAll('.mask .dialog .actions button')].find((b) => b.textContent.trim() === label)
+
+exportBtn()?.click()
+await sleep(400)
+check('范围对话框已打开', !!dialog())
+const rangeInput = dialog()?.querySelector('input')
+check('存在输入框与确定按钮', !!rangeInput && !!actionBtn('确定'))
+
+rangeInput.value = '999'
+rangeInput.dispatchEvent(new Event('input', { bubbles: true }))
+await sleep(200)
+check('越界范围标记为无效', rangeInput.classList.contains('invalid'))
+check('越界范围禁用确定', actionBtn('确定').disabled === true)
+check('给出无效提示', (dialog()?.querySelector('.range-error')?.textContent ?? '').includes('无效'))
+
+// 焦点落在下拉框上时 Esc 也要能关窗(守卫在 keymap 里兜底)
+dialog()?.querySelector('select')?.focus()
+document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+await sleep(300)
+check('Esc 关闭范围对话框', !dialog())
+
+exportBtn()?.click()
+await sleep(400)
+const input2 = dialog()?.querySelector('input')
+input2.value = '1-2'
+input2.dispatchEvent(new Event('input', { bubbles: true }))
+await sleep(200)
+check('有效范围显示解析页数', (dialog()?.querySelector('.range-hint')?.textContent ?? '').includes('2'))
+actionBtn('取消')?.click()
+await sleep(300)
+
 return {
   parse: 'ok',
   segments: 'ok',
   extract: 'ok',
-  delete: 'ok'
+  delete: 'ok',
+  rangeDialog: 'ok'
 }

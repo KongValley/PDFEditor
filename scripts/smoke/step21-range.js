@@ -63,10 +63,29 @@ check('未知 docId 返回失败', missing.ok === false && !!missing.error, miss
 
 /* ---------- 4. 页面操作后仍可用(重载走 buffer 分支) ---------- */
 
+// 先回到第 1 页再旋转:页面操作不再把视图甩回顶部(本次改动),因此不能依赖"旋转后自动回首页"来断言首页已渲染
+t.scrollToPage(1)
+await sleep(800)
+check('已回到第 1 页', t.docState.currentPage === 1, t.docState.currentPage)
+
+const sizeBefore = { ...t.docState.pageBoxes[0] }
 await t.rotatePages([0], 90)
 const rotatedCanvas = await waitForCanvas(1, 15000)
 check('旋转后页数不变', t.docState.pageCount === 400, t.docState.pageCount)
+check('旋转后第 1 页尺寸互换', t.docState.pageBoxes[0].w === sizeBefore.h, {
+  before: sizeBefore,
+  after: t.docState.pageBoxes[0]
+})
 check('旋转后首页仍可渲染', rotatedCanvas > 0, rotatedCanvas)
+
+// 反向验证:旋转第 400 页时视图不应被甩回顶部(旋转前先滚到第 400 页)
+t.scrollToPage(400)
+await sleep(900)
+check('已到第 400 页', t.docState.currentPage === 400, t.docState.currentPage)
+await t.rotatePages([399], 90)
+await sleep(1500)
+check('旋转远端页后当前页保持', t.docState.currentPage === 400, t.docState.currentPage)
+check('旋转远端页后第 400 页仍可渲染', (await waitForCanvas(400, 15000)) > 0)
 
 /* ---------- 5. 小文件仍走 buffer(未被本次改动波及) ---------- */
 

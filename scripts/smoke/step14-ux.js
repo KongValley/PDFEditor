@@ -225,6 +225,95 @@ rectButton.click()
 await sleep(200)
 check('切工具清空选中', t.ui.selectedAnnotationIds.length === 0, t.ui.selectedAnnotationIds)
 
+/* ---------- 拖拽排序:反馈 + 自动滚动 ---------- */
+// 用 50 页文档:3 页夹具的缩略图列表不溢出,无法验证自动滚动
+await t.openPath(`${__smokeRoot}/tmp/50pages.pdf`)
+await sleep(2200)
+
+const thumbEl = (n) => document.querySelector(`[data-thumb="${n}"]`)
+check('缩略图可拖拽', thumbEl(1)?.getAttribute('draggable') === 'true', thumbEl(1)?.getAttribute('draggable'))
+
+// dataTransfer 必须是真实 DataTransfer(传普通对象会抛 TypeError);Chromium 108 支持 new DataTransfer()
+const drag = (type, el, clientY) => {
+  el.dispatchEvent(
+    new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: new DataTransfer(), clientY })
+  )
+}
+const r2 = thumbEl(2).getBoundingClientRect()
+drag('dragstart', thumbEl(1), r2.top)
+await sleep(150) // 等 Vue 刷新 DOM(类名更新在 nextTick)
+drag('dragover', thumbEl(2), r2.bottom - 2) // 下半区
+await sleep(150)
+check('dragover 出现落点提示', thumbEl(2).classList.contains('drop-after'), thumbEl(2).className)
+check('拖动源项变淡', thumbEl(1).classList.contains('dragging'), thumbEl(1).className)
+drag('drop', thumbEl(2), r2.bottom - 2)
+await sleep(1800)
+check('拖拽后页数不变', t.docState.pageCount === 50, t.docState.pageCount)
+check(
+  '拖拽后提示已清除',
+  !document.querySelector('.thumb.drop-after') && !document.querySelector('.thumb.dragging')
+)
+
+// 边缘自动滚动:先滚到中部,再从列表上边缘拖
+const thumbScroller = document.querySelector('.thumbs-scroll')
+thumbScroller.scrollTop = Math.floor(thumbScroller.scrollHeight / 2)
+await sleep(150)
+const scrollBefore = thumbScroller.scrollTop
+drag('dragstart', thumbEl(1), thumbScroller.getBoundingClientRect().top)
+drag('dragover', thumbEl(1), thumbScroller.getBoundingClientRect().top + 4) // 进入上边缘带
+await sleep(500) // 让 rAF 循环跑若干帧
+drag('dragend', thumbEl(1), 0)
+check(
+  '拖到上边缘触发自动滚动',
+  thumbScroller.scrollTop < scrollBefore,
+  { before: scrollBefore, after: thumbScroller.scrollTop }
+)
+
+/* ---------- 页面操作后不闪:滚动位置与可见画布保持 ---------- */
+t.scrollToPage(20)
+await sleep(1400)
+const viewer = document.querySelector('.viewer')
+const topBefore = viewer.scrollTop
+check('已滚动到中部', topBefore > 1000, topBefore)
+const nonEmptyBefore = [...document.querySelectorAll('.page-canvas')].filter((c) => c.width > 0).length
+
+await t.movePage(19, 21)
+await sleep(1800)
+
+const topAfter = viewer.scrollTop
+check('页面操作后滚动位置未被甩回顶部', topAfter > 1000, { before: topBefore, after: topAfter })
+check('页面操作后当前页未被重置为 1', t.docState.currentPage > 1, t.docState.currentPage)
+check(
+  '页面操作后可见页已重绘(非空白)',
+  [...document.querySelectorAll('.page-canvas')].filter((c) => c.width > 0).length >= 1,
+  { before: nonEmptyBefore }
+)
+check('滚动位置偏移 < 200px', Math.abs(topAfter - topBefore) < 200, { before: topBefore, after: topAfter })
+
+/* ---------- 输入框守卫:注释正文里按 Ctrl+E 不应弹出导出对话框 ---------- */
+await t.scrollToPage(1)
+await sleep(800)
+t.addAnnotation(
+  t.withIdentity({ kind: 'text', page: 0, bbox: { x: 80, y: 500, w: 220, h: 40 }, color: '#212529', opacity: 1, text: '输入测试', fontSize: 14 })
+)
+await sleep(500)
+const textShape = [...document.querySelectorAll('[data-page="1"] .ann-layer > g.shape')].pop()
+check('文字注释已创建', !!textShape, document.querySelectorAll('[data-page="1"] .ann-layer > g.shape').length)
+// 形状只在 select 工具下可接收双击(pointerEvents 绑定在工具上)
+t.ui.tool = 'select'
+await sleep(200)
+textShape.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+await sleep(500)
+const editor = document.querySelector('.ann-editor textarea')
+check('画布编辑器已打开', !!editor)
+editor.focus()
+editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'e', ctrlKey: true, bubbles: true }))
+await sleep(400)
+check('输入框内 Ctrl+E 不弹对话框', !document.querySelector('.mask .dialog'))
+check('输入框保持焦点', document.activeElement === editor, document.activeElement?.tagName)
+editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+await sleep(200)
+
 return {
   saveInPlace: 'ok',
   pageUndo: 'ok',
@@ -235,5 +324,8 @@ return {
   search: 'ok',
   keys: 'ok',
   syncScroll: 'ok',
-  setTool: 'ok'
+  setTool: 'ok',
+  dragFeedback: 'ok',
+  noFlashOnPageOp: 'ok',
+  typingGuardShortcuts: 'ok'
 }

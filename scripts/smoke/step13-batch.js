@@ -280,6 +280,52 @@ await sleep(200)
 check('取消后对话框关闭', !document.querySelector('.dialog'))
 check('取消后页数不变', t.docState.pageCount === 3, t.docState.pageCount)
 
+/* ---------- 拆分进度事件 + 中途取消 ---------- */
+// 用 400 页夹具按 1 页 1 文件拆 20 块:单块写出耗时远大于一次 IPC 往返,
+// 取消能稳定落在中途(样本只有几页时,取消会与"写完最后一块"赛跑,断言不稳定)
+const progressJobId = `smoke-split-${stamp}`
+const progressDir = `${__smokeRoot}/tmp/split-progress-${stamp}`
+const progressEvents = []
+const offProgress = window.pdfAPI.on('pdf:splitProgress', (info) => {
+  if (info?.jobId !== progressJobId) return
+  progressEvents.push(info)
+  // 收到第一条进度就请求取消:后续块不应再写出
+  if (progressEvents.length === 1) void window.pdfAPI.invoke('pdf:splitCancel', { jobId: progressJobId })
+})
+const progressTask = { mode: 'maxPages', path: `${__smokeRoot}/tmp/large.pdf`, start: 1, end: 8, pagesPerFile: 1 }
+const progressRes = await window.pdfAPI.invoke('pdf:splitTasks', {
+  jobId: progressJobId,
+  tasks: [progressTask],
+  outputDir: progressDir
+})
+offProgress()
+check('拆分收到进度事件', progressEvents.length >= 1, progressEvents.length)
+check('进度事件含计数与总数', progressEvents[0]?.total === 1 && progressEvents[0]?.outputs >= 1, progressEvents[0])
+check('取消在剩余块之前生效', progressRes[0]?.outputs?.length < 8, progressRes[0]?.outputs?.length)
+check('取消后已写出的文件保留', (progressRes[0]?.outputs?.length ?? 0) >= 1, progressRes[0]?.outputs?.length)
+check('未知任务取消被拒', (await window.pdfAPI.invoke('pdf:splitCancel', { jobId: 'no-such-job' })).ok === false)
+
+/* ---------- busy 闸门:长操作期间同类入口被拒 ---------- */
+let firstRan = false
+const busyProbe = t.runBusy('冒烟忙碌中', async () => {
+  firstRan = true
+  await sleep(300)
+  return 'done'
+})
+await sleep(80)
+check('busy 已置位', t.ui.busy === '冒烟忙碌中', t.ui.busy)
+check('状态栏显示忙碌文案', (document.querySelector('.status-bar .status-busy')?.textContent ?? '') === '冒烟忙碌中')
+let secondRan = false
+check(
+  'busy 期间同类操作被拒',
+  (await t.runBusy('第二次', async () => {
+    secondRan = true
+    return 'nope'
+  })) === null
+)
+check('被拒的第二个任务未执行', secondRan === false)
+check('busy 结束后入口恢复', (await busyProbe) === 'done' && firstRan === true && t.ui.busy === null, t.ui.busy)
+
 return {
   maxPages: 'ok',
   dedup: 'ok',
@@ -289,6 +335,9 @@ return {
   mergeDedup: 'ok',
   newDir: 'ok',
   splitDialog: 'ok',
+  splitProgress: 'ok',
+  splitCancel: 'ok',
+  busyGate: 'ok',
   uniqueProbe: 'ok',
   failToast: 'ok',
   openFolderFail: 'ok',

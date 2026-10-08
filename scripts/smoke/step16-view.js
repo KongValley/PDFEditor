@@ -165,6 +165,17 @@ document.querySelector('.status-bar button[title="放大 (Ctrl+=)"]').click()
 await sleep(200)
 check('放大按钮后输入框同步', zoomInput().value === `${Math.round(t.docState.scale * 100)}%`, zoomInput().value)
 
+/* ---------- 10. 连续缩放后几何缓存仍有效(前缀和按签名重建) ---------- */
+const scaleBefore = t.docState.scale
+for (let i = 0; i < 10; i++) t.zoomBy(1.1)
+await sleep(600)
+check('连续放大后缩放值增大', t.docState.scale > scaleBefore, { before: scaleBefore, after: t.docState.scale })
+check(
+  '缩放后几何缓存有效(无 0 高度页)',
+  t.docState.pageBoxes.length === t.docState.pageCount && t.docState.pageBoxes.every((b) => b.w > 0 && b.h > 0),
+  { boxes: t.docState.pageBoxes.length, pages: t.docState.pageCount }
+)
+
 return {
   actualSize: 'ok',
   twoPageLayout: 'ok',

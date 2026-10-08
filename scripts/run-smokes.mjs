@@ -32,7 +32,10 @@ const scripts = [
   'step18-print.js',
   'step19-nav.js',
   'step20-about.js',
-  'step21-range.js'
+  'step21-range.js',
+  'step22-pageops.js',
+  'step23-two-page.js',
+  'step24-long-image.js'
 ]
 
 if (!existsSync(join(root, 'samples', 'sample-zh.pdf'))) {
@@ -56,10 +59,13 @@ if (!existsSync(join(root, 'tmp', 'large.pdf'))) {
 // step13/14/15 含批量拆分、50 页大文档、20+ 次文档打开;渲染层偶发首屏等待
 // (见 docs/代码审查报告.md「存疑」第 4 条)会额外消耗 20s/次,独立跑约 28–50s,套件内更慢
 const STEP_TIMEOUTS = {
-  'step13-batch.js': '120000',
+  'step13-batch.js': '180000',
   'step14-ux.js': '120000',
   'step15-annots.js': '300000',
-  'step21-range.js': '180000'
+  'step21-range.js': '180000',
+  'step22-pageops.js': '120000',
+  'step23-two-page.js': '180000',
+  'step24-long-image.js': '180000'
 }
 
 let failed = 0
