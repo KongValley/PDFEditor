@@ -33,6 +33,8 @@ import {
   type PrintQuality
 } from '../store/ui'
 import { parsePageRange } from '@shared/text'
+import { planPageOrientation, type OrientationPlanItem } from './orientation'
+import { cancelOrientationPlan, requestOrientationPlan, submitOrientationPlan } from '../store/ui'
 import { invalidateSearch } from '../store/search'
 import { maybeRestoreLastPage } from '../store/reading'
 import { scrollToPage } from '../store/viewer'
@@ -154,6 +156,53 @@ async function saveTo(targetPath: string | undefined): Promise<void> {
   })
 }
 
+/**
+ * 统一页面方向:扫描件里零星几页方向与其它页不一致时,扫描全文 → 弹预览 → 逐页确认后应用。
+ * 与缩略图多选无关,作用于整份文档。
+ */
+export async function normalizePageOrientation(): Promise<void> {
+  if (!docState.pdfDoc) {
+    showToast('请先打开 PDF 文件', 'error')
+    return
+  }
+  if (docState.pageCount < 2) {
+    showToast('至少需要 2 页才能判断方向基准', 'error')
+    return
+  }
+  await runBusy('正在分析页面方向…', async () => {
+    requestOrientationPlan()
+    try {
+      submitOrientationPlan(await planPageOrientation())
+    } catch (err) {
+      cancelOrientationPlan()
+      showToast(`分析页面方向失败:${err instanceof Error ? err.message : String(err)}`, 'error')
+    }
+  })
+}
+
+/** 应用预览对话框里确认的旋转(一次页面操作 → 一次撤销) */
+export async function applyOrientationFix(items: OrientationPlanItem[]): Promise<void> {
+  const deltas: Record<number, number> = {}
+  for (const item of items) {
+    if (item.delta) deltas[item.page - 1] = item.delta
+  }
+  const pages = Object.keys(deltas).map(Number)
+  if (pages.length === 0) {
+    showToast('没有需要调整的页面', 'error')
+    return
+  }
+  await runBusy('正在统一页面方向…', async () => {
+    const ok = await runPageOp({ kind: 'rotate', pages, delta: 90, deltas })
+    cancelOrientationPlan()
+    if (!ok) return
+    showToast(
+      lastPageOpUndoable
+        ? `已统一 ${pages.length} 页方向,可用 Ctrl+Z 撤销`
+        : `已统一 ${pages.length} 页方向(文档较大,该操作不可撤销)`
+    )
+  })
+}
+
 export async function openFileDialog(): Promise<void> {
   const result = (await window.pdfAPI.invoke('app:chooseFile', false)) as ChooseFileResult
   if (result.canceled || result.paths.length === 0) return
@@ -224,7 +273,9 @@ async function runPageOp(op: PageOp, options: { recordHistory?: boolean } = {}):
   // delete/insertBlank 会增删页与表单控件,必须走全量重建(否则被删页的字段会残留);
   // 不给它们 pageMap 即强制回退全量。
   await reloadDocument(result.buffer, {
-    rotatedPages: op.kind === 'rotate' ? op.pages : undefined,
+    // 只有 90/270 会交换显示宽高;180° 旋转后尺寸不变,一并传入会让增量几何错换宽高
+    rotatedPages:
+      op.kind === 'rotate' ? op.pages.filter((index) => (op.deltas?.[index] ?? op.delta) % 180 === 90) : undefined,
     pageMap: op.kind === 'move' ? result.pageMap : undefined
   })
   // 重建后按当前页重新对齐滚动:换文档分支会归零,这里恢复(三种视图模式均由 scrollToPage 处理)

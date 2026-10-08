@@ -1,6 +1,6 @@
 import { onBeforeUnmount, onMounted } from 'vue'
 import { docState } from '../store/document'
-import { pagesDialogState, setTool, submitPagesRange, ui } from '../store/ui'
+import { cancelOrientationPlan, orientationDialogState, pagesDialogState, setTool, submitPagesRange, ui } from '../store/ui'
 import { copySelection, duplicateSelection, pasteClipboard, removeSelected, redo, undo } from '../store/annotations'
 import { searchStep } from '../store/search'
 import { fitWidth, scrollToPage, setViewMode, stepPage, zoomBy } from '../store/viewer'
@@ -163,6 +163,10 @@ export function useGlobalKeymap(): void {
       // 页码范围对话框:焦点落在「格式/清晰度」下拉框上时,input 上的 Esc 收不到,在这里兜底
       if (pagesDialogState.open) {
         submitPagesRange(null)
+        return
+      }
+      if (orientationDialogState.open) {
+        cancelOrientationPlan()
         return
       }
       ui.searchOpen = false

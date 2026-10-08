@@ -9,6 +9,7 @@ import MergeDialog from './components/MergeDialog.vue'
 import SplitDialog from './components/SplitDialog.vue'
 import AboutDialog from './components/AboutDialog.vue'
 import PagesRangeDialog from './components/PagesRangeDialog.vue'
+import OrientationDialog from './components/OrientationDialog.vue'
 import PageContextMenu from './components/PageContextMenu.vue'
 import ZoomControl from './components/ZoomControl.vue'
 import PdfViewer from './viewer/PdfViewer.vue'
@@ -202,6 +203,7 @@ watch(
     <PasswordDialog />
     <MergeDialog />
     <PagesRangeDialog />
+    <OrientationDialog />
     <SplitDialog />
     <AboutDialog />
     <PageContextMenu />

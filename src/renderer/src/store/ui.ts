@@ -1,5 +1,7 @@
 import { reactive } from 'vue'
 import type { AppendFileSpec, SplitTask, StampKey } from '@shared/types'
+// 仅类型引用(store → lib 无运行时依赖,避免循环)
+import type { OrientationPlanItem, OrientationPlanResult, PageOrientation } from '../lib/orientation'
 
 export type Tool =
   | 'select'
@@ -223,6 +225,42 @@ export function submitMergeWork(value: MergeRequest | null): void {
   mergeDialogState.open = false
   mergeResolve?.(value)
   mergeResolve = null
+}
+
+/* ---------------------- 页面方向统一对话框 ---------------------- */
+
+export const orientationDialogState = reactive({
+  open: false,
+  /** 分析中(对话框已开,内容为"正在分析…") */
+  scanning: false,
+  /** 基准方向(多数页) */
+  base: 'portrait' as PageOrientation,
+  items: [] as OrientationPlanItem[],
+  /** 无法判定基准方向时的说明;非空时对话框只显示该提示与关闭按钮 */
+  baseError: ''
+})
+
+export function requestOrientationPlan(): void {
+  orientationDialogState.open = true
+  orientationDialogState.scanning = true
+  orientationDialogState.items = []
+  orientationDialogState.baseError = ''
+}
+
+export function submitOrientationPlan(
+  result: Pick<OrientationPlanResult, 'base' | 'items' | 'baseError'>
+): void {
+  orientationDialogState.scanning = false
+  orientationDialogState.base = result.base ?? 'portrait'
+  orientationDialogState.items = result.items
+  orientationDialogState.baseError = result.baseError
+}
+
+export function cancelOrientationPlan(): void {
+  orientationDialogState.open = false
+  orientationDialogState.scanning = false
+  orientationDialogState.items = []
+  orientationDialogState.baseError = ''
 }
 
 /* --------------------------- 拆分对话框 --------------------------- */

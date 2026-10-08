@@ -11,6 +11,7 @@ import {
   insertBlankPage,
   mergePdfs,
   movePage,
+  normalizePageOrientation,
   rotatePages,
   splitPdfs
 } from '../lib/actions'
@@ -257,6 +258,9 @@ watch(
       <button :disabled="busy" title="按范围导出(PDF / PNG多图 / 长图)" @click="onRangeAction('export')">导出</button>
       <button title="左旋 90°(选中页或当前页)" @click="onRotate(-90)">左旋</button>
       <button title="右旋 90°(选中页或当前页)" @click="onRotate(90)">右旋</button>
+      <button :disabled="busy" title="按内容方向统一整份文档的页面朝向(扫描件零星几页方向不一致时用)" @click="normalizePageOrientation">
+        统一方向
+      </button>
       <button title="在当前页之后插入空白页" @click="onInsertBlank">空白页</button>
       <button :disabled="busy" title="合并其他 PDF(可指定页码,另存为新文件)" @click="onMerge">合并</button>
     </div>
