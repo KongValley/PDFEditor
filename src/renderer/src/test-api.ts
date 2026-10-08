@@ -12,6 +12,8 @@ import {
   insertBlankPage,
   mergePdfs,
   movePage,
+  applyOrientationFix,
+  normalizePageOrientation,
   renderPrintPageDataUrl,
   resolvePrintScale,
   rotatePages,
@@ -21,6 +23,7 @@ import {
   splitPdfs
 } from './lib/actions'
 import { parsePageRange, splitPageSegments } from '@shared/text'
+import { detectContentPosture, orientationOf, pickBaseOrientation } from './lib/orientation'
 import {
   docState,
   cachedPageCount,
@@ -31,7 +34,7 @@ import {
   releasedDocIds
 } from './store/document'
 import { invalidateSearch, searchState } from './store/search'
-import { mergeDialogState, splitDialogState, ui } from './store/ui'
+import { mergeDialogState, orientationDialogState, splitDialogState, ui } from './store/ui'
 import { searchDocument } from './lib/textsearch'
 import {
   addAnnotation,
@@ -89,6 +92,12 @@ export function installTestApi(): void {
     docState,
     ui,
     mergeDialogState,
+    orientationDialogState,
+    orientationOf,
+    pickBaseOrientation,
+    detectContentPosture,
+    normalizePageOrientation,
+    applyOrientationFix,
     splitDialogState,
     searchState,
     annotState,

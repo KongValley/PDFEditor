@@ -21,7 +21,7 @@
     "dist:win10-32": "npm run build && node scripts/package-win.mjs win10-ia32",
     "dist:win7-64": "npm run build && node scripts/package-win.mjs win7-x64",
     "dist": "npm run dist:win7-32 && npm run dist:win10-64 && npm run dist:win10-32 && npm run dist:win7-64",
-    "samples": "node scripts/make-samples.mjs && node scripts/make-outline-sample.mjs && node scripts/make-encrypted-sample.mjs && node scripts/make-encrypted-sample.mjs test123 sample-encrypted-pw.pdf && node scripts/make-big-sample.mjs && node scripts/make-large-sample.mjs"
+    "samples": "node scripts/make-samples.mjs && node scripts/make-outline-sample.mjs && node scripts/make-encrypted-sample.mjs && node scripts/make-encrypted-sample.mjs test123 sample-encrypted-pw.pdf && node scripts/make-big-sample.mjs && node scripts/make-large-sample.mjs && node scripts/make-mixed-orient-sample.mjs"
   },
   "dependencies": {},
   "devDependencies": {

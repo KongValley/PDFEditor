@@ -35,7 +35,8 @@ const scripts = [
   'step21-range.js',
   'step22-pageops.js',
   'step23-two-page.js',
-  'step24-long-image.js'
+  'step24-long-image.js',
+  'step25-orient.js'
 ]
 
 if (!existsSync(join(root, 'samples', 'sample-zh.pdf'))) {
@@ -55,6 +56,18 @@ if (!existsSync(join(root, 'tmp', 'large.pdf'))) {
   }
 }
 
+// 方向不一致夹具(「统一页面方向」冒烟用):samples/ 不入版本库,缺失时现场生成(≈1s)
+if (!existsSync(join(root, 'samples', 'sample-mixed-orient.pdf'))) {
+  const genOrient = spawnSync(process.execPath, [join(root, 'scripts', 'make-mixed-orient-sample.mjs')], {
+    cwd: root,
+    stdio: 'inherit'
+  })
+  if (genOrient.status !== 0) {
+    console.error('生成 samples/sample-mixed-orient.pdf 失败')
+    process.exit(1)
+  }
+}
+
 // 单步脚本超时(毫秒):默认 60s;重负载步骤给更宽裕的上限
 // step13/14/15 含批量拆分、50 页大文档、20+ 次文档打开;渲染层偶发首屏等待
 // (见 docs/代码审查报告.md「存疑」第 4 条)会额外消耗 20s/次,独立跑约 28–50s,套件内更慢
@@ -65,7 +78,8 @@ const STEP_TIMEOUTS = {
   'step21-range.js': '180000',
   'step22-pageops.js': '120000',
   'step23-two-page.js': '180000',
-  'step24-long-image.js': '180000'
+  'step24-long-image.js': '180000',
+  'step25-orient.js': '180000'
 }
 
 let failed = 0
