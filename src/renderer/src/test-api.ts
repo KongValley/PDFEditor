@@ -13,7 +13,9 @@ import {
   mergePdfs,
   movePage,
   applyOrientationFix,
+  convertImagesToPdf,
   normalizePageOrientation,
+  openImageToPdfDialog,
   renderPrintPageDataUrl,
   resolvePrintScale,
   rotatePages,
@@ -34,7 +36,7 @@ import {
   releasedDocIds
 } from './store/document'
 import { invalidateSearch, searchState } from './store/search'
-import { mergeDialogState, orientationDialogState, splitDialogState, ui } from './store/ui'
+import { imagePdfDialogState, mergeDialogState, orientationDialogState, splitDialogState, ui } from './store/ui'
 import { searchDocument } from './lib/textsearch'
 import {
   addAnnotation,
@@ -98,6 +100,9 @@ export function installTestApi(): void {
     detectContentPosture,
     normalizePageOrientation,
     applyOrientationFix,
+    imagePdfDialogState,
+    openImageToPdfDialog,
+    convertImagesToPdf,
     splitDialogState,
     searchState,
     annotState,

@@ -263,6 +263,49 @@ export function cancelOrientationPlan(): void {
   orientationDialogState.baseError = ''
 }
 
+/* ---------------------- 图片转 PDF 对话框 ---------------------- */
+
+/** 页面尺寸模式;与主进程 imagetopdf.ts 的 ImagePageMode 同一字面量(跨进程目录不可直接导入类型) */
+export type ImagePageMode = 'image' | 'a4'
+
+export interface ImagePdfItem {
+  path: string
+  name: string
+  width: number
+  height: number
+}
+
+export const imagePdfDialogState = reactive({
+  open: false,
+  /** 转换中(此时进度条显示,所有按钮禁用) */
+  running: false,
+  pageMode: 'image' as ImagePageMode,
+  items: [] as ImagePdfItem[],
+  done: 0,
+  total: 0,
+  /** 正在处理的文件名(进度条副标题) */
+  current: '',
+  result: null as { ok: boolean; savedPath?: string; pages?: number; error?: string; failed?: number } | null
+})
+
+export function requestImagePdf(items: ImagePdfItem[] = []): void {
+  imagePdfDialogState.open = true
+  imagePdfDialogState.running = false
+  imagePdfDialogState.items = items
+  imagePdfDialogState.done = 0
+  imagePdfDialogState.total = 0
+  imagePdfDialogState.current = ''
+  imagePdfDialogState.result = null
+}
+
+export function cancelImagePdf(): void {
+  imagePdfDialogState.open = false
+  imagePdfDialogState.running = false
+  imagePdfDialogState.items = []
+  imagePdfDialogState.current = ''
+  imagePdfDialogState.result = null
+}
+
 /* --------------------------- 拆分对话框 --------------------------- */
 
 export type SplitMode = 'maxPages' | 'ranges'

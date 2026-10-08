@@ -10,6 +10,7 @@ import SplitDialog from './components/SplitDialog.vue'
 import AboutDialog from './components/AboutDialog.vue'
 import PagesRangeDialog from './components/PagesRangeDialog.vue'
 import OrientationDialog from './components/OrientationDialog.vue'
+import ImageToPdfDialog from './components/ImageToPdfDialog.vue'
 import PageContextMenu from './components/PageContextMenu.vue'
 import ZoomControl from './components/ZoomControl.vue'
 import PdfViewer from './viewer/PdfViewer.vue'
@@ -17,7 +18,13 @@ import { docReady, docState } from './store/document'
 import { showToast, ui } from './store/ui'
 import { fitPage, fitWidth, scrollToPage, setViewMode, stepPage, zoomAt } from './store/viewer'
 import { goBack, goForward, readingState, useReading } from './store/reading'
-import { confirmDiscardChanges, openFileDialog, openPath, rotatePages } from './lib/actions'
+import {
+  confirmDiscardChanges,
+  openFileDialog,
+  openImageToPdfDialog,
+  openPath,
+  rotatePages
+} from './lib/actions'
 import { useGlobalKeymap } from './lib/keymap'
 
 useGlobalKeymap()
@@ -63,16 +70,24 @@ function onDrop(event: DragEvent): void {
   event.preventDefault()
   dragDepth = 0
   dragging.value = false
-  const files = event.dataTransfer?.files
-  if (!files || files.length === 0) return
-  const path = window.pdfAPI.getPathForFile(files[0])
-  if (!path || !/\.pdf$/i.test(path)) {
-    showToast('仅支持 PDF 文件', 'error')
+  const files = Array.from(event.dataTransfer?.files ?? [])
+  if (files.length === 0) return
+  const pdfs = files.filter((f) => /\.pdf$/i.test(f.path ?? ''))
+  const images = files.filter((f) => /\.(png|jpe?g)$/i.test(f.path ?? ''))
+  // 混着拖时以 PDF 为准(与旧行为一致);只有图片时才走转换流程
+  if (pdfs.length > 0) {
+    const path = window.pdfAPI.getPathForFile(pdfs[0])
+    if (!path) return
+    if (!confirmDiscardChanges()) return
+    if (pdfs.length > 1) showToast(`其余 ${pdfs.length - 1} 个文件已忽略(一次只能打开一个)`)
+    void openPath(path)
     return
   }
-  if (!confirmDiscardChanges()) return
-  if (files.length > 1) showToast(`其余 ${files.length - 1} 个文件已忽略(一次只能打开一个)`)
-  void openPath(path)
+  if (images.length > 0) {
+    void openImageToPdfDialog(images.map((f) => window.pdfAPI.getPathForFile(f)).filter(Boolean))
+    return
+  }
+  showToast('仅支持 PDF 或 PNG/JPEG 图片', 'error')
 }
 
 const fileName = computed(() => docState.filePath?.split(/[\\/]/).pop() ?? '')
@@ -137,6 +152,14 @@ watch(
         <div class="empty-hint">{{ docState.loading ? (docState.loadProgress ?? '加载中…') : '打开或拖入 PDF 文件' }}</div>
         <div v-if="docState.loadError" class="empty-error">{{ docState.loadError }}</div>
         <button v-if="!docState.loading && !docState.loadError" class="empty-open" @click="openFileDialog">打开文件</button>
+        <button
+          v-if="!docState.loading && !docState.loadError"
+          class="empty-open"
+          title="把 PNG/JPEG 图片合并为一份 PDF"
+          @click="openImageToPdfDialog()"
+        >
+          图片转 PDF
+        </button>
         <div v-if="!docState.loading && !docState.loadError && recentFiles.length > 0" class="recent-list">
           <div class="recent-title">最近打开</div>
           <button v-for="item in recentFiles" :key="item.path" class="recent-item" :title="item.path" @click="openRecent(item)">
@@ -204,6 +227,7 @@ watch(
     <MergeDialog />
     <PagesRangeDialog />
     <OrientationDialog />
+    <ImageToPdfDialog />
     <SplitDialog />
     <AboutDialog />
     <PageContextMenu />

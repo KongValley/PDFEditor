@@ -1,6 +1,6 @@
 import { onBeforeUnmount, onMounted } from 'vue'
 import { docState } from '../store/document'
-import { cancelOrientationPlan, orientationDialogState, pagesDialogState, setTool, submitPagesRange, ui } from '../store/ui'
+import { cancelImagePdf, cancelOrientationPlan, imagePdfDialogState, orientationDialogState, pagesDialogState, setTool, submitPagesRange, ui } from '../store/ui'
 import { copySelection, duplicateSelection, pasteClipboard, removeSelected, redo, undo } from '../store/annotations'
 import { searchStep } from '../store/search'
 import { fitWidth, scrollToPage, setViewMode, stepPage, zoomBy } from '../store/viewer'
@@ -167,6 +167,11 @@ export function useGlobalKeymap(): void {
       }
       if (orientationDialogState.open) {
         cancelOrientationPlan()
+        return
+      }
+      // 图片转 PDF 转换中不响应 Esc:避免留下半开的进度界面
+      if (imagePdfDialogState.open && !imagePdfDialogState.running) {
+        cancelImagePdf()
         return
       }
       ui.searchOpen = false

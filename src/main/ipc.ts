@@ -1,7 +1,15 @@
-import { app, dialog, ipcMain, shell, type BrowserWindow, type OpenDialogOptions } from 'electron'
+import {
+  app,
+  dialog,
+  ipcMain,
+  shell,
+  type BrowserWindow,
+  type OpenDialogOptions,
+  type SaveDialogOptions
+} from 'electron'
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { totalmem } from 'node:os'
 import { PDFDocument } from 'pdf-lib'
@@ -16,6 +24,7 @@ import {
 } from './lib/pdfio'
 import { applyPageOp, redoPageOp, splitPdfTasks, undoPageOp } from './lib/docops'
 import { getImageBuffer, importImage, readImageBuffer, readImageInfo, type ImageImport } from './lib/images'
+import { imagesToPdf, type ImagePageMode } from './lib/imagetopdf'
 import { abortPrintJob, addPrintPage, commitPrintJob, preparePrintJob } from './lib/print'
 import { getRecentPage, listRecentFiles, setRecentPage } from './lib/recent'
 import { isSmokeMode } from './smoke'
@@ -384,6 +393,60 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   ipcMain.handle('img:getByPath', async (_e, refPath: string): Promise<ImageImport> => {
     return readImageInfo(refPath)
   })
+
+  ipcMain.handle('img:chooseMany', async (): Promise<{ canceled: true } | { canceled: false; files: string[] }> => {
+    const win = getWindow()
+    const options: OpenDialogOptions = {
+      title: '选择图片(可多选,按选择顺序成页)',
+      filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg'] }],
+      properties: ['openFile', 'multiSelections']
+    }
+    const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
+    if (result.canceled || result.filePaths.length === 0) return { canceled: true }
+    return { canceled: false, files: result.filePaths }
+  })
+
+  ipcMain.handle(
+    'img:toPdf',
+    async (
+      _e,
+      payload: { jobId: string; paths: string[]; pageMode: ImagePageMode }
+    ): Promise<{
+      ok: boolean
+      canceled?: boolean
+      savedPath?: string
+      pages?: number
+      error?: string
+      errors?: Array<{ path: string; error: string }>
+    }> => {
+      const win = getWindow()
+      const converted = await imagesToPdf(payload.paths, payload.pageMode, {
+        onProgress: (info) => win?.webContents.send('img:toPdfProgress', { jobId: payload.jobId, ...info })
+      })
+      const bytes = converted.bytes
+      if (converted.pages === 0 || !bytes) {
+        return { ok: false, error: converted.errors[0]?.error ?? '没有可转换的图片', errors: converted.errors }
+      }
+      let savedPath: string
+      if (isSmokeMode()) {
+        const dir = join(app.getAppPath(), 'tmp')
+        await mkdir(dir, { recursive: true })
+        savedPath = join(dir, 'images-to-pdf.pdf')
+      } else {
+        const first = payload.paths[0]
+        const options: SaveDialogOptions = {
+          title: '保存生成的 PDF',
+          defaultPath: join(dirname(first), `${basename(first).replace(/\.[^.]+$/, '')}-图片合集.pdf`),
+          filters: [{ name: 'PDF 文档', extensions: ['pdf'] }]
+        }
+        const result = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options)
+        if (result.canceled || !result.filePath) return { ok: false, canceled: true }
+        savedPath = result.filePath
+      }
+      await writeFile(savedPath, Buffer.from(bytes))
+      return { ok: true, savedPath, pages: converted.pages, errors: converted.errors }
+    }
+  )
 
   ipcMain.handle(
     'app:saveImage',

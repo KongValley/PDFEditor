@@ -35,6 +35,7 @@ import {
 import { parsePageRange } from '@shared/text'
 import { planPageOrientation, type OrientationPlanItem } from './orientation'
 import { cancelOrientationPlan, requestOrientationPlan, submitOrientationPlan } from '../store/ui'
+import { imagePdfDialogState, requestImagePdf, type ImagePdfItem } from '../store/ui'
 import { invalidateSearch } from '../store/search'
 import { maybeRestoreLastPage } from '../store/reading'
 import { scrollToPage } from '../store/viewer'
@@ -201,6 +202,97 @@ export async function applyOrientationFix(items: OrientationPlanItem[]): Promise
         : `已统一 ${pages.length} 页方向(文档较大,该操作不可撤销)`
     )
   })
+}
+
+/** 图片转 PDF:打开对话框;seed 为拖入窗口的图片路径(已按选择顺序) */
+export async function openImageToPdfDialog(seed: string[] = []): Promise<void> {
+  const items: ImagePdfItem[] = []
+  for (const path of seed) {
+    const info = (await window.pdfAPI.invoke('img:getByPath', path)) as ImageInfo | { error: string }
+    if ('error' in info) {
+      showToast(`无法读取图片:${info.error}`, 'error')
+      continue
+    }
+    items.push({ path, name: baseName(path), width: info.width, height: info.height })
+  }
+  requestImagePdf(items)
+}
+
+/** 对话框「+ 添加图片」:系统多选框,返回按选择顺序的图片信息 */
+export async function pickImageFiles(): Promise<ImagePdfItem[]> {
+  const result = (await window.pdfAPI.invoke('img:chooseMany')) as
+    | { canceled: true }
+    | { canceled: false; files: string[] }
+  if (result.canceled) return []
+  const items: ImagePdfItem[] = []
+  for (const path of result.files) {
+    const info = (await window.pdfAPI.invoke('img:getByPath', path)) as ImageInfo | { error: string }
+    if ('error' in info) {
+      showToast(`${baseName(path)}:${info.error}`, 'error')
+      continue
+    }
+    items.push({ path, name: baseName(path), width: info.width, height: info.height })
+  }
+  return items
+}
+
+/** 执行转换:进度事件更新对话框,成功后自动打开结果 */
+export async function convertImagesToPdf(items: ImagePdfItem[]): Promise<void> {
+  if (items.length === 0) {
+    showToast('请先添加图片', 'error')
+    return
+  }
+  imagePdfDialogState.running = true
+  imagePdfDialogState.done = 0
+  imagePdfDialogState.total = items.length
+  imagePdfDialogState.current = ''
+  imagePdfDialogState.result = null
+  const jobId = `img2pdf-${Date.now()}-${Math.floor(Math.random() * 1e6)}`
+  // 先订阅再进 runBusy:订阅句柄在闭包里赋值会被 TS 的控制流分析收窄成 never
+  const off = window.pdfAPI.on('img:toPdfProgress', (raw) => {
+    const info = raw as { jobId?: string; done?: number; total?: number; name?: string }
+    if (info?.jobId !== jobId) return
+    imagePdfDialogState.done = info.done ?? 0
+    imagePdfDialogState.total = info.total ?? items.length
+    imagePdfDialogState.current = info.name ?? ''
+  })
+  try {
+    await runBusy('正在生成 PDF…', async () => {
+      const result = (await window.pdfAPI.invoke('img:toPdf', {
+        jobId,
+        paths: items.map((item) => item.path),
+        pageMode: imagePdfDialogState.pageMode
+      })) as {
+        ok: boolean
+        canceled?: boolean
+        savedPath?: string
+        pages?: number
+        error?: string
+        errors?: Array<{ path: string; error: string }>
+      }
+      imagePdfDialogState.result = {
+        ok: result.ok,
+        savedPath: result.savedPath,
+        pages: result.pages,
+        error: result.error,
+        failed: result.errors?.length ?? 0
+      }
+      if (!result.ok) {
+        if (!result.canceled) showToast(result.error ?? '图片转 PDF 失败', 'error')
+        return
+      }
+      // 当前文档有未保存改动时不覆盖现场:只提示保存路径
+      if (!confirmDiscardChanges()) {
+        showToast(`已生成 PDF,未打开:${result.savedPath ?? ''}`)
+        return
+      }
+      await openPath(result.savedPath as string)
+      showToast(`已生成 PDF(${result.pages} 页):${result.savedPath ?? ''}`)
+    })
+  } finally {
+    off()
+    imagePdfDialogState.running = false
+  }
 }
 
 export async function openFileDialog(): Promise<void> {

@@ -18,7 +18,8 @@ function evictImages(): void {
 
 export type ImageImport = ImageInfo | { error: string }
 
-function mimeOf(buffer: Buffer): string | null {
+/** 按文件头判断 PNG / JPEG(图片转 PDF 复用;不信任扩展名) */
+export function mimeOf(buffer: Buffer): string | null {
   if (buffer.length > 8 && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e) return 'image/png'
   if (buffer.length > 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return 'image/jpeg'
   return null

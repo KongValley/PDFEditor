@@ -4,7 +4,7 @@ import { docReady } from '../store/document'
 import { setTool, ui, type Tool } from '../store/ui'
 import { canRedo, canUndo, removeSelected, redo, undo } from '../store/annotations'
 import { rotateView } from '../store/viewer'
-import { exportCurrentPageImage, openFileDialog, printPagesDialog, saveDocument, saveDocumentAs } from '../lib/actions'
+import { exportCurrentPageImage, openFileDialog, openImageToPdfDialog, printPagesDialog, saveDocument, saveDocumentAs } from '../lib/actions'
 import { STAMPS, STAMP_KEYS } from '../lib/annots'
 
 const TOOLS: Array<{ tool: Tool; label: string; title: string }> = [
@@ -31,6 +31,7 @@ const busy = computed(() => ui.busy !== null)
     <div class="toolbar-row">
       <span class="app-title">PDF 编辑器</span>
       <button title="打开 PDF (Ctrl+O)" @click="openFileDialog">打开</button>
+      <button title="把 PNG/JPEG 图片合并为一份 PDF" @click="openImageToPdfDialog()">图片转 PDF</button>
       <button :disabled="!hasDoc || busy" title="保存 PDF (Ctrl+S)" @click="saveDocument">保存</button>
       <button :disabled="!hasDoc || busy" title="另存为 (Ctrl+Shift+S)" @click="saveDocumentAs">另存为</button>
       <button :disabled="!hasDoc || busy" title="导出当前页为 PNG (Ctrl+E)" @click="exportCurrentPageImage">导出图片</button>
