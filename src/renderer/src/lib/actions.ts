@@ -2,13 +2,14 @@ import type {
   Annotation,
   AppendFileSpec,
   ChooseFileResult,
+  ImageAnnotation,
   ImageInfo,
   PageOp,
   PageOpResult,
   SaveResult,
   SplitTaskResult
 } from '@shared/types'
-import { docState, editVersion, getPage, markDirty, openByPath, reloadDocument } from '../store/document'
+import { docState, editVersion, getPage, machineProfile, markDirty, openByPath, reloadDocument } from '../store/document'
 import {
   annotState,
   applyPageMap,
@@ -25,6 +26,8 @@ import {
   requestPassword,
   requestSplitWork,
   showToast,
+  splitDialogState,
+  ui,
   type MergeRequest,
   type PdfFileEntry,
   type PrintQuality
@@ -32,6 +35,7 @@ import {
 import { parsePageRange } from '@shared/text'
 import { invalidateSearch } from '../store/search'
 import { maybeRestoreLastPage } from '../store/reading'
+import { scrollToPage } from '../store/viewer'
 import { getPageViewport, pdfjs } from './pdfjs'
 import { paintAnnotations } from './canvasannot'
 
@@ -40,9 +44,17 @@ async function restoreSidecar(): Promise<void> {
   const sidecarAnnotations = docState.sidecar?.annotations ?? []
   const source = docState.pdfAnnotations.length > 0 ? docState.pdfAnnotations : sidecarAnnotations
   resetAnnotations(source)
-  for (const ann of source) {
-    if (ann.kind !== 'image' || annotState.imageUrls[ann.imgId]) continue
-    const info = (await window.pdfAPI.invoke('img:getByPath', ann.refPath)) as ImageInfo | { error: string }
+  // 逐张串行读盘在多图文档上会让窗口卡住数秒:并发取回后再统一登记,错误仍逐条提示
+  const images = source.filter(
+    (ann): ann is ImageAnnotation => ann.kind === 'image' && !annotState.imageUrls[ann.imgId]
+  )
+  const loaded = await Promise.all(
+    images.map(async (ann) => ({
+      ann,
+      info: (await window.pdfAPI.invoke('img:getByPath', ann.refPath)) as ImageInfo | { error: string }
+    }))
+  )
+  for (const { ann, info } of loaded) {
     if ('error' in info) {
       showToast(`图片注释恢复失败:${info.error}`, 'error')
       continue
@@ -87,8 +99,22 @@ export async function saveDocumentAs(): Promise<void> {
   await saveTo(undefined)
 }
 
-/** 保存重入守卫:连按 Ctrl+S / 合并输出期间再次保存不应并发写盘 */
-let saveInFlight = false
+/**
+ * 长操作统一闸门:标签期间任何同类操作直接拒绝(返回 null),避免两批任务并发写同一目标。
+ * 返回 null 表示"因已有操作在跑而未执行"。
+ */
+export async function runBusy<T>(label: string, fn: () => Promise<T>): Promise<T | null> {
+  if (ui.busy) {
+    showToast('上一操作尚未完成,请稍候', 'error')
+    return null
+  }
+  ui.busy = label
+  try {
+    return await fn()
+  } finally {
+    ui.busy = null
+  }
+}
 
 /** 写入 PDF(明文)或仅 sidecar(加密文档),并同步 sidecar 编辑态 */
 async function saveTo(targetPath: string | undefined): Promise<void> {
@@ -97,9 +123,7 @@ async function saveTo(targetPath: string | undefined): Promise<void> {
     showToast('请先打开 PDF 文件', 'error')
     return
   }
-  if (saveInFlight) return
-  saveInFlight = true
-  try {
+  await runBusy('正在保存…', async () => {
     // 未提交的画布编辑器内容先并入模型,避免保存漏掉最后一次编辑
     commitOpenEditor()
     const version = editVersion()
@@ -127,9 +151,7 @@ async function saveTo(targetPath: string | undefined): Promise<void> {
       for (const warning of result.warnings) console.warn('[save]', warning)
       showToast(`保存完成,有 ${result.warnings.length} 条提示(详见控制台)`)
     }
-  } finally {
-    saveInFlight = false
-  }
+  })
 }
 
 export async function openFileDialog(): Promise<void> {
@@ -139,14 +161,13 @@ export async function openFileDialog(): Promise<void> {
   await openPath(result.paths[0])
 }
 
-export async function exportCurrentPageImage(): Promise<void> {
+export async function exportPageImage(pageNumber: number): Promise<void> {
   if (!docState.pdfDoc) {
     showToast('请先打开 PDF 文件', 'error')
     return
   }
   // 未提交的画布编辑器内容先并入模型,否则导出缺少最后一次编辑
   commitOpenEditor()
-  const pageNumber = docState.currentPage
   try {
     const page = await getPage(pageNumber)
     const { viewport } = getPageViewport(page, 2, docState.rotationView)
@@ -176,9 +197,17 @@ export async function exportCurrentPageImage(): Promise<void> {
   }
 }
 
+export async function exportCurrentPageImage(): Promise<void> {
+  return exportPageImage(docState.currentPage)
+}
+
 /* ------------------------------ 页面操作 ------------------------------ */
 
+/** 最近一次页面操作是否记了历史(主进程是否留了快照);供删除后的提示判断 */
+let lastPageOpUndoable = false
+
 async function runPageOp(op: PageOp, options: { recordHistory?: boolean } = {}): Promise<boolean> {
+  lastPageOpUndoable = false
   const docId = docState.docId
   if (!docId) return false
   const recordHistory = options.recordHistory !== false && op.kind !== 'export'
@@ -190,13 +219,22 @@ async function runPageOp(op: PageOp, options: { recordHistory?: boolean } = {}):
     return false
   }
   if (result.pageMap) applyPageMap(result.pageMap)
-  // rotate:只重算被旋转页尺寸,表单字段页序不变可沿用(免全量 N 次 getPage)
-  await reloadDocument(result.buffer, op.kind === 'rotate' ? { rotatedPages: op.pages } : undefined)
+  // move:页集合与表单控件集合都不变、仅顺序变化 → 用 pageMap 重排 pageBoxes,免全量 N 次 getPage。
+  // rotate:只重算被旋转页尺寸。
+  // delete/insertBlank 会增删页与表单控件,必须走全量重建(否则被删页的字段会残留);
+  // 不给它们 pageMap 即强制回退全量。
+  await reloadDocument(result.buffer, {
+    rotatedPages: op.kind === 'rotate' ? op.pages : undefined,
+    pageMap: op.kind === 'move' ? result.pageMap : undefined
+  })
+  // 重建后按当前页重新对齐滚动:换文档分支会归零,这里恢复(三种视图模式均由 scrollToPage 处理)
+  scrollToPage(docState.currentPage)
   invalidateSearch()
   markDirty()
   if (recordHistory) {
     // 主进程未记快照(超大文档)→ 不记历史,避免撤销栈与快照栈错位
     if (result.snapshotted === true) {
+      lastPageOpUndoable = true
       pushPageHistory({
         annotations: annotationsBefore,
         filePath: filePathBefore,
@@ -212,9 +250,13 @@ async function runPageOp(op: PageOp, options: { recordHistory?: boolean } = {}):
 
 export async function deletePages(pages: number[]): Promise<void> {
   if (pages.length === 0) return
-  const confirmed = window.confirm(`确定删除选中的 ${pages.length} 页吗?可用 Ctrl+Z 撤销。`)
+  // 撤销能力取决于主进程快照(>128MB 的文档根本不记快照),执行前无法确定,
+  // 因此确认框不承诺可撤销;执行后按实际能力提示
+  const confirmed = window.confirm(`确定删除选中的 ${pages.length} 页吗?`)
   if (!confirmed) return
-  if (await runPageOp({ kind: 'delete', pages })) showToast(`已删除 ${pages.length} 页`)
+  if (await runPageOp({ kind: 'delete', pages }) && lastPageOpUndoable) {
+    showToast(`已删除 ${pages.length} 页,可用 Ctrl+Z 撤销`)
+  }
 }
 
 export async function rotatePages(pages: number[], delta: number): Promise<void> {
@@ -304,42 +346,45 @@ export async function mergePdfs(specs?: AppendFileSpec[], targetPath?: string): 
     files = request.files
   }
 
-  commitOpenEditor()
-  const annotationsBefore = exportAnnotations()
-  const filePathBefore = filePath
-  if (!(await runPageOp({ kind: 'append', files }, { recordHistory: false }))) return
-  // 首次保存成功前 redo 不可用(保存失败时条目仅用于撤销)
-  let savedPath: string | null = null
-  // 主进程快照与本条目严格配对:先入栈(保存失败也保留,撤销可用)
-  pushPageHistory({
-    annotations: annotationsBefore,
-    filePath: filePathBefore,
-    pageMap: [],
-    redo: async () => {
-      if (!savedPath) return false
-      if (!(await runPageOp({ kind: 'append', files }, { recordHistory: false }))) return false
-      await importMergedAnnotations()
-      return (await writeMergedOutput(docId, savedPath)) !== null
+  // 合并本体(不含对话框)受 busy 闸门保护:对话框打开期间不占用,避免挡住用户再开一个
+  await runBusy('正在合并…', async () => {
+    commitOpenEditor()
+    const annotationsBefore = exportAnnotations()
+    const filePathBefore = filePath
+    if (!(await runPageOp({ kind: 'append', files }, { recordHistory: false }))) return
+    // 首次保存成功前 redo 不可用(保存失败时条目仅用于撤销)
+    let savedPath: string | null = null
+    // 主进程快照与本条目严格配对:先入栈(保存失败也保留,撤销可用)
+    pushPageHistory({
+      annotations: annotationsBefore,
+      filePath: filePathBefore,
+      pageMap: [],
+      redo: async () => {
+        if (!savedPath) return false
+        if (!(await runPageOp({ kind: 'append', files }, { recordHistory: false }))) return false
+        await importMergedAnnotations()
+        return (await writeMergedOutput(docId, savedPath)) !== null
+      }
+    })
+    await importMergedAnnotations()
+
+    let target = targetPath
+    if (!target) {
+      const unique = (await window.pdfAPI.invoke('app:uniquePath', {
+        dir: request?.outputDir ?? dirOf(filePath),
+        name: `${request?.outputName.trim() || `${fileStem()}-合并`}.pdf`
+      })) as { path: string }
+      target = unique.path
+    }
+    const written = await writeMergedOutput(docId, target)
+    if (written === null) return
+    savedPath = written
+    showToast(`已合并 ${files.length} 个文件并输出:${savedPath}`)
+    if (request?.autoOpen) {
+      const opened = (await window.pdfAPI.invoke('app:openFolder', savedPath)) as { ok: boolean }
+      if (!opened.ok) showToast('打开输出目录失败', 'error')
     }
   })
-  await importMergedAnnotations()
-
-  let target = targetPath
-  if (!target) {
-    const unique = (await window.pdfAPI.invoke('app:uniquePath', {
-      dir: request?.outputDir ?? dirOf(filePath),
-      name: `${request?.outputName.trim() || `${fileStem()}-合并`}.pdf`
-    })) as { path: string }
-    target = unique.path
-  }
-  const written = await writeMergedOutput(docId, target)
-  if (written === null) return
-  savedPath = written
-  showToast(`已合并 ${files.length} 个文件并输出:${savedPath}`)
-  if (request?.autoOpen) {
-    const opened = (await window.pdfAPI.invoke('app:openFolder', savedPath)) as { ok: boolean }
-    if (!opened.ok) showToast('打开输出目录失败', 'error')
-  }
 }
 
 /** 拖拽排序目标下标(0-based);target/dragPage 为 1-based 页码;返回 null = 无需移动 */
@@ -411,31 +456,61 @@ export async function splitPdfs(): Promise<void> {
     pageCount: docState.pageCount
   })
   if (!request) return
-  commitOpenEditor()
-  const results = (await window.pdfAPI.invoke('pdf:splitTasks', {
-    tasks: request.tasks,
-    outputDir: request.outputDir,
-    includeAnnotations: request.includeAnnotations,
-    annotations: request.includeAnnotations ? exportAnnotations() : undefined
-  })) as SplitTaskResult[]
-  const okResults = results.filter((result) => result.ok)
-  const failCount = results.length - okResults.length
-  const fileCount = okResults.reduce((sum, result) => sum + (result.outputs?.length ?? 0), 0)
-  if (failCount > 0) {
-    const firstFail = results.find((result) => !result.ok)
-    console.warn('[split] 失败任务:', results.filter((result) => !result.ok))
-    showToast(
-      `拆分完成:成功 ${okResults.length} 个,失败 ${failCount} 个(如 ${baseName(firstFail?.path ?? '')}:${firstFail?.error ?? '未知错误'})`,
-      'error'
-    )
-  } else {
-    showToast(`拆分完成:输出 ${fileCount} 个文件`)
-  }
-  const firstOutput = okResults[0]?.outputs?.[0]
-  if (request.autoOpen && firstOutput) {
-    const opened = (await window.pdfAPI.invoke('app:openFolder', firstOutput)) as { ok: boolean }
-    if (!opened.ok) showToast('打开输出目录失败', 'error')
-  }
+  // 拆分本体受 busy 闸门保护;对话框期间不占用,避免挡住用户再开一个拆分对话框
+  await runBusy('正在准备拆分…', async () => {
+    commitOpenEditor()
+    const jobId = `split-${Date.now()}-${Math.floor(Math.random() * 1e6)}`
+    splitDialogState.running = true
+    splitDialogState.jobId = jobId
+    splitDialogState.progress = { processed: 0, total: request.tasks.length, outputs: 0 }
+    // 主进程每写完一个文件推一次进度;「停止」按钮通过 pdf:splitCancel 置位
+    const off = window.pdfAPI.on('pdf:splitProgress', (raw) => {
+      const info = raw as { jobId?: string; processed?: number; total?: number; outputs?: number }
+      if (info?.jobId !== jobId) return
+      splitDialogState.progress = { processed: info.processed ?? 0, total: info.total ?? 0, outputs: info.outputs ?? 0 }
+      ui.busy = `拆分中 文件 ${info.processed ?? 0}/${info.total ?? 0},已输出 ${info.outputs ?? 0} 个`
+    })
+    let results: SplitTaskResult[]
+    try {
+      results = (await window.pdfAPI.invoke('pdf:splitTasks', {
+        jobId,
+        tasks: request.tasks,
+        outputDir: request.outputDir,
+        includeAnnotations: request.includeAnnotations,
+        annotations: request.includeAnnotations ? exportAnnotations() : undefined
+      })) as SplitTaskResult[]
+    } finally {
+      off()
+      splitDialogState.running = false
+      splitDialogState.jobId = null
+      splitDialogState.progress = null
+    }
+    const okResults = results.filter((result) => result.ok)
+    const failCount = results.length - okResults.length
+    const fileCount = okResults.reduce((sum, result) => sum + (result.outputs?.length ?? 0), 0)
+    if (failCount > 0) {
+      const firstFail = results.find((result) => !result.ok)
+      console.warn('[split] 失败任务:', results.filter((result) => !result.ok))
+      showToast(
+        `拆分完成:成功 ${okResults.length} 个,失败 ${failCount} 个(如 ${baseName(firstFail?.path ?? '')}:${firstFail?.error ?? '未知错误'})`,
+        'error'
+      )
+    } else {
+      showToast(`拆分完成:输出 ${fileCount} 个文件`)
+    }
+    const firstOutput = okResults[0]?.outputs?.[0]
+    if (request.autoOpen && firstOutput) {
+      const opened = (await window.pdfAPI.invoke('app:openFolder', firstOutput)) as { ok: boolean }
+      if (!opened.ok) showToast('打开输出目录失败', 'error')
+    }
+  })
+}
+
+/** 拆分对话框的「停止」按钮:置位后主进程在下一个文件边界停下(已写出的文件保留) */
+export async function cancelSplit(): Promise<void> {
+  const jobId = splitDialogState.jobId
+  if (!jobId) return
+  await window.pdfAPI.invoke('pdf:splitCancel', { jobId })
 }
 
 function fileStem(): string {
@@ -449,6 +524,26 @@ function baseName(p: string): string {
 function dirOf(p: string): string {
   const index = Math.max(p.lastIndexOf('\\'), p.lastIndexOf('/'))
   return index >= 0 ? p.slice(0, index) : ''
+}
+
+/** Chrome/Chromium canvas 单边硬限(实测 65535;超出后 getContext('2d') 返回 null) */
+const MAX_CANVAS_SIDE = 65535
+
+/** 长图拼接的位图内存上限(字节):省内存机 96MB,其余 256MB */
+function longImageByteBudget(): number {
+  return machineProfile.lowMem ? 96 * 1048576 : 256 * 1048576
+}
+
+/** 长图能放下的 scale(2 起逐档减半,下限 0.25);0 表示连下限都放不下,应提示缩小范围 */
+function fitLongImageScale(pageW: number, pageH: number, count: number, vertical: boolean): number {
+  for (let scale = 2; scale >= 0.25; scale /= 2) {
+    const span = (vertical ? pageH : pageW) * scale * count
+    const other = (vertical ? pageW : pageH) * scale
+    if (span <= MAX_CANVAS_SIDE && other <= MAX_CANVAS_SIDE && span * other * 4 <= longImageByteBudget()) {
+      return scale
+    }
+  }
+  return 0
 }
 
 /** 渲染单页到离屏 canvas(默认 scale=2;批注不画入位图,由调用方按勾选用画笔叠加) */
@@ -487,22 +582,37 @@ export async function exportPagesAsImages(
     return
   }
   commitOpenEditor()
-  try {
+  await runBusy(mode === 'long' ? '正在拼接长图…' : `正在导出 ${pages.length} 张图片…`, async () => {
+    try {
     if (mode === 'long') {
+      const vertical = direction !== 'h'
+      // 先按首页尺寸与页数算出放得下的 scale:超上限时自动降 scale,而不是渲染完再静默失败
+      const firstPage = await getPage(pages[0] + 1)
+      const baseVp = getPageViewport(firstPage, 1, docState.rotationView).viewport
+      const scale = fitLongImageScale(baseVp.width, baseVp.height, pages.length, vertical)
+      if (scale === 0) {
+        showToast(`长图超出 ${MAX_CANVAS_SIDE} 像素上限,请缩小页码范围`, 'error')
+        return
+      }
+      if (scale < 2) {
+        showToast(`页数较多,长图已自动降到 ${Math.round(scale * 100)}% 分辨率以适配内存`)
+      }
       const canvases: HTMLCanvasElement[] = []
       for (const index of pages) {
-        const canvas = await renderPageToCanvas(index + 1, includeAnnotations)
+        const canvas = await renderPageToCanvas(index + 1, includeAnnotations, scale)
         if (canvas) canvases.push(canvas)
       }
       if (canvases.length === 0) return
-      const vertical = direction !== 'h'
       const width = vertical ? Math.max(...canvases.map((c) => c.width)) : canvases.reduce((sum, c) => sum + c.width, 0)
       const height = vertical ? canvases.reduce((sum, c) => sum + c.height, 0) : Math.max(...canvases.map((c) => c.height))
       const out = document.createElement('canvas')
       out.width = width
       out.height = height
       const ctx = out.getContext('2d')
-      if (!ctx) return
+      if (!ctx) {
+        showToast('画布分配失败,请缩小页码范围', 'error')
+        return
+      }
       let offset = 0
       for (const c of canvases) {
         ctx.drawImage(c, vertical ? (width - c.width) / 2 : offset, vertical ? offset : (height - c.height) / 2)
@@ -515,6 +625,14 @@ export async function exportPagesAsImages(
       })) as SaveResult
       if (result.ok) showToast(`已导出长图:${result.savedPath ?? ''}`)
       else if (!result.canceled) showToast(result.error ?? '导出长图失败', 'error')
+      return
+    }
+    // 逐页多图:每页 base64 约为位图的 1.33 倍,且全部累积在 dataUrls[] 里再过 IPC
+    const probePage = await getPage(pages[0] + 1)
+    const probeVp = getPageViewport(probePage, 2, docState.rotationView).viewport
+    const perPageBytes = Math.floor(probeVp.width * probeVp.height * 4 * 1.33)
+    if (pages.length * perPageBytes > longImageByteBudget() * 2) {
+      showToast('页数较多,批量导出可能耗尽内存,请分批导出', 'error')
       return
     }
     const dataUrls: string[] = []
@@ -531,7 +649,14 @@ export async function exportPagesAsImages(
     else if (!result.canceled) showToast(result.error ?? '导出图片失败', 'error')
   } catch (err) {
     showToast(`导出图片失败:${err instanceof Error ? err.message : String(err)}`, 'error')
-  }
+    }
+  })
+}
+
+/** 打印 scale:高清 ≈300dpi 单页位图 33MB,叠加 print.ts 隐藏窗口的解码峰值;
+ *  省内存机自动降回标准档。纯函数便于冒烟直接断言,不必触发系统打印对话框。 */
+export function resolvePrintScale(quality: PrintQuality): number {
+  return quality === 'high' && !machineProfile.lowMem ? 300 / 72 : 2
 }
 
 /** 打印单页 PNG 字节:标准 2×(≈144dpi)、高清 300dpi(Uint8Array 走结构化克隆,免 base64×1.33) */
@@ -540,7 +665,7 @@ export async function renderPrintPageDataUrl(
   includeAnnotations: boolean,
   quality: PrintQuality
 ): Promise<Uint8Array | null> {
-  const scale = quality === 'high' ? 300 / 72 : 2
+  const scale = resolvePrintScale(quality)
   const canvas = await renderPageToCanvas(pageNumber, includeAnnotations, scale)
   if (!canvas) return null
   const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'))
@@ -555,6 +680,18 @@ export async function printPages(
 ): Promise<void> {
   if (!docState.pdfDoc || pages.length === 0) return
   commitOpenEditor()
+  if (quality === 'high' && machineProfile.lowMem) {
+    showToast('本机内存较小,高清打印已自动改为标准清晰度')
+  }
+  await runBusy('正在准备打印…', () => printPagesInner(pages, includeAnnotations, quality))
+}
+
+/** 打印本体(由 printPages 经 busy 闸门调用) */
+async function printPagesInner(
+  pages: number[],
+  includeAnnotations: boolean,
+  quality: PrintQuality
+): Promise<void> {
   let jobId: string | null = null
   try {
     const sizesMm = pages.map((index) => {

@@ -19,6 +19,16 @@ export interface ToastMessage {
   kind: 'info' | 'error'
 }
 
+/** 页面右键菜单状态(主视图与缩略图共用) */
+export interface PageMenuState {
+  open: boolean
+  /** 1-based 页号 */
+  page: number
+  /** 视口坐标(clientX/clientY) */
+  x: number
+  y: number
+}
+
 interface UiState {
   tool: Tool
   stampKey: StampKey
@@ -26,7 +36,14 @@ interface UiState {
   aboutOpen: boolean
   sideTab: 'annotations' | 'outline'
   toast: ToastMessage | null
+  /** 正在执行的长操作标签(如「拆分中 3/400」);非 null 时相关入口禁用 */
+  busy: string | null
   selectedAnnotationIds: string[]
+  /** 缩略图栏显示状态(Ctrl+B 切换) */
+  showThumbnails: boolean
+  /** 右侧面板显示状态(Ctrl+Shift+B 切换) */
+  showRightPanel: boolean
+  pageMenu: PageMenuState
 }
 
 export const ui = reactive<UiState>({
@@ -36,7 +53,11 @@ export const ui = reactive<UiState>({
   aboutOpen: false,
   sideTab: 'annotations',
   toast: null,
-  selectedAnnotationIds: []
+  busy: null,
+  selectedAnnotationIds: [],
+  showThumbnails: true,
+  showRightPanel: true,
+  pageMenu: { open: false, page: 1, x: 0, y: 0 }
 })
 
 let toastTimer: number | undefined
@@ -235,7 +256,12 @@ export const splitDialogState = reactive({
   rows: [] as SplitRow[],
   outputDir: null as string | null,
   autoOpen: false,
-  includeAnnotations: true
+  includeAnnotations: true,
+  /** 拆分执行中(对话框已关闭,由独立的运行遮罩展示进度与「停止」) */
+  running: false,
+  /** 主进程拆分任务 id(取消用) */
+  jobId: null as string | null,
+  progress: null as { processed: number; total: number; outputs: number } | null
 })
 
 let splitResolve: ((value: SplitRequest | null) => void) | null = null
@@ -266,6 +292,9 @@ export function requestSplitWork(seed: {
   splitDialogState.outputDir = null
   splitDialogState.autoOpen = false
   splitDialogState.includeAnnotations = true
+  splitDialogState.running = false
+  splitDialogState.jobId = null
+  splitDialogState.progress = null
   splitDialogState.open = true
   return new Promise((resolve) => {
     splitResolve = resolve

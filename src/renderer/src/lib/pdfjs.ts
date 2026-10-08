@@ -17,6 +17,9 @@ export interface LoadDocumentOptions {
   onPassword?: (updatePassword: (password: string | Error) => void, reason: number) => void
 }
 
+/** doc → loadingTask:PDFDocumentLoadingTask 被丢弃后 destroy() 永不可达 */
+const loadingTasks = new WeakMap<PDFDocumentProxy, PDFDocumentLoadingTask>()
+
 export async function loadPdfDocument(
   data: ArrayBuffer,
   options: LoadDocumentOptions = {}
@@ -29,7 +32,9 @@ export async function loadPdfDocument(
   })
   // pdf.js 的密码回调挂在 loadingTask 上(v3/v6 一致)
   if (options.onPassword) task.onPassword = options.onPassword
-  return task.promise
+  const doc = await task.promise
+  loadingTasks.set(doc, task)
+  return doc
 }
 
 export interface RangeLoadOptions extends LoadDocumentOptions {
@@ -55,10 +60,36 @@ export async function loadPdfDocumentByRange(options: RangeLoadOptions): Promise
   // pdf.js 的密码回调挂在 loadingTask 上(v3/v6 一致)
   if (options.onPassword) task.onPassword = options.onPassword
   try {
-    return await task.promise
+    const doc = await task.promise
+    loadingTasks.set(doc, task)
+    return doc
   } catch (err) {
     // 分段读取失败时 pdf.js 抛的是 AbortException:以真实原因上报
     throw fatal ?? err
+  }
+}
+
+/**
+ * 彻底销毁:terminate worker 侧的解析产物。
+ * `cleanup()` 在有页正在渲染时会抛 "startCleanup: Page N is currently rendering"
+ * (pdf.js 3.11.174 pdf.js:2515-2517),且它只释放字体/对象缓存、保留已解析文档 ——
+ * 反复换文档/撤销会在 worker 里单调堆积。
+ * 形参用 `object`:docState.pdfDoc 经 reactive/markRaw 后丢失 PDFDocumentProxy 的
+ * `#private` 品牌,强类型签名会编译不过;WeakMap 按对象身份命中,类型只用于内部取回。
+ */
+export async function destroyPdfDocument(doc: object | null): Promise<void> {
+  if (!doc) return
+  const typed = doc as PDFDocumentProxy
+  const task = loadingTasks.get(typed)
+  loadingTasks.delete(typed)
+  if (!task) {
+    typed.cleanup()
+    return
+  }
+  try {
+    await task.destroy()
+  } catch (err) {
+    console.warn('文档销毁失败:', err)
   }
 }
 

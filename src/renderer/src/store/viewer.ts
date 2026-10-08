@@ -1,5 +1,5 @@
 import { nextTick } from 'vue'
-import { docState, pageDisplaySize, type ViewMode } from './document'
+import { docState, machineProfile, pageDisplaySize, type ViewMode } from './document'
 
 export const PAGE_GAP = 16
 export const VIEWER_PADDING = 24
@@ -12,6 +12,41 @@ let fitMode: 'none' | 'width' | 'page' = 'none'
 
 /** 渲染看门狗:worker 偶发停摆时 render().promise 永不 settle(代码审查报告存疑 #4);冒烟可调 */
 export const renderWatchdog = { timeoutMs: 8000, timeouts: 0, renders: 0, stallNext: false }
+
+/**
+ * 并发渲染上限:双页模式一次可见 6 页(连续模式仅 1 页),若全部并发提交,
+ * 排在后面的页会在同一个 pdf.js worker 队列里等过看门狗预算(8s)→ 超时 → 白页。
+ * 状态必须放在模块作用域:<script setup> 顶层的 let 是每个组件实例各一份,无法跨页共享。
+ */
+export const renderGate = {
+  max: 2,
+  /** 正在渲染的页数(跨 PageCanvas 实例共享) */
+  active: 0,
+  /** 等槽的唤醒函数队列 */
+  waiters: [] as Array<() => void>
+}
+
+/** 按机器画像定并发:省内存机(≤4GB)只允许 1 个大位图同时光栅化 */
+export function applyRenderGateBudget(): void {
+  renderGate.max = machineProfile.lowMem ? 1 : 2
+}
+
+/** 取得一个渲染槽(超限则排队等待) */
+export async function acquireRenderSlot(): Promise<void> {
+  if (renderGate.active < renderGate.max) {
+    renderGate.active++
+    return
+  }
+  await new Promise<void>((resolve) => renderGate.waiters.push(resolve))
+  renderGate.active++
+}
+
+/** 释放渲染槽并唤醒下一个等待者 */
+export function releaseRenderSlot(): void {
+  renderGate.active--
+  const next = renderGate.waiters.shift()
+  if (next) next()
+}
 
 export function attachContainer(el: HTMLElement | null): void {
   container = el
@@ -184,7 +219,8 @@ export function zoomAt(newScale: number, clientY?: number, source?: 'wheel'): vo
   const anchorY = clientY === undefined ? container.clientHeight / 2 : clientY - rect.top
   const oldHeight = contentHeight()
   const ratio = oldHeight > 0 ? (container.scrollTop + anchorY) / oldHeight : 0
-  rebuildLayoutCache()
+  // 不在此处 rebuildLayoutCache():此刻 scale 仍是旧值,重建出来的还是旧几何;
+  // 改 scale 后 nextTick 的 contentHeight() 会按新签名重建一次即可
   docState.scale = clamped
   void nextTick(() => {
     if (!container) return

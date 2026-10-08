@@ -1,5 +1,5 @@
 import { computed, reactive } from 'vue'
-import type { Annotation, ImageInfo, PageOpResult } from '@shared/types'
+import type { Annotation, ImageAnnotation, ImageInfo, PageOpResult } from '@shared/types'
 import { annotationBounds } from '@shared/types'
 import { docState, markDirty, reloadDocument } from './document'
 import { invalidateSearch } from './search'
@@ -301,11 +301,18 @@ function restoreItems(items: Annotation[]): void {
   ui.selectedAnnotationIds = ui.selectedAnnotationIds.filter((id) => alive.has(id))
 }
 
-/** 页面撤销后补回缺失的图片 dataUrl */
+/** 页面撤销后补回缺失的图片 dataUrl(并发取回,避免逐张串行阻塞界面) */
 async function ensureImageUrls(): Promise<void> {
-  for (const ann of annotState.items) {
-    if (ann.kind !== 'image' || annotState.imageUrls[ann.imgId]) continue
-    const info = (await window.pdfAPI.invoke('img:getByPath', ann.refPath)) as ImageInfo | { error: string }
+  const missing = annotState.items.filter(
+    (ann): ann is ImageAnnotation => ann.kind === 'image' && !annotState.imageUrls[ann.imgId]
+  )
+  const loaded = await Promise.all(
+    missing.map(async (ann) => ({
+      ann,
+      info: (await window.pdfAPI.invoke('img:getByPath', ann.refPath)) as ImageInfo | { error: string }
+    }))
+  )
+  for (const { ann, info } of loaded) {
     if (!('error' in info)) annotState.imageUrls[ann.imgId] = info.dataUrl
   }
 }

@@ -1,5 +1,5 @@
-import { markRaw, reactive } from 'vue'
-import { loadPdfDocument, loadPdfDocumentByRange, type PDFDocumentProxy, type PDFPageProxy } from '../lib/pdfjs'
+import { computed, markRaw, reactive } from 'vue'
+import { destroyPdfDocument, loadPdfDocument, loadPdfDocumentByRange, type PDFDocumentProxy, type PDFPageProxy } from '../lib/pdfjs'
 import { loadOutline } from '../lib/outline'
 import { discoverFormFields } from '../lib/forms'
 import type {
@@ -9,6 +9,7 @@ import type {
   OpenResult,
   OutlineNode,
   RangeReadResult,
+  RuntimeInfo,
   SidecarData
 } from '@shared/types'
 
@@ -28,11 +29,35 @@ export const rangeStreamStats: { mode: 'range' | 'buffer'; reads: number; bytes:
 /** 阅读视图模式:连续阅读 / 单页阅览 / 双页阅览 */
 export type ViewMode = 'continuous' | 'single' | 'two'
 
+/** 机器画像(来自 app:runtimeInfo);首次打开文档前就绪,供各处同步读取 */
+export const machineProfile = reactive({
+  ready: false,
+  arch: 'x64',
+  lowMem: false,
+  totalMemMB: 0
+})
+
+/** 读取机器画像并缓存(幂等):失败时按省内存档处理,老机器不会退回激进默认值 */
+export async function loadMachineProfile(): Promise<void> {
+  if (machineProfile.ready) return
+  try {
+    const info = (await window.pdfAPI.invoke('app:runtimeInfo')) as Partial<RuntimeInfo>
+    machineProfile.arch = info.arch ?? 'x64'
+    machineProfile.totalMemMB = info.totalMemMB ?? 0
+    machineProfile.lowMem = info.lowMem ?? false
+  } catch {
+    machineProfile.lowMem = true
+  }
+  machineProfile.ready = true
+}
+
 interface DocState {
   docId: string | null
   filePath: string | null
   pdfDoc: PDFDocumentProxy | null
   loading: boolean
+  /** 打开阶段的细粒度进度(大文档读取页面尺寸时才有内容) */
+  loadProgress: string | null
   loadError: string | null
   pageCount: number
   pageBoxes: PageBox[]
@@ -60,6 +85,7 @@ export const docState = reactive<DocState>({
   filePath: null,
   pdfDoc: null,
   loading: false,
+  loadProgress: null,
   loadError: null,
   pageCount: 0,
   pageBoxes: [],
@@ -75,6 +101,12 @@ export const docState = reactive<DocState>({
   dirty: false,
   pdfAnnotations: []
 })
+
+/**
+ * 文档几何是否就绪:pdfDoc 就位 ≠ 可用 —— pageBoxes 要等 fillPageBoxes 跑完才有值,
+ * 此前 pageDisplaySize 全返回 {0,0},挂载 viewer 只会得到一片空白(打开 400 页文档时数秒)。
+ */
+export const docReady = computed(() => docState.pdfDoc !== null && docState.pageBoxes.length === docState.pageCount)
 
 /** 编辑版本号:保存期间注释变化 → 不清脏标记(替代无条件清 0) */
 let editVersionCounter = 0
@@ -172,7 +204,10 @@ export function pageDisplaySize(index: number): { w: number; h: number } {
   return { w: Math.round(w * docState.scale), h: Math.round(h * docState.scale) }
 }
 
-async function fillPageBoxes(pdfDoc: PDFDocumentProxy): Promise<PageBox[]> {
+async function fillPageBoxes(
+  pdfDoc: PDFDocumentProxy,
+  onProgress?: (done: number, total: number) => void
+): Promise<PageBox[]> {
   const boxes: PageBox[] = new Array(pdfDoc.numPages)
   const total = pdfDoc.numPages
   for (let start = 1; start <= total; start += 32) {
@@ -191,12 +226,23 @@ async function fillPageBoxes(pdfDoc: PDFDocumentProxy): Promise<PageBox[]> {
         page.cleanup()
       })
     )
+    onProgress?.(Math.min(start - 1 + 32, total), total)
   }
   return boxes
 }
 
 export interface OpenOptions {
   onPassword?: (updatePassword: (password: string | Error) => void, reason: number) => void
+}
+
+/** 已释放的主进程 docId(冒烟断言用;不参与运行逻辑) */
+export const releasedDocIds: string[] = []
+
+/** 释放主进程持有的整份字节(换文档/关闭文档时调用,否则要等 MAX_DOCS=3 的 LRU 逐出) */
+function releaseDocEntry(docId: string): void {
+  releasedDocIds.push(docId)
+  if (releasedDocIds.length > 50) releasedDocIds.shift()
+  void window.pdfAPI.invoke('doc:release', docId)
 }
 
 export async function openByPath(path: string, options: OpenOptions = {}): Promise<boolean> {
@@ -243,11 +289,15 @@ export async function openByPath(path: string, options: OpenOptions = {}): Promi
     }
 
     pageCache = new Map()
+    const prevDocId = docState.docId
+    // 换文档:立即释放上一份在主进程的整份字节,不等 MAX_DOCS=3 的 LRU 逐出
+    // (逐个打开大文件时,否则主进程会同时驻留 3 份)
+    if (prevDocId && prevDocId !== result.docId) releaseDocEntry(prevDocId)
     docState.docId = result.docId
     docState.filePath = result.path ?? path
     // 释放上一份文档的 worker 资源(与 reloadDocument 一致),避免反复打开后 worker 侧内存单调增长
     if (docState.pdfDoc) {
-      docState.pdfDoc.cleanup()
+      void destroyPdfDocument(docState.pdfDoc)
       cleanupCount++
     }
     docState.pdfDoc = markRaw(pdfDoc)
@@ -261,7 +311,9 @@ export async function openByPath(path: string, options: OpenOptions = {}): Promi
     docState.formValues = result.sidecar?.formValues ? { ...result.sidecar.formValues } : {}
     docState.loadError = null
 
-    const boxes = await fillPageBoxes(pdfDoc)
+    const boxes = await fillPageBoxes(pdfDoc, (done, total) => {
+      docState.loadProgress = `正在读取页面信息 ${done}/${total}`
+    })
     docState.pageBoxes = boxes
 
     // 表单字段:sidecar 值优先,其次用文档中的现有值作为初始值
@@ -281,15 +333,18 @@ export async function openByPath(path: string, options: OpenOptions = {}): Promi
     return false
   } finally {
     docState.loading = false
+    docState.loadProgress = null
   }
 }
 
 /** 页面操作后:以新 buffer 重开 pdf.js 文档(保持缩放与视图旋转)。
- * incremental:rotate 专用 —— 只重算被旋转页的尺寸,表单字段沿用旧值(页序不变);
- * 免掉全量 N 次 getPage + N 次 getAnnotations,长度异常时自动回退全量。 */
+ * 增量模式:
+ *  - `rotatedPages`:该页尺寸宽高互换(rotate 专用)
+ *  - `pageMap`:按旧页序 → 新页序重排 pageBoxes(move 用;长度不符或有空洞自动回退全量)
+ * 两者都不给(或结果不完整)时回退全量 fillPageBoxes + discoverFormFields。 */
 export async function reloadDocument(
   buffer: ArrayBuffer,
-  incremental?: { rotatedPages: number[] }
+  incremental?: { rotatedPages?: number[]; pageMap?: number[] }
 ): Promise<void> {
   // 页面重建后旧 pin 页号失效:不清理会让新文档同号页被豁免回收
   clearViewerPins()
@@ -298,25 +353,51 @@ export async function reloadDocument(
   pageCache = new Map()
   docState.pdfDoc = markRaw(pdfDoc)
   docState.pageCount = pdfDoc.numPages
-  if (incremental && incremental.rotatedPages.length > 0) {
-    const rotated = new Set(incremental.rotatedPages)
-    docState.pageBoxes = docState.pageBoxes.map((box, i) => (rotated.has(i) ? { w: box.h, h: box.w } : box))
-    if (docState.pageBoxes.length !== pdfDoc.numPages) {
-      // rotate 不改页数;长度不符说明状态异常,回退全量
-      docState.pageBoxes = await fillPageBoxes(pdfDoc)
+
+  const boxes = docState.pageBoxes
+  let nextBoxes: PageBox[] | null = null
+  if (incremental?.pageMap && incremental.pageMap.length === boxes.length) {
+    const reordered: PageBox[] = new Array(pdfDoc.numPages)
+    incremental.pageMap.forEach((newIndex, oldIndex) => {
+      if (newIndex >= 0 && newIndex < pdfDoc.numPages) reordered[newIndex] = boxes[oldIndex]
+    })
+    // 任一空位即视为映射不完整,回退全量。
+    // 注意不能用 Array.prototype.every:它跳过稀疏数组的空洞,会把 insertBlank 留下的
+    // 空缺误判为"全部已填充"。
+    let complete = true
+    for (let i = 0; i < reordered.length; i++) {
+      if (reordered[i] === undefined) {
+        complete = false
+        break
+      }
     }
+    nextBoxes = complete ? reordered : null
+  } else if (incremental?.rotatedPages && incremental.rotatedPages.length > 0) {
+    const rotated = new Set(incremental.rotatedPages)
+    nextBoxes = boxes.map((box, i) => (rotated.has(i) ? { w: box.h, h: box.w } : box))
+  }
+
+  if (nextBoxes && nextBoxes.length === pdfDoc.numPages) {
+    docState.pageBoxes = nextBoxes
+    // 增量分支不重建 pdf.js 文档内容,但页面重排后表单控件的页号必须跟着迁移,
+    // 否则 FormOverlay 会把字段画到错误的页上(rotate 分支页序不变,不需要迁)
+    const map = incremental?.pageMap ?? []
+    docState.formFields = docState.formFields
+      .map((field) => ({ ...field, page: map[field.page] ?? -1 }))
+      .filter((field) => field.page >= 0)
   } else {
     docState.pageBoxes = await fillPageBoxes(pdfDoc)
     // 页面/合并操作会改变表单控件集合:重新发现,否则合并进来的字段不显示也无法填写
     docState.formFields = await discoverFormFields(pdfDoc)
   }
   docState.currentPage = Math.min(Math.max(docState.currentPage, 1), pdfDoc.numPages)
-  if (previous) void previous.cleanup()
+  if (previous) void destroyPdfDocument(previous)
 }
 
 export function closeDocument(): void {
   const doc = docState.pdfDoc
-  if (doc) void doc.cleanup()
+  if (doc) void destroyPdfDocument(doc)
+  if (docState.docId) releaseDocEntry(docState.docId)
   pageCache = new Map()
   docState.docId = null
   docState.filePath = null

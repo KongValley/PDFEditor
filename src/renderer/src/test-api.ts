@@ -13,13 +13,23 @@ import {
   mergePdfs,
   movePage,
   renderPrintPageDataUrl,
+  resolvePrintScale,
   rotatePages,
+  runBusy,
   saveDocument,
   saveDocumentAs,
   splitPdfs
 } from './lib/actions'
 import { parsePageRange, splitPageSegments } from '@shared/text'
-import { docState, cachedPageCount, pinnedPageCounts, docCleanupCount, rangeStreamStats } from './store/document'
+import {
+  docState,
+  cachedPageCount,
+  machineProfile,
+  pinnedPageCounts,
+  docCleanupCount,
+  rangeStreamStats,
+  releasedDocIds
+} from './store/document'
 import { invalidateSearch, searchState } from './store/search'
 import { mergeDialogState, splitDialogState, ui } from './store/ui'
 import { searchDocument } from './lib/textsearch'
@@ -38,7 +48,7 @@ import {
   undo,
   updateAnnotation
 } from './store/annotations'
-import { renderWatchdog, scrollToPage } from './store/viewer'
+import { renderGate, renderWatchdog, scrollToPage, zoomBy } from './store/viewer'
 import { goBack, goForward, readingState, setRestoreLastPage } from './store/reading'
 import { TOOL_DEFAULTS, withIdentity } from './lib/annots'
 import { pdfjs } from './lib/pdfjs'
@@ -67,6 +77,8 @@ async function openPathReady(path: string): Promise<void> {
   console.log(
     `[t] ready-timeout ${Date.now() - t0}ms path=${path.split(/[\\/]/).pop()} pages=${document.querySelectorAll('.page-wrap').length} layers=${document.querySelectorAll('.ann-layer').length} currentLayer=${!!currentLayer()} scrollTop=${viewer?.scrollTop ?? -1} visible=${visibleFlags} currentPage=${docState.currentPage} pageCount=${docState.pageCount}`
   )
+  // 静默返回会让后续步骤在"还没渲染出来的空白页"上断言,报出与真实原因无关的失败
+  throw new Error(`openPathReady:当前页未在 20s 内渲染(${path.split(/[\\/]/).pop()})`)
 }
 
 export function installTestApi(): void {
@@ -96,6 +108,7 @@ export function installTestApi(): void {
     extractPages,
     exportPagesAsImages,
     renderPrintPageDataUrl,
+    resolvePrintScale,
     dropTargetIndex,
     saveDocument,
     saveDocumentAs,
@@ -111,13 +124,18 @@ export function installTestApi(): void {
     splitPageSegments,
     scrollToPage,
     renderWatchdog,
+    renderGate,
+    zoomBy,
+    runBusy,
     goBack,
     goForward,
     readingState,
     setRestoreLastPage,
     cachedPageCount,
     pinnedPageCounts,
+    machineProfile,
     cleanupCount: docCleanupCount,
+    releasedDocIds,
     rangeStreamStats,
     invalidateSearch,
     search: (query: string, limit?: number) => searchDocument(query, limit),
