@@ -35,8 +35,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # 绿色版为 zip,安装包为 exe,两类产物都要上传
-          $assets = @(Get-ChildItem -Path release -Recurse -File -Include *.exe,*.zip | ForEach-Object { $_.FullName })
+          # 只取四个架构分发目录里的产物:不能递归 —— release/win-unpacked/ 是
+          # 打包中间目录,里面 resources/elevate.exe 之类的内部文件不是分发物
+          $assets = @(
+            Get-ChildItem -Path 'release/Win7-32位','release/Win7-64位','release/Win10-32位','release/Win10-64位' -File |
+              Where-Object { $_.Extension -in '.exe', '.zip' } |
+              ForEach-Object { $_.FullName }
+          )
           if ($assets.Count -eq 0) { Write-Error '未找到任何安装包/绿色版产物'; exit 1 }
           gh release create $env:GITHUB_REF_NAME --title $env:GITHUB_REF_NAME --generate-notes @assets
           if ($LASTEXITCODE -ne 0) {
