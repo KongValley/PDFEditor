@@ -52,5 +52,17 @@ jobs:
         run: npm run samples
 
       # 应用默认关闭硬件加速(软件光栅),CI 无 GPU 也能跑
+      # timeout-minutes 是硬保险:本地全量约 7 分钟,超过 25 分钟即视为挂死(runner 环境问题)
       - name: 端到端冒烟(31 步)
+        timeout-minutes: 25
         run: npm run smoke
+
+      # 失败时把每步的结果 JSON 传上来,否则只能看到「31 项失败」而定位不到是哪一步
+      - name: 上传冒烟结果
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-results
+          path: tmp/smoke-*.json
+          if-no-files-found: warn
+          retention-days: 7
