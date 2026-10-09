@@ -137,18 +137,24 @@ export async function createAnnotContext(
 }
 
 /**
- * 写文本。缺中文字体时退回的是 StandardFonts.Helvetica(WinAnsi 编码),遇到中文会抛
- * "WinAnsi cannot encode ..." —— 直接冒泡会被包成"拆分失败:…"这种没法看的提示,
- * 这里翻译成"装字体"的可读原因;非编码异常原样抛出,不掩盖其他问题。
- * 纯 ASCII 内容不触发,行为与从前一致(不提前失败,免得误伤可用场景)。
+ * 缺可嵌入中文字体。与"这条批注画不出来"的一般失败区别对待:继续保存会把用户的中文
+ * 批注/图章**静默丢掉**(只在控制台留一条 warning),必须让整次保存失败并给出可读原因。
  */
-function drawTextSafe(page: PDFPage, text: string, options: Parameters<PDFPage['drawText']>[1]): void {
+class MissingCjkFontError extends Error {}
+
+/**
+ * 缺中文字体时退回的是 StandardFonts.Helvetica(WinAnsi 编码),遇到中文会抛
+ * "WinAnsi cannot encode ..."。抛出点不止 page.drawText:pdf-lib 的 widthOfTextAtSize
+ * (换行测量、fitFontSize)同样先做编码,所以守卫包住整段绘制。
+ * 非编码异常原样抛出,不掩盖其他问题;纯 ASCII 内容不触发,行为与从前一致。
+ */
+function withCjkFont<T>(draw: () => T): T {
   try {
-    page.drawText(text, options)
+    return draw()
   } catch (err) {
     const message = (err as Error).message
     if (!/cannot encode/i.test(message)) throw err
-    throw new Error(
+    throw new MissingCjkFontError(
       `系统缺少可嵌入的中文字体(SimHei/黑体),无法写入中文内容;请安装该字体后重试(原始错误:${message})`
     )
   }
@@ -164,47 +170,51 @@ function drawTextBlock(
   opacity: number,
   rotate: number
 ): void {
-  const lines = wrapText(text, Math.max(bbox.w, 8), (s) => font.widthOfTextAtSize(s, fontSize))
-  const lineHeight = fontSize * 1.2
-  lines.forEach((line, index) => {
-    if (line === '') return
-    drawTextSafe(page, line, {
-      x: bbox.x,
-      y: bbox.y + bbox.h - fontSize - index * lineHeight,
-      size: fontSize,
-      font,
-      color: rgb(color.r, color.g, color.b),
-      opacity,
-      rotate: degrees(rotate)
+  withCjkFont(() => {
+    const lines = wrapText(text, Math.max(bbox.w, 8), (s) => font.widthOfTextAtSize(s, fontSize))
+    const lineHeight = fontSize * 1.2
+    lines.forEach((line, index) => {
+      if (line === '') return
+      page.drawText(line, {
+        x: bbox.x,
+        y: bbox.y + bbox.h - fontSize - index * lineHeight,
+        size: fontSize,
+        font,
+        color: rgb(color.r, color.g, color.b),
+        opacity,
+        rotate: degrees(rotate)
+      })
     })
   })
 }
 
 function drawStamp(page: PDFPage, ann: Annotation & { kind: 'stamp' }, font: PDFFont): void {
-  const color = hexToRgb(ann.color)
-  const box = ann.bbox
-  page.drawRectangle({
-    x: box.x,
-    y: box.y,
-    width: box.w,
-    height: box.h,
-    borderColor: rgb(color.r, color.g, color.b),
-    borderWidth: 2,
-    borderOpacity: ann.opacity,
-    color: rgb(color.r, color.g, color.b),
-    opacity: 0.08,
-    rotate: degrees(0)
-  })
-  const fontSize = fitFontSize(ann.label, box, (s, size) => font.widthOfTextAtSize(s, size))
-  const width = font.widthOfTextAtSize(ann.label, fontSize)
-  drawTextSafe(page, ann.label, {
-    x: box.x + (box.w - width) / 2,
-    y: box.y + box.h / 2 - fontSize * 0.35,
-    size: fontSize,
-    font,
-    color: rgb(color.r, color.g, color.b),
-    opacity: ann.opacity,
-    rotate: degrees(ann.rotate)
+  withCjkFont(() => {
+    const color = hexToRgb(ann.color)
+    const box = ann.bbox
+    page.drawRectangle({
+      x: box.x,
+      y: box.y,
+      width: box.w,
+      height: box.h,
+      borderColor: rgb(color.r, color.g, color.b),
+      borderWidth: 2,
+      borderOpacity: ann.opacity,
+      color: rgb(color.r, color.g, color.b),
+      opacity: 0.08,
+      rotate: degrees(0)
+    })
+    const fontSize = fitFontSize(ann.label, box, (s, size) => font.widthOfTextAtSize(s, size))
+    const width = font.widthOfTextAtSize(ann.label, fontSize)
+    page.drawText(ann.label, {
+      x: box.x + (box.w - width) / 2,
+      y: box.y + box.h / 2 - fontSize * 0.35,
+      size: fontSize,
+      font,
+      color: rgb(color.r, color.g, color.b),
+      opacity: ann.opacity,
+      rotate: degrees(ann.rotate)
+    })
   })
 }
 
@@ -523,6 +533,8 @@ export async function replaceOwnAnnotations(
       }
       annots.push(doc.context.register(dict))
     } catch (err) {
+      // 缺中文字体:整次失败(否则用户的中文批注被静默丢弃),由上层给出可读提示
+      if (err instanceof MissingCjkFontError) throw err
       ctx.warnings.push(`注释写入失败(${ann.kind}):${(err as Error).message}`)
     }
   }
