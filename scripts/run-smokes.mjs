@@ -128,7 +128,11 @@ for (const script of scripts) {
   const name = script.replace(/\.js$/, '')
   const outFile = join(tmpDir, `smoke-${name}.json`)
   rmSync(outFile, { force: true })
-  spawnSync(electron, ['.', `--user-data-dir=${join(tmpDir, `udd-${name}`)}`], {
+  const stepTimeoutMs = Number(STEP_TIMEOUTS[script] ?? 60000)
+  // 进程级看门狗:脚本内的 PDF_EDITOR_SMOKE_TIMEOUT 只在「窗口已就绪、脚本已开始跑」之后才生效。
+  // 窗口起不来时(无显示环境/CI runner)spawnSync 会永远等下去,这里用 spawnSync 自身的 timeout
+  // 兜底:到点强杀进程树,让该步记为失败并继续往下跑,而不是整轮挂死。
+  const spawn = spawnSync(electron, ['.', `--user-data-dir=${join(tmpDir, `udd-${name}`)}`], {
     cwd: root,
     env: {
       ...process.env,
@@ -137,11 +141,19 @@ for (const script of scripts) {
       PDF_EDITOR_SMOKE_SCRIPT: join('scripts', 'smoke', script),
       PDF_EDITOR_SMOKE_OUT: outFile,
       PDF_EDITOR_SMOKE_ROOT: root,
-      PDF_EDITOR_SMOKE_TIMEOUT: STEP_TIMEOUTS[script] ?? '60000'
+      PDF_EDITOR_SMOKE_TIMEOUT: String(stepTimeoutMs)
     },
-    stdio: 'ignore'
+    stdio: 'ignore',
+    timeout: stepTimeoutMs + 60000,
+    killSignal: 'SIGKILL'
   })
   let report = { ok: false, error: '未生成结果文件' }
+  if ((spawn.error || spawn.signal) && !existsSync(outFile)) {
+    report = {
+      ok: false,
+      error: `Electron 未在 ${stepTimeoutMs + 60000}ms 内退出(${spawn.signal ?? spawn.error?.code ?? 'unknown'}),通常意味着窗口没能创建`
+    }
+  }
   if (existsSync(outFile)) {
     try {
       report = JSON.parse(readFileSync(outFile, 'utf8'))
