@@ -9,7 +9,16 @@ import type {
   SaveResult,
   SplitTaskResult
 } from '@shared/types'
-import { docState, editVersion, getPage, machineProfile, markDirty, openByPath, reloadDocument } from '../store/document'
+import {
+  docState,
+  editVersion,
+  getPage,
+  machineProfile,
+  markDirty,
+  openByPath,
+  pageDisplaySize,
+  reloadDocument
+} from '../store/document'
 import {
   annotState,
   applyPageMap,
@@ -38,7 +47,7 @@ import { cancelOrientationPlan, requestOrientationPlan, submitOrientationPlan } 
 import { imagePdfDialogState, requestImagePdf, type ImagePdfItem } from '../store/ui'
 import { invalidateSearch } from '../store/search'
 import { maybeRestoreLastPage } from '../store/reading'
-import { scrollToPage } from '../store/viewer'
+import { orientationFlipped, refitAfterOrientationChange, scrollToPage } from '../store/viewer'
 import { getPageViewport, pdfjs } from './pdfjs'
 import { paintAnnotations } from './canvasannot'
 
@@ -360,6 +369,8 @@ async function runPageOp(op: PageOp, options: { recordHistory?: boolean } = {}):
     return false
   }
   if (result.pageMap) applyPageMap(result.pageMap)
+  // 旋转前的当前页显示尺寸:旋转后据此判断方向有没有翻转(见下方 refit)
+  const sizeBefore = pageDisplaySize(docState.currentPage - 1)
   // move:页集合与表单控件集合都不变、仅顺序变化 → 用 pageMap 重排 pageBoxes,免全量 N 次 getPage。
   // rotate:只重算被旋转页尺寸。
   // delete/insertBlank 会增删页与表单控件,必须走全量重建(否则被删页的字段会残留);
@@ -371,6 +382,10 @@ async function runPageOp(op: PageOp, options: { recordHistory?: boolean } = {}):
     pageMap: op.kind === 'move' ? result.pageMap : undefined
   })
   // 重建后按当前页重新对齐滚动:换文档分支会归零,这里恢复(三种视图模式均由 scrollToPage 处理)
+  // 当前页方向翻转(竖↔横)时先重新适应再滚动:页面宽度换了,沿用旧缩放会横向溢出看不全
+  if (op.kind === 'rotate' && orientationFlipped(sizeBefore, pageDisplaySize(docState.currentPage - 1))) {
+    refitAfterOrientationChange()
+  }
   scrollToPage(docState.currentPage)
   invalidateSearch()
   markDirty()

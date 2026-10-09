@@ -37,7 +37,8 @@ const scripts = [
   'step23-two-page.js',
   'step24-long-image.js',
   'step25-orient.js',
-  'step26-image2pdf.js'
+  'step26-image2pdf.js',
+  'step27-rotate-fit.js'
 ]
 
 if (!existsSync(join(root, 'samples', 'sample-zh.pdf'))) {
@@ -92,7 +93,8 @@ const STEP_TIMEOUTS = {
   'step23-two-page.js': '180000',
   'step24-long-image.js': '180000',
   'step25-orient.js': '180000',
-  'step26-image2pdf.js': '120000'
+  'step26-image2pdf.js': '120000',
+  'step27-rotate-fit.js': '120000'
 }
 
 let failed = 0

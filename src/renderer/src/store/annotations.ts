@@ -1,9 +1,10 @@
 import { computed, reactive } from 'vue'
 import type { Annotation, ImageAnnotation, ImageInfo, PageOpResult } from '@shared/types'
 import { annotationBounds } from '@shared/types'
-import { docState, markDirty, reloadDocument } from './document'
+import { docState, markDirty, pageDisplaySize, reloadDocument } from './document'
 import { invalidateSearch } from './search'
 import { newId } from '../lib/annots'
+import { orientationFlipped, refitAfterOrientationChange, scrollToPage } from './viewer'
 import { showToast, ui } from './ui'
 
 type Command =
@@ -270,7 +271,13 @@ async function undoSinglePage(entry: PageEntry): Promise<void> {
 
   // 以下主进程快照已消费:任何失败都不再回压,保持两侧栈配对
   try {
+    const sizeBefore = pageDisplaySize(docState.currentPage - 1)
     await reloadDocument(result.buffer)
+    // 撤销的若是旋转且当前页方向翻转了 → 同样重新适应,否则会停在旋转时的缩放上看不全
+    if (orientationFlipped(sizeBefore, pageDisplaySize(docState.currentPage - 1))) {
+      refitAfterOrientationChange()
+      scrollToPage(docState.currentPage)
+    }
     invalidateSearch()
     restoreItems(entry.annotations)
     await ensureImageUrls()

@@ -280,6 +280,26 @@ export function setViewMode(mode: ViewMode): void {
 }
 
 /**
+ * 页面显示方向是否发生竖↔横翻转。
+ * 以「高 ≥ 宽 = 竖」判定:方形/近方形页两侧都算竖,旋转后不翻转 → 不触发重新适应。
+ * 任一尺寸缺失(页号越界/几何未就绪)时返回 false,不打扰正在进行的渲染。
+ */
+export function orientationFlipped(before: { w: number; h: number }, after: { w: number; h: number }): boolean {
+  if (before.w <= 0 || before.h <= 0 || after.w <= 0 || after.h <= 0) return false
+  return before.h >= before.w !== (after.h >= after.w)
+}
+
+/**
+ * 方向翻转后重新适应:已在「适合宽度/适合页面」就重放同一模式;
+ * 手动缩放(fitMode='none')按「适合页面」处理 —— 翻转后整页可见才便于观看。
+ * 钳制沿用 fitPage/fitWidth 内部的 0.25–4,不另设上限。
+ */
+export function refitAfterOrientationChange(): void {
+  if (fitMode === 'width') fitWidth()
+  else fitPage()
+}
+
+/**
  * 容器首次布局完成(width>0)后补做一次适应宽度。
  * 挂载时机早于布局时 fitWidth 会因 avail<=0 直接返回,导致新文档停在 100%;
  * 用 needFitOnResize 标记避免覆盖用户的手动缩放。
@@ -306,9 +326,14 @@ export function stepPage(dir: 1 | -1): void {
 }
 
 export function rotateView(delta: number): void {
+  const before = pageDisplaySize(docState.currentPage - 1)
   docState.rotationView = (((docState.rotationView + delta) % 360) + 360) % 360
   rebuildLayoutCache()
   void nextTick(() => {
+    if (orientationFlipped(before, pageDisplaySize(docState.currentPage - 1))) {
+      refitAfterOrientationChange()
+      return
+    }
     if (fitMode === 'width') fitWidth()
     else if (fitMode === 'page') fitPage()
   })
