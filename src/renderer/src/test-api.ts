@@ -55,7 +55,7 @@ import {
 } from './store/annotations'
 import { renderGate, renderWatchdog, scrollToPage, zoomBy } from './store/viewer'
 import { goBack, goForward, readingState, setRestoreLastPage } from './store/reading'
-import { TOOL_DEFAULTS, withIdentity } from './lib/annots'
+import { TOOL_DEFAULTS, newId, withIdentity } from './lib/annots'
 import { pdfjs } from './lib/pdfjs'
 import { paintAnnotations } from './lib/canvasannot'
 
@@ -108,6 +108,7 @@ export function installTestApi(): void {
     annotState,
     addAnnotation,
     withIdentity,
+    newId,
     toolDefaults: TOOL_DEFAULTS,
     exportAnnotations,
     undo,

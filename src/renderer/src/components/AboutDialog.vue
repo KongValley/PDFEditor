@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
+import type { RuntimeInfo } from '@shared/types'
+import { machineProfile } from '../store/document'
 import { ui } from '../store/ui'
 
 interface NoticeEntry {
@@ -10,17 +12,43 @@ interface NoticeEntry {
   text: string | null
 }
 
-const version = ref('')
+const runtimeInfo = ref<RuntimeInfo | null>(null)
 const entries = ref<NoticeEntry[]>([])
 const loadError = ref('')
+
+const version = computed(() => runtimeInfo.value?.version ?? '')
+
+/** 环境自检:内网 IT 遇到"字体不对 / 打不开 / 很卡"时的第一手材料(只读,不采集任何用户数据) */
+const envRows = computed<Array<[string, string]>>(() => {
+  const info = runtimeInfo.value
+  if (!info) return []
+  const show = (value: string | number | null | undefined): string => {
+    const text = value === null || value === undefined ? '' : String(value)
+    return text.trim() === '' ? '—' : text
+  }
+  return [
+    ['操作系统', show(info.osRelease)],
+    ['架构', show(info.osArch === info.arch ? info.arch : `${info.arch} / ${info.osArch}`)],
+    ['运行时', `Electron ${show(info.electron)} · Chromium ${show(info.chrome)}`],
+    [
+      '内存',
+      `${show(machineProfile.totalMemMB)} MB${machineProfile.lowMem ? ' · 省内存档' : ''}`
+    ],
+    ['渲染模式', info.gpuDisabled ? '软件渲染(未启用 GPU 加速)' : '硬件加速已开启'],
+    [
+      '中文字体',
+      info.cjkFontFile ? (info.cjkFontFile.split(/[\\/]/).pop() as string) : '未找到 —— 文字批注/图章将无法保存'
+    ],
+    ['用户数据目录', info.userDataWritable ? '可写' : '不可写']
+  ]
+})
 
 watch(
   () => ui.aboutOpen,
   async (open) => {
     if (!open) return
-    if (!version.value) {
-      const info = (await window.pdfAPI.invoke('app:runtimeInfo')) as { version?: string }
-      version.value = info?.version ?? ''
+    if (!runtimeInfo.value) {
+      runtimeInfo.value = (await window.pdfAPI.invoke('app:runtimeInfo')) as RuntimeInfo
     }
     if (entries.value.length > 0 || loadError.value) return
     try {
@@ -42,6 +70,13 @@ watch(
       <div class="message">
         PDF 编辑器{{ version ? ` v${version}` : '' }} · 基于 Electron / Chromium(MIT / BSD);其完整声明见安装目录的
         LICENSE.electron.txt 与 LICENSES.chromium.html。
+      </div>
+      <div class="env-check">
+        <div class="env-title">环境自检</div>
+        <div v-for="row in envRows" :key="row[0]" class="env-row">
+          <span class="env-label">{{ row[0] }}</span>
+          <span class="env-value">{{ row[1] }}</span>
+        </div>
       </div>
       <div v-if="loadError" class="error">许可清单加载失败:{{ loadError }}</div>
       <div v-else-if="entries.length === 0" class="message">加载中…</div>
@@ -90,6 +125,35 @@ watch(
 
 .message {
   color: var(--toolbar-fg-dim);
+}
+
+.env-check {
+  padding: 8px 10px;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  background: #1a1d25;
+  font-size: 12px;
+}
+
+.env-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.env-row {
+  display: flex;
+  gap: 10px;
+  line-height: 1.7;
+}
+
+.env-label {
+  width: 90px;
+  flex: none;
+  color: var(--toolbar-fg-dim);
+}
+
+.env-value {
+  word-break: break-all;
 }
 
 .error {

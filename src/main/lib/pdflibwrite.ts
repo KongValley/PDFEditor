@@ -29,8 +29,15 @@ import fontkit from '@pdf-lib/fontkit'
 import type { Annotation, FormValue, Rect } from '@shared/types'
 import { fitFontSize, pointsToMm, wrapText } from '@shared/text'
 
-/** 可嵌入的中文字体(仅 TTF;TTC 集合无法被 pdf-lib 直接嵌入) */
-const CJK_FONT_CANDIDATES = ['C:/Windows/Fonts/simhei.ttf', 'C:/Windows/Fonts/simkai.ttf']
+/**
+ * 可嵌入的中文字体。**只列 TTF**:pdf-lib 无法直接嵌入 TTC 集合(Win8+ 的微软雅黑是 msyh.ttc)。
+ * Win7 的雅黑是单文件 msyh.ttf,Win10 必然带 simhei.ttf,因此不必为 TTC 引入解包复杂度。
+ */
+const CJK_FONT_CANDIDATES = [
+  'C:/Windows/Fonts/simhei.ttf',
+  'C:/Windows/Fonts/simkai.ttf',
+  'C:/Windows/Fonts/msyh.ttf'
+]
 
 /** 自产批注的外观流外扩(避免描边/量子化在边缘被裁掉) */
 const ANNOT_PAD = 3
@@ -63,6 +70,18 @@ function hexToRgb(hex: string): { r: number; g: number; b: number } {
   }
 }
 
+/** 探测本机第一个存在的中文字体(环境自检用;只判存在,不读盘) */
+export function findCjkFontFile(): string | null {
+  for (const path of CJK_FONT_CANDIDATES) {
+    try {
+      if (existsSync(path)) return path
+    } catch {
+      // 无权限访问字体目录:跳过,继续下一个候选
+    }
+  }
+  return null
+}
+
 /**
  * 读取中文字体字节(约 10MB)。
  * 字节做模块级缓存:批量拆分/连续保存/逐块导出时,重复读盘(每次 10MB)成本
@@ -72,16 +91,14 @@ let cachedFontBytes: Buffer | null = null
 
 function loadCjkFontBytes(): Buffer | null {
   if (cachedFontBytes) return cachedFontBytes
-  for (const path of CJK_FONT_CANDIDATES) {
-    try {
-      if (!existsSync(path)) continue
-      cachedFontBytes = readFileSync(path)
-      return cachedFontBytes
-    } catch {
-      // 继续尝试下一个候选字体
-    }
+  const path = findCjkFontFile()
+  if (!path) return null
+  try {
+    cachedFontBytes = readFileSync(path)
+  } catch {
+    // 读不到就当没有字体:退回 Helvetica,写中文时由 drawTextSafe 给出可读提示
   }
-  return null
+  return cachedFontBytes
 }
 
 /** 该批注集是否需要中文字体(只有含文本绘制的类型需要;图形类不需要) */
@@ -95,7 +112,7 @@ export function needsCjkFont(annotations: Annotation[]): boolean {
 async function embedCjkFont(doc: PDFDocument, warnings: string[]): Promise<PDFFont | null> {
   const bytes = loadCjkFontBytes()
   if (!bytes) {
-    warnings.push('未找到中文字体(simhei.ttf),文字注释中的中文可能无法正确显示')
+    warnings.push('未找到可嵌入的中文字体(已尝试 SimHei/楷体/雅黑),含中文的文字注释与图章将无法保存')
     return null
   }
   try {
@@ -119,6 +136,24 @@ export async function createAnnotContext(
   return { ctx: { font, resolveImage, warnings }, cjkFont }
 }
 
+/**
+ * 写文本。缺中文字体时退回的是 StandardFonts.Helvetica(WinAnsi 编码),遇到中文会抛
+ * "WinAnsi cannot encode ..." —— 直接冒泡会被包成"拆分失败:…"这种没法看的提示,
+ * 这里翻译成"装字体"的可读原因;非编码异常原样抛出,不掩盖其他问题。
+ * 纯 ASCII 内容不触发,行为与从前一致(不提前失败,免得误伤可用场景)。
+ */
+function drawTextSafe(page: PDFPage, text: string, options: Parameters<PDFPage['drawText']>[1]): void {
+  try {
+    page.drawText(text, options)
+  } catch (err) {
+    const message = (err as Error).message
+    if (!/cannot encode/i.test(message)) throw err
+    throw new Error(
+      `系统缺少可嵌入的中文字体(SimHei/黑体),无法写入中文内容;请安装该字体后重试(原始错误:${message})`
+    )
+  }
+}
+
 function drawTextBlock(
   page: PDFPage,
   bbox: Rect,
@@ -133,7 +168,7 @@ function drawTextBlock(
   const lineHeight = fontSize * 1.2
   lines.forEach((line, index) => {
     if (line === '') return
-    page.drawText(line, {
+    drawTextSafe(page, line, {
       x: bbox.x,
       y: bbox.y + bbox.h - fontSize - index * lineHeight,
       size: fontSize,
@@ -162,7 +197,7 @@ function drawStamp(page: PDFPage, ann: Annotation & { kind: 'stamp' }, font: PDF
   })
   const fontSize = fitFontSize(ann.label, box, (s, size) => font.widthOfTextAtSize(s, size))
   const width = font.widthOfTextAtSize(ann.label, fontSize)
-  page.drawText(ann.label, {
+  drawTextSafe(page, ann.label, {
     x: box.x + (box.w - width) / 2,
     y: box.y + box.h / 2 - fontSize * 0.35,
     size: fontSize,

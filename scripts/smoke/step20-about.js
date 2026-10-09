@@ -8,6 +8,11 @@ const check = (name, cond, extra) => {
 
 const info = await window.pdfAPI.invoke('app:runtimeInfo')
 check('运行时信息含版本', typeof info.version === 'string' && /^\d+\./.test(info.version), info)
+// 环境自检的数据源(main 侧填齐)
+check('运行时含 Electron/Chromium 版本', !!info.electron && !!info.chrome, info)
+check('运行时含操作系统与架构', !!info.osRelease && !!info.osArch, info)
+check('本机找到中文字体(文字批注/图章可保存)', info.cjkFontFile !== null && typeof info.cjkFontFile === 'string', info)
+check('运行时含渲染模式与目录可写性', typeof info.gpuDisabled === 'boolean' && typeof info.userDataWritable === 'boolean', info)
 
 await t.openPath(`${__smokeRoot}/samples/sample-zh.pdf`)
 await sleep(1200)
@@ -19,6 +24,13 @@ const dialogEl = document.querySelector('.mask .dialog')
 const dialogText = dialogEl?.textContent ?? ''
 check('关于对话框打开', !!dialogEl && dialogText.includes('关于'), dialogText.slice(0, 60))
 check('正文含版本号', dialogText.includes(info.version), info.version)
+// 环境自检区块:内网排障第一手材料
+const envEl = document.querySelector('.mask .env-check')
+const envText = envEl?.textContent ?? ''
+check('存在环境自检区块', !!envEl, null)
+check('环境自检显示渲染模式', envText.includes('软件渲染') || envText.includes('硬件加速'), envText)
+check('环境自检显示中文字体', envText.includes('字体') && envText.includes('.ttf'), envText)
+check('环境自检显示版本与内存', envText.includes(info.chrome) && envText.includes('MB'), envText)
 const items = [...document.querySelectorAll('.mask details')]
 check('许可条目充足', items.length >= 30, items.length)
 const names = items.map((el) => el.querySelector('summary')?.textContent ?? '')

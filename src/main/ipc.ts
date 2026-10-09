@@ -7,11 +7,11 @@ import {
   type OpenDialogOptions,
   type SaveDialogOptions
 } from 'electron'
-import { existsSync } from 'node:fs'
+import { accessSync, constants, existsSync } from 'node:fs'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { totalmem } from 'node:os'
+import { arch, release, totalmem } from 'node:os'
 import { PDFDocument } from 'pdf-lib'
 import {
   openDocument,
@@ -28,7 +28,7 @@ import { imagesToPdf, type ImagePageMode } from './lib/imagetopdf'
 import { abortPrintJob, addPrintPage, commitPrintJob, preparePrintJob } from './lib/print'
 import { getRecentPage, listRecentFiles, setRecentPage } from './lib/recent'
 import { isSmokeMode } from './smoke'
-import { extractEditorAnnotations, writeAnnotations } from './lib/pdflibwrite'
+import { extractEditorAnnotations, findCjkFontFile, writeAnnotations } from './lib/pdflibwrite'
 import type {
   Annotation,
   ChooseFileResult,
@@ -62,6 +62,16 @@ export function setRendererDirty(value: boolean): void {
 }
 export function isRendererDirty(): boolean {
   return rendererDirty
+}
+
+/** 目录是否可写(环境自检用;只查权限位,不落盘) */
+function isWritable(dir: string): boolean {
+  try {
+    accessSync(dir, constants.W_OK)
+    return true
+  } catch {
+    return false
+  }
 }
 
 /** 统一兜底:pdf-lib/文件系统异常不应让 IPC 静默 reject(用户会看到"点了没反应") */
@@ -355,7 +365,17 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       arch: process.arch,
       totalMemMB: Math.round(totalmem() / 1048576),
       // 物理内存 ≤ 4GB 的机器走"省内存"档,避免与开发机同参数
-      lowMem: totalmem() <= 4 * 1024 * 1024 * 1024
+      lowMem: totalmem() <= 4 * 1024 * 1024 * 1024,
+      osRelease: release(),
+      osArch: arch(),
+      chrome: process.versions.chrome ?? '',
+      electron: process.versions.electron ?? '',
+      // 与 index.ts 的 gpuDisabled 同源:index.ts 已 import 本文件,反向 import 会成环,
+      // 故这里自行读同一个环境变量(判定表达式必须与 index.ts 保持一致)
+      gpuDisabled: process.env['PDF_EDITOR_HWACCEL'] !== '1',
+      // 只判权限不落盘:环境自检必须无副作用
+      userDataWritable: isWritable(app.getPath('userData')),
+      cjkFontFile: findCjkFontFile()
     })
   )
 

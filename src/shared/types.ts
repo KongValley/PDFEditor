@@ -217,6 +217,18 @@ export interface RuntimeInfo {
   totalMemMB: number
   /** 物理内存 ≤ 4GB,按省内存档处理 */
   lowMem: boolean
+  /** 环境自检(关于对话框) */
+  osRelease: string
+  osArch: string
+  /** 渲染进程 Chromium 版本 */
+  chrome: string
+  electron: string
+  /** 硬件加速已关闭(软件光栅) */
+  gpuDisabled: boolean
+  /** userData 目录可写 */
+  userDataWritable: boolean
+  /** 找到的中文字体文件;null = 缺字体,文字批注/图章无法保存 */
+  cjkFontFile: string | null
 }
 
 /** 渲染层按需分段读取(大文件 Range 流式加载)的返回 */

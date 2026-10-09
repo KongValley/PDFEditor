@@ -48,9 +48,18 @@ type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K>
 
 export type NewAnnotation = DistributiveOmit<Annotation, 'id' | 'createdAt'>
 
+/**
+ * 生成批注 id。crypto.randomUUID 只在 secure context 可用,现状安全是因为主进程把
+ * app 协议注册成 secure:true;仅当用 -- --host 把 dev server 暴露到局域网
+ * (http://192.168.x.x:5173 不是 secure context)时才会缺,故给一个应用内唯一的回退。
+ */
+export function newId(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `a-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
+
 export function withIdentity(ann: NewAnnotation): Annotation {
   // 展开判别联合后 TS 无法自行收敛回 Annotation;此处仅补 id/createdAt,断言安全
-  return { ...ann, id: crypto.randomUUID(), createdAt: Date.now() } as Annotation
+  return { ...ann, id: newId(), createdAt: Date.now() } as Annotation
 }
 
 /** 文本修改的通用补丁:文字注释按内容重估高度(渲染层按宽度自动换行) */

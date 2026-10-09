@@ -30,6 +30,9 @@ jobs:
 
       - run: npm run dist -- --publish never
 
+      - name: 兼容性检查(超出 Electron 22 / Chromium 108 的新特性即失败)
+        run: npm run check:compat
+
       - name: 发布到 GitHub Release
         shell: pwsh
         env:

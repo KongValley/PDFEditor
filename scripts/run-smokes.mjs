@@ -69,6 +69,17 @@ if (!existsSync(join(root, 'samples', 'sample-mixed-orient.pdf'))) {
   }
 }
 
+// 护栏前置:产物含超出目标运行时(Electron 22 / Chromium 108)的新特性时,
+// 没必要先付 28 次 Electron 冷启动的代价才发现
+const compat = spawnSync(process.execPath, [join(root, 'scripts', 'check-compat.mjs')], {
+  cwd: root,
+  stdio: 'inherit'
+})
+if (compat.status !== 0) {
+  console.error('兼容性检查未通过,已跳过冒烟')
+  process.exit(1)
+}
+
 // 单步脚本超时(毫秒):默认 60s;重负载步骤给更宽裕的上限
 // step13/14/15 含批量拆分、50 页大文档、20+ 次文档打开;渲染层偶发首屏等待
 // (见 docs/代码审查报告.md「存疑」第 4 条)会额外消耗 20s/次,独立跑约 28–50s,套件内更慢

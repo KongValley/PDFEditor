@@ -13,6 +13,9 @@ const fire = (target, type, x, y) => {
 await t.openPath(`${__smokeRoot}/samples/sample-zh.pdf`)
 await sleep(1500)
 
+// 0) id 生成:secure context 之外(crypto.randomUUID 不可用)靠回退分支保持可用且唯一
+check('newId 有回退且唯一', typeof t.newId() === 'string' && t.newId() !== t.newId())
+
 // 1) 交互:高亮拖拽
 const wrap = document.querySelector('[data-page="1"]')
 const svg = wrap.querySelector('.ann-layer')

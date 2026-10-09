@@ -3,6 +3,7 @@ import type { Annotation, ImageAnnotation, ImageInfo, PageOpResult } from '@shar
 import { annotationBounds } from '@shared/types'
 import { docState, markDirty, reloadDocument } from './document'
 import { invalidateSearch } from './search'
+import { newId } from '../lib/annots'
 import { showToast, ui } from './ui'
 
 type Command =
@@ -424,7 +425,7 @@ function shiftClone(ann: Annotation, dx: number, dy: number): Annotation {
       to: { x: base.to.x + dx, y: base.to.y + dy }
     } as Annotation
   }
-  return { ...moved, id: crypto.randomUUID(), createdAt: Date.now() }
+  return { ...moved, id: newId(), createdAt: Date.now() }
 }
 
 export function copySelection(): number {
@@ -563,7 +564,7 @@ export function importAnnotations(anns: Annotation[]): void {
       // 同 id 同页 = 同一份注释被重复导入(如合并自己保存过的副本),跳过;
       // 同 id 不同页 = 副本页上的实例(提取/另存后再合并回来),重新发号保留,避免保存时被剥离
       if (existing.page === ann.page) continue
-      annotState.items.push({ ...ann, id: crypto.randomUUID() })
+      annotState.items.push({ ...ann, id: newId() })
       added = true
       continue
     }

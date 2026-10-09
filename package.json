@@ -12,6 +12,7 @@
     "prebuild": "node scripts/sync-pdfjs-assets.mjs && node scripts/gen-licenses.mjs",
     "build": "electron-vite build",
     "typecheck": "vue-tsc --noEmit",
+    "check:compat": "node scripts/check-compat.mjs",
     "smoke": "node scripts/run-smokes.mjs",
     "licenses": "node scripts/gen-licenses.mjs",
     "manual": "node scripts/manual-to-pdf.mjs",
