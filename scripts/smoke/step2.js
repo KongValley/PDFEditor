@@ -13,8 +13,19 @@ await sleep(1500)
 
 check('pageCount', t.docState.pageCount === 3, t.docState.pageCount)
 check('pageBoxes', t.docState.pageBoxes.length === 3)
-const canvas1 = document.querySelector('[data-page="1"] .page-canvas')
-check('page1 rendered', canvas1 && canvas1.width > 1000, canvas1 ? canvas1.width : null)
+// 首屏按「适应宽度」渲染,慢机器上光栅化可能晚于固定等待:等它达到适应宽度应有的尺寸,
+// 而不是赌一个 sleep(固定等待在慢机器上会随机红,这里改成等条件成立)
+const canvasOf = () => document.querySelector('[data-page="1"] .page-canvas')
+const expectedWidth = Math.round(t.docState.pageBoxes[0].w * t.docState.scale * (window.devicePixelRatio || 1))
+const renderDeadline = Date.now() + 20000
+while (Date.now() < renderDeadline && (canvasOf()?.width ?? 0) < expectedWidth * 0.9) {
+  await sleep(200)
+}
+const canvas1 = canvasOf()
+check('page1 rendered', canvas1 && canvas1.width >= expectedWidth * 0.9, {
+  width: canvas1 ? canvas1.width : null,
+  expectedWidth
+})
 const textSpans = document.querySelectorAll('.textLayer span').length
 check('text layer spans', textSpans >= 5, textSpans)
 

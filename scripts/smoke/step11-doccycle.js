@@ -21,10 +21,12 @@ check('释放的不是当前文档', !t.releasedDocIds.includes(t.docState.docId
   released: t.releasedDocIds,
   current: t.docState.docId
 })
-// 换文档后残留的可见/pin 页号必须清空(否则新文档同号页被豁免回收)
-// pin 集合必须跟随当前文档重建(旧文档页号不会跨文档残留):
-// 打开第 3 个文档(与第 1 个同名样本)后 pin 只反映当前可见页,不会出现第 2 个文档的痕迹
-check('pin 集合已重置', t.pinnedPageCounts().viewer <= 2 && t.pinnedPageCounts().thumbs <= 12, t.pinnedPageCounts())
+// 换文档后残留的可见/pin 页号必须清空(否则新文档同号页被豁免回收)。
+// 判据不写死条数(慢机器/小窗口下同时可见的页数不同):只看「pin 页号都落在当前文档范围内」,
+// 这才是跨文档残留会破坏的不变量(第 2 份文档有 3 页、第 3 份只有 1 页,残留会越界)
+const pins = t.pinnedPageCounts()
+const pageCount = t.docState.pageCount
+check('pin 集合已重置(无跨文档残留)', pins.maxPage <= pageCount, { pins, pageCount })
 check('pageCache 重置', t.cachedPageCount() <= 12, t.cachedPageCount())
 
 return {

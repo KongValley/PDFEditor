@@ -193,8 +193,10 @@ export function docCleanupCount(): number {
 }
 
 /** 可见页 pin 规模(低内存策略验证用) */
-export function pinnedPageCounts(): { viewer: number; thumbs: number } {
-  return { viewer: viewerPinned.size, thumbs: thumbPinned.size }
+export function pinnedPageCounts(): { viewer: number; thumbs: number; maxPage: number } {
+  // maxPage:换文档后若残留上一份文档的 pin 页号,会超出新文档的页数(冒烟据此判「无跨文档残留」)
+  const maxPage = Math.max(0, ...viewerPinned, ...thumbPinned)
+  return { viewer: viewerPinned.size, thumbs: thumbPinned.size, maxPage }
 }
 
 /** 每页显示尺寸(CSS px,含视图旋转与缩放) */
