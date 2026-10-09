@@ -38,6 +38,10 @@ jobs:
       - name: 兼容性检查(超出 Electron 22 / Chromium 108 的新特性即失败)
         run: npm run check:compat
 
+      # samples/ 不入版本库,冒烟依赖它;新克隆的 runner 上必须先生成
+      - name: 生成测试样本
+        run: npm run samples
+
       # 应用默认关闭硬件加速(软件光栅),CI 无 GPU 也能跑
       - name: 端到端冒烟(31 步)
         run: npm run smoke
