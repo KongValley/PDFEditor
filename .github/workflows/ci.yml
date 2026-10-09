@@ -38,6 +38,15 @@ jobs:
       - name: 兼容性检查(超出 Electron 22 / Chromium 108 的新特性即失败)
         run: npm run check:compat
 
+      # GitHub 的 windows runner 镜像没有 SimHei,样本生成与「中文批注保存」都依赖中文字体:
+      # 下载一份思源黑体(OTF,pdf-lib + fontkit 可正常子集化)并通过 PDF_EDITOR_CJK_FONT 指定
+      - name: 准备中文字体(runner 无 SimHei)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path tmp | Out-Null
+          Invoke-WebRequest -Uri 'https://cdn.jsdelivr.net/gh/notofonts/noto-cjk@main/Sans/SubsetOTF/SC/NotoSansSC-Regular.otf' -OutFile tmp/cjk.otf
+          "PDF_EDITOR_CJK_FONT=$env:GITHUB_WORKSPACE\tmp\cjk.otf" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       # samples/ 不入版本库,冒烟依赖它;新克隆的 runner 上必须先生成
       - name: 生成测试样本
         run: npm run samples

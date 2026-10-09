@@ -9,7 +9,8 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const outDir = join(root, 'samples')
 mkdirSync(outDir, { recursive: true })
 
-const CJK_FONT_PATH = 'C:/Windows/Fonts/simhei.ttf'
+// PDF_EDITOR_CJK_FONT 可指定字体文件(CI 的 windows runner 没有 SimHei,那里会下载一份思源黑体)
+const CJK_FONT_PATH = process.env['PDF_EDITOR_CJK_FONT'] || 'C:/Windows/Fonts/simhei.ttf'
 const cjkBytes = readFileSync(CJK_FONT_PATH)
 
 async function makeChineseDoc() {

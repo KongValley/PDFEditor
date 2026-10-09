@@ -74,6 +74,15 @@ function hexToRgb(hex: string): { r: number; g: number; b: number } {
 export function findCjkFontFile(): string | null {
   // 冒烟/单测钩子:置 'none' 强制走「缺中文字体」路径(此前只能靠手工改名系统字体复现)
   if (process.env['PDF_EDITOR_SMOKE_CJK_FONT'] === 'none') return null
+  // 显式指定字体:无 SimHei 的机器(CI runner、精简系统)用它指到任意 TTF/OTF
+  const override = process.env['PDF_EDITOR_CJK_FONT']
+  if (override) {
+    try {
+      if (existsSync(override)) return override
+    } catch {
+      // 路径不可访问:继续走候选列表
+    }
+  }
   for (const path of CJK_FONT_CANDIDATES) {
     try {
       if (existsSync(path)) return path
