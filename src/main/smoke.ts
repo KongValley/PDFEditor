@@ -1,5 +1,7 @@
-import { app, type BrowserWindow } from 'electron'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { app, dialog, type BrowserWindow, type OpenDialogReturnValue, type SaveDialogReturnValue } from 'electron'
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { basename, join } from 'node:path'
+import { uniqueFilePath } from './lib/pdfio'
 
 /**
  * 无头冒烟测试工具(仅当 PDF_EDITOR_SMOKE=1 时启用)。
@@ -13,6 +15,33 @@ import { readFileSync, writeFileSync } from 'node:fs'
  */
 export function isSmokeMode(): boolean {
   return process.env['PDF_EDITOR_SMOKE'] === '1'
+}
+
+/**
+ * 原生对话框替身(仅当 PDF_EDITOR_SMOKE_DIALOG_DIR 指向目录时安装)。
+ * 没有它,「提取页面」「另存为」「打开」这类必须弹原生框的流程在自动化里走不通。
+ * 未设该环境变量的步骤不受影响(它们不触发原生框)。
+ * 保存:取对话框建议的文件名放进替身目录并去重;打开:返回该目录下第一个 PDF,没有则当作取消。
+ */
+export function installSmokeDialogs(): void {
+  const dir = process.env['PDF_EDITOR_SMOKE_DIALOG_DIR']
+  if (!isSmokeMode() || !dir) return
+  mkdirSync(dir, { recursive: true })
+
+  const save = async (...args: unknown[]): Promise<SaveDialogReturnValue> => {
+    const options = args.find((a) => a && typeof a === 'object' && 'defaultPath' in (a as object)) as
+      | { defaultPath?: string }
+      | undefined
+    return { canceled: false, filePath: uniqueFilePath(dir, basename(options?.defaultPath ?? 'out.pdf')) }
+  }
+  const open = async (): Promise<OpenDialogReturnValue> => {
+    const pdfs = readdirSync(dir).filter((name) => name.toLowerCase().endsWith('.pdf'))
+    return pdfs.length > 0 ? { canceled: false, filePaths: [join(dir, pdfs[0])] } : { canceled: true, filePaths: [] }
+  }
+
+  const target = dialog as unknown as Record<string, unknown>
+  target['showSaveDialog'] = save
+  target['showOpenDialog'] = open
 }
 
 export async function runSmoke(win: BrowserWindow): Promise<void> {

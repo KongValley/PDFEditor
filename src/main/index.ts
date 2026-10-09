@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, protocol, shell } from 'electron'
 import { join, normalize } from 'node:path'
 import { isRendererDirty, registerIpc, setRendererDirty } from './ipc'
 import { cleanupPrintJobs } from './lib/print'
-import { isSmokeMode, runSmoke } from './smoke'
+import { installSmokeDialogs, isSmokeMode, runSmoke } from './smoke'
 
 // 内网 32 位老机器优先稳定:默认禁用硬件加速(老显卡驱动黑屏/崩溃)。
 // 有独立显卡的新机器可用 PDF_EDITOR_HWACCEL=1 打开 —— 软件光栅之外最大的吞吐杠杆。
@@ -10,6 +10,8 @@ import { isSmokeMode, runSmoke } from './smoke'
 // 故那边自行读同一个环境变量(两处判定表达式必须保持一致)。
 export const gpuDisabled = process.env['PDF_EDITOR_HWACCEL'] !== '1'
 if (gpuDisabled) app.disableHardwareAcceleration()
+// 冒烟专用:设了 PDF_EDITOR_SMOKE_DIALOG_DIR 才把原生对话框换成确定性应答
+installSmokeDialogs()
 // 32 位进程地址空间有限(2GB),堆上限收紧到 512MB 避免地址空间耗尽;64 位放宽到 1GB
 app.commandLine.appendSwitch(
   'js-flags',

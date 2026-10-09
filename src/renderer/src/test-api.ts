@@ -28,6 +28,7 @@ import { parsePageRange, splitPageSegments } from '@shared/text'
 import { detectContentPosture, orientationOf, pickBaseOrientation } from './lib/orientation'
 import {
   docState,
+  openByPath,
   cachedPageCount,
   machineProfile,
   pinnedPageCounts,
@@ -91,6 +92,8 @@ export function installTestApi(): void {
     ready: true,
     appMounted: true,
     openPath: openPathReady,
+    // 不等待渲染的原始打开入口:失败路径(文件不存在)用 openPath 会因等不到渲染而超时
+    openByPath,
     docState,
     ui,
     mergeDialogState,

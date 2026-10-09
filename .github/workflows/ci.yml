@@ -1,0 +1,43 @@
+name: 测试
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+
+jobs:
+  test:
+    runs-on: windows-latest
+    env:
+      ELECTRON_MIRROR: https://github.com/electron/electron/releases/download/v
+      ELECTRON_BUILDER_BINARIES_MIRROR: https://github.com/electron-userland/electron-builder-binaries/releases/download/
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      # npm 的 allowScripts 门禁会拦掉 electron 的 postinstall(本地 npm ci 后同样需要),
+      # 显式跑一次安装脚本,保证 runner 上有 dist/electron.exe
+      - name: 准备 electron 二进制
+        run: node node_modules/electron/install.js
+
+      - name: 类型检查
+        run: npm run typecheck
+
+      - name: 单元测试(vitest,附覆盖率摘要)
+        run: npm test
+
+      - run: npm run build
+
+      - name: 兼容性检查(超出 Electron 22 / Chromium 108 的新特性即失败)
+        run: npm run check:compat
+
+      # 应用默认关闭硬件加速(软件光栅),CI 无 GPU 也能跑
+      - name: 端到端冒烟(31 步)
+        run: npm run smoke

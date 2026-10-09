@@ -72,6 +72,8 @@ function hexToRgb(hex: string): { r: number; g: number; b: number } {
 
 /** 探测本机第一个存在的中文字体(环境自检用;只判存在,不读盘) */
 export function findCjkFontFile(): string | null {
+  // 冒烟/单测钩子:置 'none' 强制走「缺中文字体」路径(此前只能靠手工改名系统字体复现)
+  if (process.env['PDF_EDITOR_SMOKE_CJK_FONT'] === 'none') return null
   for (const path of CJK_FONT_CANDIDATES) {
     try {
       if (existsSync(path)) return path

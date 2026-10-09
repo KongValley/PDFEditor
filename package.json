@@ -13,6 +13,9 @@
     "build": "electron-vite build",
     "typecheck": "vue-tsc --noEmit",
     "check:compat": "node scripts/check-compat.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "smoke": "node scripts/run-smokes.mjs",
     "licenses": "node scripts/gen-licenses.mjs",
     "manual": "node scripts/manual-to-pdf.mjs",
@@ -24,11 +27,11 @@
     "dist": "npm run dist:win7-32 && npm run dist:win10-64 && npm run dist:win10-32 && npm run dist:win7-64",
     "samples": "node scripts/make-samples.mjs && node scripts/make-outline-sample.mjs && node scripts/make-encrypted-sample.mjs && node scripts/make-encrypted-sample.mjs test123 sample-encrypted-pw.pdf && node scripts/make-big-sample.mjs && node scripts/make-large-sample.mjs && node scripts/make-mixed-orient-sample.mjs"
   },
-  "dependencies": {},
   "devDependencies": {
     "@pdf-lib/fontkit": "^1.1.1",
     "@types/node": "^22.20.4",
     "@vitejs/plugin-vue": "5.2.4",
+    "@vitest/coverage-v8": "^2.1.9",
     "electron": "22.3.27",
     "electron-builder": "^26.15.3",
     "electron-vite": "2.3.0",
@@ -36,6 +39,7 @@
     "pdfjs-dist": "3.11.174",
     "typescript": "^5.9.3",
     "vite": "5.4.21",
+    "vitest": "^2.1.9",
     "vue": "3.4.38",
     "vue-tsc": "2.2.12"
   },
@@ -61,7 +65,10 @@
       }
     ],
     "win": {
-      "target": ["nsis", "zip"],
+      "target": [
+        "nsis",
+        "zip"
+      ],
       "icon": "resources/icon.png"
     },
     "nsis": {

@@ -26,6 +26,8 @@
     "src/**/*.ts",
     "src/**/*.d.ts",
     "src/**/*.vue",
+    "tests/**/*.ts",
+    "vitest.config.ts",
     "electron.vite.config.ts"
   ]
 }

@@ -2,6 +2,7 @@ node_modules/
 out/
 release/
 tmp/
+coverage/
 samples/
 win7-patches/
 src/renderer/public/cmaps/

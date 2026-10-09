@@ -1,6 +1,6 @@
 // 依次运行全部冒烟脚本(每个脚本使用独立 user-data-dir,避免多实例缓存争用导致抖动)
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -38,12 +38,30 @@ const scripts = [
   'step24-long-image.js',
   'step25-orient.js',
   'step26-image2pdf.js',
-  'step27-rotate-fit.js'
+  'step27-rotate-fit.js',
+  'step28-user-actions.js',
+  'step29-error-paths.js'
 ]
 
 if (!existsSync(join(root, 'samples', 'sample-zh.pdf'))) {
   console.error('缺少 samples/,请先运行 npm run samples')
   process.exit(1)
+}
+
+// 复位会被步骤原地改写的夹具:多个步骤把批注存回 samples/sample-zh.pdf 本体
+// (step14/15/28 的「保存直存」「另存为」之外的路径),一次崩在中途的运行会把批注留在
+// 样本里,导致下一次跑出「注释多了 2 条」这类与代码无关的假红。这里每次开跑前重生成,
+// samples/ 本就不入版本库(代价 ≈0.2s)。
+for (const script of ['make-samples.mjs', 'make-outline-sample.mjs']) {
+  const reset = spawnSync(process.execPath, [join(root, 'scripts', script)], { cwd: root, stdio: 'inherit' })
+  if (reset.status !== 0) {
+    console.error(`重生成夹具失败:${script}`)
+    process.exit(1)
+  }
+}
+// sidecar 是上一轮遗留的恢复源,一并清掉
+for (const name of readdirSync(join(root, 'samples'))) {
+  if (name.endsWith('.pdfanno.json')) rmSync(join(root, 'samples', name), { force: true })
 }
 
 // 大文件夹具(range 流式加载冒烟用):缺失时现场生成(≈30MB,约 2s)
@@ -94,7 +112,15 @@ const STEP_TIMEOUTS = {
   'step24-long-image.js': '180000',
   'step25-orient.js': '180000',
   'step26-image2pdf.js': '120000',
-  'step27-rotate-fit.js': '120000'
+  'step27-rotate-fit.js': '120000',
+  'step28-user-actions.js': '180000',
+  'step29-error-paths.js': '180000'
+}
+
+// 按步注入的环境变量:只有这两步需要(原生对话框替身 / 强制走「缺中文字体」路径)
+const STEP_ENV = {
+  'step28-user-actions.js': { PDF_EDITOR_SMOKE_DIALOG_DIR: join(tmpDir, 'dialog') },
+  'step29-error-paths.js': { PDF_EDITOR_SMOKE_CJK_FONT: 'none' }
 }
 
 let failed = 0
@@ -106,6 +132,7 @@ for (const script of scripts) {
     cwd: root,
     env: {
       ...process.env,
+      ...(STEP_ENV[script] ?? {}),
       PDF_EDITOR_SMOKE: '1',
       PDF_EDITOR_SMOKE_SCRIPT: join('scripts', 'smoke', script),
       PDF_EDITOR_SMOKE_OUT: outFile,
