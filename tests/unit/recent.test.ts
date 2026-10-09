@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { getRecentPage, listRecentFiles, setRecentPage } from '../../src/main/lib/recent'
 
 let dir = ''
@@ -12,6 +12,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.useRealTimers()
   rmSync(dir, { recursive: true, force: true })
   delete process.env['VITEST_USER_DATA']
 })
@@ -30,11 +31,20 @@ describe('setRecentPage / listRecentFiles', () => {
   })
 
   it('多文件按时间倒序,默认最多 10 条', async () => {
-    for (let i = 1; i <= 12; i++) await setRecentPage(join(dir, `f${i}.pdf`), i)
+    // 排序键 at 来自 Date.now()(毫秒分辨率):真实时钟下连续写会撞同一毫秒,排序结果不确定。
+    // 这里只假 Date(不用假 setTimeout —— fs 写入走 microtask),每次写入后把系统时间往前拨 1s,
+    // 于是时间戳严格递增,断言确定且不花真实时间。
+    vi.useFakeTimers({ toFake: ['Date'] })
+    let now = Date.UTC(2026, 0, 1)
+    vi.setSystemTime(now)
+    for (let i = 1; i <= 12; i++) {
+      await setRecentPage(join(dir, `f${i}.pdf`), i)
+      now += 1000
+      vi.setSystemTime(now)
+    }
     const files = await listRecentFiles()
     expect(files).toHaveLength(10)
     expect(files[0].path).toBe(join(dir, 'f12.pdf'))
-    // at 严格不降序
     const times = files.map((f) => f.at)
     expect([...times].sort((a, b) => b - a)).toEqual(times)
   })
