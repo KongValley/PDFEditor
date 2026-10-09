@@ -105,7 +105,7 @@ if (compat.status !== 0) {
 const STEP_TIMEOUTS = {
   'step13-batch.js': '180000',
   'step14-ux.js': '120000',
-  'step15-annots.js': '300000',
+  'step15-annots.js': '600000' // 50 页文档 + 20+ 次打开,慢机器/无 GPU 的 CI runner 上 300s 不够,
   'step21-range.js': '180000',
   'step22-pageops.js': '120000',
   'step23-two-page.js': '180000',

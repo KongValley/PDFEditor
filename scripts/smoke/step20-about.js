@@ -29,7 +29,7 @@ const envEl = document.querySelector('.mask .env-check')
 const envText = envEl?.textContent ?? ''
 check('存在环境自检区块', !!envEl, null)
 check('环境自检显示渲染模式', envText.includes('软件渲染') || envText.includes('硬件加速'), envText)
-check('环境自检显示中文字体', envText.includes('字体') && envText.includes('.ttf'), envText)
+check('环境自检显示中文字体', envText.includes('字体') && /[A-Za-z0-9_\-]+\.[a-z0-9]{2,5}/i.test(envText), envText) // 扩展名不固定:CI 上可能是 .otf
 check('环境自检显示版本与内存', envText.includes(info.chrome) && envText.includes('MB'), envText)
 const items = [...document.querySelectorAll('.mask details')]
 check('许可条目充足', items.length >= 30, items.length)
