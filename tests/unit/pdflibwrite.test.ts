@@ -55,12 +55,13 @@ describe('needsCjkFont', () => {
   })
 })
 
+// 内容用纯 ASCII:CI 的 windows-latest runner 没有 SimHei,中文会走缺字体分支
 describe('批注写入往返', () => {
   const resolveImage = async (): Promise<Buffer | undefined> => undefined
 
   it('写入后能原样读回 kind/page/id', async () => {
     const mod = await loadModule()
-    const input = [rect('r1'), rect('r2', 1), textAnn('t1', '中文批注')]
+    const input = [rect('r1'), rect('r2', 1), textAnn('t1', 'annotation text')]
     const { bytes } = await mod.writeAnnotations(await samplePdf(), {
       annotations: input,
       formValues: {},
@@ -76,12 +77,12 @@ describe('批注写入往返', () => {
     // 因此这里比的是同一输入的两次输出,而不是链式保存(链式会把上一次的嵌入字体也带进去)
     const input = await samplePdf()
     const first = await mod.writeAnnotations(input, {
-      annotations: [rect('r1'), textAnn('t1', '中文批注')],
+      annotations: [rect('r1'), textAnn('t1', 'annotation text')],
       formValues: {},
       resolveImage
     })
     const second = await mod.writeAnnotations(input, {
-      annotations: [rect('r1'), textAnn('t1', '中文批注')],
+      annotations: [rect('r1'), textAnn('t1', 'annotation text')],
       formValues: {},
       resolveImage
     })
