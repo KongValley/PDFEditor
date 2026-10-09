@@ -19,7 +19,12 @@ await sleep(1200)
 const aboutBtn = document.querySelector('.toolbar button[title="关于 / 开源许可"]')
 check('关于按钮存在', !!aboutBtn)
 aboutBtn.click()
-await sleep(700)
+// 许可清单是异步 fetch third-party-notices.json 后渲染的:等它出现,而不是赌一个固定等待
+const noticesDeadline = Date.now() + 20000
+const noticeItems = () => [...document.querySelectorAll('.mask details')]
+while (Date.now() < noticesDeadline && noticeItems().length === 0) {
+  await sleep(200)
+}
 const dialogEl = document.querySelector('.mask .dialog')
 const dialogText = dialogEl?.textContent ?? ''
 check('关于对话框打开', !!dialogEl && dialogText.includes('关于'), dialogText.slice(0, 60))
@@ -31,7 +36,7 @@ check('存在环境自检区块', !!envEl, null)
 check('环境自检显示渲染模式', envText.includes('软件渲染') || envText.includes('硬件加速'), envText)
 check('环境自检显示中文字体', envText.includes('字体') && /[A-Za-z0-9_\-]+\.[a-z0-9]{2,5}/i.test(envText), envText) // 扩展名不固定:CI 上可能是 .otf
 check('环境自检显示版本与内存', envText.includes(info.chrome) && envText.includes('MB'), envText)
-const items = [...document.querySelectorAll('.mask details')]
+const items = noticeItems()
 check('许可条目充足', items.length >= 30, items.length)
 const names = items.map((el) => el.querySelector('summary')?.textContent ?? '')
 check('包含 vue', names.some((n) => n.startsWith('vue ')), names.slice(0, 8))
