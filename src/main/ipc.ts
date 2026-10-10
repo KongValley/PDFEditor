@@ -344,6 +344,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       }
     ): Promise<SaveResult> => {
       const started = Date.now()
+      // 先记「开始」:主进程若在保存中途消失/卡住,日志里能看到它停在这一步
+      logEvent('info', 'save', '保存开始', {
+        file: payload.targetPath ?? payload.defaultPath,
+        count: payload.annotations.length
+      })
       const result = await guard<SaveResult>(async () => {
         const entry = getDocEntry(payload.docId)
         if (!entry) return { ok: false, error: '文档未打开' }

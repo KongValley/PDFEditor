@@ -137,6 +137,9 @@ for (const script of scripts) {
   const logFile = join(tmpDir, `smoke-${name}.log`)
   rmSync(outFile, { force: true })
   rmSync(logFile, { force: true })
+  // 应用自己的运行日志也按步分目录:失败时它的尾部往往就是主进程最后做的事(保存/打开/页面操作)
+  const appLogDir = join(tmpDir, 'step-logs', name)
+  rmSync(appLogDir, { recursive: true, force: true })
   const stepTimeoutMs = Number(STEP_TIMEOUTS[script] ?? 60000)
   // 进程级看门狗:脚本内的 PDF_EDITOR_SMOKE_TIMEOUT 只在「窗口已就绪、脚本已开始跑」之后才生效。
   // 窗口起不来时(无显示环境/CI runner)spawnSync 会永远等下去,这里用 spawnSync 自身的 timeout
@@ -151,7 +154,8 @@ for (const script of scripts) {
       PDF_EDITOR_SMOKE_SCRIPT: join('scripts', 'smoke', script),
       PDF_EDITOR_SMOKE_OUT: outFile,
       PDF_EDITOR_SMOKE_ROOT: root,
-      PDF_EDITOR_SMOKE_TIMEOUT: String(stepTimeoutMs)
+      PDF_EDITOR_SMOKE_TIMEOUT: String(stepTimeoutMs),
+      PDF_EDITOR_LOG_DIR: appLogDir
     },
     stdio: ['ignore', logFd, logFd],
     timeout: stepTimeoutMs + 60000,
@@ -177,6 +181,13 @@ for (const script of scripts) {
   if (!report.ok) {
     for (const line of readFileSync(logFile, 'utf8').split('\n').filter(Boolean).slice(-15)) {
       console.log(`    | ${line}`)
+    }
+    // 该步应用日志的尾部:主进程最后做了什么(保存开始/完成、打开、页面操作)
+    if (existsSync(appLogDir)) {
+      for (const file of readdirSync(appLogDir).filter((n) => n.endsWith('.log'))) {
+        const lines = readFileSync(join(appLogDir, file), 'utf8').split('\n').filter(Boolean)
+        for (const line of lines.slice(-12)) console.log(`    # ${line}`)
+      }
     }
   }
 }
