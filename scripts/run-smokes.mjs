@@ -1,6 +1,6 @@
 // 依次运行全部冒烟脚本(每个脚本使用独立 user-data-dir,避免多实例缓存争用导致抖动)
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -132,11 +132,16 @@ let failed = 0
 for (const script of scripts) {
   const name = script.replace(/\.js$/, '')
   const outFile = join(tmpDir, `smoke-${name}.json`)
+  // 该步 Electron 的完整 stdout/stderr(PASS/FAIL 之外的全部线索:渲染层 console 转发、
+  // [stepNN] 阶段标记、主进程 warn/error)。失败时打尾部,本地与 CI 都能直接看到失败现场。
+  const logFile = join(tmpDir, `smoke-${name}.log`)
   rmSync(outFile, { force: true })
+  rmSync(logFile, { force: true })
   const stepTimeoutMs = Number(STEP_TIMEOUTS[script] ?? 60000)
   // 进程级看门狗:脚本内的 PDF_EDITOR_SMOKE_TIMEOUT 只在「窗口已就绪、脚本已开始跑」之后才生效。
   // 窗口起不来时(无显示环境/CI runner)spawnSync 会永远等下去,这里用 spawnSync 自身的 timeout
   // 兜底:到点强杀进程树,让该步记为失败并继续往下跑,而不是整轮挂死。
+  const logFd = openSync(logFile, 'a')
   const spawn = spawnSync(electron, ['.', `--user-data-dir=${join(tmpDir, `udd-${name}`)}`], {
     cwd: root,
     env: {
@@ -148,10 +153,11 @@ for (const script of scripts) {
       PDF_EDITOR_SMOKE_ROOT: root,
       PDF_EDITOR_SMOKE_TIMEOUT: String(stepTimeoutMs)
     },
-    stdio: 'ignore',
+    stdio: ['ignore', logFd, logFd],
     timeout: stepTimeoutMs + 60000,
     killSignal: 'SIGKILL'
   })
+  closeSync(logFd)
   let report = { ok: false, error: '未生成结果文件' }
   if ((spawn.error || spawn.signal) && !existsSync(outFile)) {
     report = {
@@ -168,6 +174,11 @@ for (const script of scripts) {
   }
   if (!report.ok) failed++
   console.log(`${report.ok ? 'PASS' : 'FAIL'} ${name}${report.ok ? '' : ` - ${report.error}`}`)
+  if (!report.ok) {
+    for (const line of readFileSync(logFile, 'utf8').split('\n').filter(Boolean).slice(-15)) {
+      console.log(`    | ${line}`)
+    }
+  }
 }
 
 console.log(failed === 0 ? `\n全部 ${scripts.length} 项冒烟通过` : `\n${failed}/${scripts.length} 项失败`)

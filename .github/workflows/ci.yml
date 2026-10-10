@@ -60,12 +60,14 @@ jobs:
         continue-on-error: true
         run: npm run smoke
 
-      # 失败时把每步的结果 JSON 传上来,否则只能看到「31 项失败」而定位不到是哪一步
+      # 失败时把每步的结果 JSON 与进程输出都传上来,否则只能看到「31 项失败」而定位不到是哪一步
       - name: 上传冒烟结果
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: smoke-results
-          path: tmp/smoke-*.json
+          path: |
+            tmp/smoke-*.json
+            tmp/smoke-*.log
           if-no-files-found: warn
           retention-days: 7
