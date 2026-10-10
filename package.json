@@ -1,6 +1,6 @@
 {
   "name": "pdf-editor",
-  "version": "1.15.0",
+  "version": "1.15.1",
   "description": "PDF 编辑器 - 基于 Electron 的完整标注编辑器",
   "main": "out/main/index.js",
   "author": "",
