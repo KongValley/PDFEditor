@@ -77,13 +77,17 @@ if (!existsSync(join(root, 'tmp', 'large.pdf'))) {
 }
 
 // 方向不一致夹具(「统一页面方向」冒烟用):samples/ 不入版本库,缺失时现场生成(≈1s)
-if (!existsSync(join(root, 'samples', 'sample-mixed-orient.pdf'))) {
-  const genOrient = spawnSync(process.execPath, [join(root, 'scripts', 'make-mixed-orient-sample.mjs')], {
+for (const [file, script] of [
+  ['sample-mixed-orient.pdf', 'make-mixed-orient-sample.mjs'],
+  ['sample-image-orient.pdf', 'make-image-orient-sample.mjs']
+]) {
+  if (existsSync(join(root, 'samples', file))) continue
+  const gen = spawnSync(process.execPath, [join(root, 'scripts', script)], {
     cwd: root,
     stdio: 'inherit'
   })
-  if (genOrient.status !== 0) {
-    console.error('生成 samples/sample-mixed-orient.pdf 失败')
+  if (gen.status !== 0) {
+    console.error(`生成 samples/${file} 失败`)
     process.exit(1)
   }
 }

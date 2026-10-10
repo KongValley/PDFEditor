@@ -7,9 +7,9 @@
   "license": "MIT",
   "private": true,
   "scripts": {
-    "predev": "node scripts/sync-pdfjs-assets.mjs && node scripts/gen-licenses.mjs",
+    "predev": "node scripts/sync-pdfjs-assets.mjs && node scripts/sync-ocr-assets.mjs && node scripts/gen-licenses.mjs",
     "dev": "electron-vite dev",
-    "prebuild": "node scripts/sync-pdfjs-assets.mjs && node scripts/gen-licenses.mjs",
+    "prebuild": "node scripts/sync-pdfjs-assets.mjs && node scripts/sync-ocr-assets.mjs && node scripts/gen-licenses.mjs",
     "build": "electron-vite build",
     "typecheck": "vue-tsc --noEmit",
     "check:compat": "node scripts/check-compat.mjs",
@@ -25,10 +25,11 @@
     "dist:win10-32": "npm run build && node scripts/package-win.mjs win10-ia32",
     "dist:win7-64": "npm run build && node scripts/package-win.mjs win7-x64",
     "dist": "npm run dist:win7-32 && npm run dist:win10-64 && npm run dist:win10-32 && npm run dist:win7-64",
-    "samples": "node scripts/make-samples.mjs && node scripts/make-outline-sample.mjs && node scripts/make-encrypted-sample.mjs && node scripts/make-encrypted-sample.mjs test123 sample-encrypted-pw.pdf && node scripts/make-big-sample.mjs && node scripts/make-large-sample.mjs && node scripts/make-mixed-orient-sample.mjs"
+    "samples": "node scripts/make-samples.mjs && node scripts/make-outline-sample.mjs && node scripts/make-encrypted-sample.mjs && node scripts/make-encrypted-sample.mjs test123 sample-encrypted-pw.pdf && node scripts/make-big-sample.mjs && node scripts/make-large-sample.mjs && node scripts/make-mixed-orient-sample.mjs && node scripts/make-image-orient-sample.mjs"
   },
   "devDependencies": {
     "@pdf-lib/fontkit": "^1.1.1",
+    "@tesseract.js-data/osd": "^1.0.0",
     "@types/node": "^22.20.4",
     "@vitejs/plugin-vue": "5.2.4",
     "@vitest/coverage-v8": "^2.1.9",
@@ -37,6 +38,7 @@
     "electron-vite": "2.3.0",
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "3.11.174",
+    "tesseract.js": "^5.1.1",
     "typescript": "^5.9.3",
     "vite": "5.4.21",
     "vitest": "^2.1.9",

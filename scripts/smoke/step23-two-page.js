@@ -63,7 +63,9 @@ check(
 /* ---------- 4. 并发闸门未泄漏:槽位应已全部归还 ---------- */
 check('并发闸门已定义', t.renderGate && t.renderGate.max >= 1, t.renderGate)
 check('渲染槽全部归还', t.renderGate.active === 0, t.renderGate)
-check('无遗留等待者', t.renderGate.waiters.length === 0, t.renderGate.waiters.length)
+// 等待队列分优先级三桶(当前页 > 其它页 > 缩略图):数总量而不是取 .length
+const pendingSlots = Object.values(t.renderGate.waiters).reduce((sum, queue) => sum + queue.length, 0)
+check('无遗留等待者', pendingSlots === 0, pendingSlots)
 
 /* ---------- 5. 机器画像:闸门上限按机器档位而非固定 2 ---------- */
 const info = await window.pdfAPI.invoke('app:runtimeInfo')

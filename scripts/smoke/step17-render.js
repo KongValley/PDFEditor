@@ -12,6 +12,21 @@ check('首页已渲染', !!document.querySelector('[data-page="1"] .ann-layer'))
 check('默认看门狗参数', t.renderWatchdog.timeoutMs === 8000 && t.renderWatchdog.stallNext === false)
 check('并发渲染闸门已定义', t.renderGate && t.renderGate.max === 2, t.renderGate)
 
+/* ---------- 预读:当前页画完后相邻页也要铺好,滚动时直接复用位图 ---------- */
+// 省内存机(≤4GB)按设计不预读;其余机器必须能在不滚动的情况下把第 2 页也画出来
+if (!t.machineProfile.lowMem) {
+  const deadline = Date.now() + 8000
+  let prefetched = false
+  while (Date.now() < deadline) {
+    if (document.querySelector('[data-page="2"]')?.getAttribute('data-rendered') === '1') {
+      prefetched = true
+      break
+    }
+    await sleep(100)
+  }
+  check('相邻页已被预读(无需滚动到该页)', prefetched, { depth: t.prefetchDepth() })
+}
+
 const beforeTimeout = t.renderWatchdog.timeouts
 const beforeRenders = t.renderWatchdog.renders
 t.renderWatchdog.timeoutMs = 400

@@ -95,7 +95,11 @@ const visit = (name) => {
 }
 for (const name of BUNDLED_RUNTIME) visit(name)
 for (const name of runtimeClosure) entries.push(packageEntry(name, join(root, 'node_modules', name), null))
-// 3) 内置资源许可(pdf.js 标准字体 / CMaps)
+// 2) 打进的 tesseract.js dist 是自包含 bundle(它的 node-only 依赖没进产物,不能走闭包遍历),连同 wasm 核一起登记
+for (const name of ['tesseract.js', 'tesseract.js-core']) {
+  entries.push(packageEntry(name, join(root, 'node_modules', name), null))
+}
+// 3) 内置资源许可(pdf.js 标准字体 / CMaps / OCR 语言数据)
 const ASSETS = [
   {
     name: 'Foxit standard fonts (PDFium)',
@@ -114,6 +118,12 @@ const ASSETS = [
     license: 'Apache-2.0',
     homepage: 'https://github.com/mozilla/pdf.js',
     path: 'src/renderer/public/cmaps/LICENSE'
+  },
+  {
+    name: 'Tesseract osd traineddata(整页朝向识别的语言数据)',
+    license: 'Apache-2.0',
+    homepage: 'https://github.com/tesseract-ocr/tessdata',
+    path: 'src/renderer/public/ocr/LICENSE-osd.txt'
   }
 ]
 for (const asset of ASSETS) {

@@ -1,4 +1,4 @@
-import { nextTick } from 'vue'
+import { nextTick, ref } from 'vue'
 import { docState, machineProfile, pageDisplaySize, type ViewMode } from './document'
 
 export const PAGE_GAP = 16
@@ -17,35 +17,115 @@ export const renderWatchdog = { timeoutMs: 8000, timeouts: 0, renders: 0, stallN
  * 并发渲染上限:双页模式一次可见 6 页(连续模式仅 1 页),若全部并发提交,
  * 排在后面的页会在同一个 pdf.js worker 队列里等过看门狗预算(8s)→ 超时 → 白页。
  * 状态必须放在模块作用域:<script setup> 顶层的 let 是每个组件实例各一份,无法跨页共享。
+ *
+ * 队列带优先级(当前页 > 其它页 > 缩略图):缩略图之前完全不占槽,十几张扫描缩略图
+ * 会把 pdf.js worker 占满,可见页排在后面 → 渲染看门狗连续超时(实测 >16s 才出图)。
  */
 export const renderGate = {
   max: 2,
   /** 正在渲染的页数(跨 PageCanvas 实例共享) */
   active: 0,
-  /** 等槽的唤醒函数队列 */
-  waiters: [] as Array<() => void>
+  /** 等槽的唤醒函数队列(按优先级分桶) */
+  waiters: { current: [] as Array<() => void>, page: [] as Array<() => void>, thumb: [] as Array<() => void> }
 }
+
+export type RenderPriority = 'current' | 'page' | 'thumb'
+
+const PRIORITY_ORDER: RenderPriority[] = ['current', 'page', 'thumb']
 
 /** 按机器画像定并发:省内存机(≤4GB)只允许 1 个大位图同时光栅化 */
 export function applyRenderGateBudget(): void {
   renderGate.max = machineProfile.lowMem ? 1 : 2
 }
 
-/** 取得一个渲染槽(超限则排队等待) */
-export async function acquireRenderSlot(): Promise<void> {
+/** 取得一个渲染槽(超限则按优先级排队等待) */
+export async function acquireRenderSlot(priority: RenderPriority = 'page'): Promise<void> {
   if (renderGate.active < renderGate.max) {
     renderGate.active++
     return
   }
-  await new Promise<void>((resolve) => renderGate.waiters.push(resolve))
+  await new Promise<void>((resolve) => renderGate.waiters[priority].push(resolve))
   renderGate.active++
 }
 
-/** 释放渲染槽并唤醒下一个等待者 */
+/** 释放渲染槽并唤醒优先级最高的等待者 */
 export function releaseRenderSlot(): void {
   renderGate.active--
-  const next = renderGate.waiters.shift()
-  if (next) next()
+  for (const priority of PRIORITY_ORDER) {
+    const next = renderGate.waiters[priority].shift()
+    if (next) {
+      next()
+      return
+    }
+  }
+}
+
+/**
+ * 页面光栅化的实测耗时(最近 8 次)。
+ * 渲染快慢是这台机器最直接的性能指标:它决定预读铺几页,而不是靠一次性探测的机器画像。
+ */
+/** 缩略图完成渲染的次数(与页面渲染分开计:首屏不该被缩略图拖慢) */
+export const thumbWatch = { renders: 0 }
+
+export const renderStats = {
+  durations: [] as number[],
+  avg(): number {
+    if (this.durations.length === 0) return 0
+    return this.durations.reduce((a, b) => a + b, 0) / this.durations.length
+  },
+  record(ms: number): void {
+    if (!Number.isFinite(ms) || ms <= 0) return
+    this.durations.push(ms)
+    if (this.durations.length > 8) this.durations.shift()
+  }
+}
+
+/**
+ * 预读页数:把当前页上下各提前铺几页,滚动时直接显示已有位图。
+ *  - 省内存机(≤4GB)不预读:位图内存优先;
+ *  - 实测渲染很快(<400ms)铺 2 页,否则 1 页 —— 慢机器铺 2 页只会把 worker 排满,
+ *    反而不如少铺一页让当前页先画出来。
+ */
+export function prefetchDepth(): number {
+  if (machineProfile.lowMem) return 0
+  const avg = renderStats.avg()
+  return avg > 0 && avg < 400 ? 2 : 1
+}
+
+/** 预读余量变化时自增:PdfViewer 用它重建观察器(depth 从实测中得出,会中途变) */
+export const prefetchEpoch = ref(0)
+let lastDepth = prefetchDepth()
+
+/** 每次页面渲染完成后调用:耗时均值变化可能改变预读页数 */
+export function notifyRenderDone(ms: number): void {
+  renderStats.record(ms)
+  const depth = prefetchDepth()
+  if (depth !== lastDepth) {
+    lastDepth = depth
+    prefetchEpoch.value++
+  }
+}
+
+/**
+ * 首屏页是否已画出来。打开文档时缩略图不抢跑:扫描件的缩略图同样要解码整页 JPEG,
+ * 十几张一起上会把 worker 占满,首屏页要等 1–2 秒(实测开文件 2.5s vs 关缩略图 1.1s)。
+ * 兜底 8 秒:打开卡死(或没有可见页)时不能让缩略图一直空着,但也不能早于大文档的正常打开时间。
+ */
+export const firstPaintDone = ref(false)
+let firstPaintTimer = 0
+
+export function resetFirstPaint(): void {
+  firstPaintDone.value = false
+  if (firstPaintTimer) window.clearTimeout(firstPaintTimer)
+  firstPaintTimer = window.setTimeout(() => (firstPaintDone.value = true), 8000)
+}
+
+export function markFirstPaint(): void {
+  if (firstPaintTimer) {
+    window.clearTimeout(firstPaintTimer)
+    firstPaintTimer = 0
+  }
+  firstPaintDone.value = true
 }
 
 export function attachContainer(el: HTMLElement | null): void {

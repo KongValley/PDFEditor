@@ -18,10 +18,12 @@ const DELTA_OPTIONS = [
 /** 勾选与旋转角是用户可编辑的副本:直接改 store 里的计划会让"应用"无从判断改了什么 */
 const rows = ref<Array<{ item: OrientationPlanItem; selected: boolean }>>([])
 
+// 计划是在"分析中"之后才到达的(open 先置真、items 才被填),所以不能只看 open:
+// 只盯 open 会让 rows 停在被清空的那一刻,对话框永远显示"以下 0 页"
 watch(
-  () => orientationDialogState.open,
-  async (open) => {
-    if (!open) return
+  () => [orientationDialogState.open, orientationDialogState.scanning, orientationDialogState.items] as const,
+  async () => {
+    if (!orientationDialogState.open || orientationDialogState.scanning) return
     rows.value = orientationDialogState.items.map((item) => ({ item, selected: item.delta !== 0 }))
     await nextTick()
     firstCheckbox.value?.focus()
@@ -53,29 +55,32 @@ function apply(): void {
       <div v-else-if="orientationDialogState.baseError" class="message error">{{ orientationDialogState.baseError }}</div>
 
       <template v-else>
-        <div class="message">
-          以{{ ORIENTATION_TEXT[orientationDialogState.base] }}页为基准,以下 {{ rows.length }} 页方向不同。
-          已自动判断内容是否真的横躺,可逐页调整后再应用。
-        </div>
-        <div class="list">
-          <label v-for="(row, index) in rows" :key="row.item.page" class="row">
-            <input
-              :ref="index === 0 ? (firstCheckbox as any) : undefined"
-              v-model="row.selected"
-              type="checkbox"
-              class="check"
-            />
-            <span class="page-no">第 {{ row.item.page }} 页</span>
-            <span class="from">{{ ORIENTATION_TEXT[row.item.from] }}</span>
-            <span class="reason">{{ reasonText(row.item.reason) }}</span>
-            <select v-model.number="row.item.delta" class="delta">
-              <option v-for="option in DELTA_OPTIONS" :key="option.value" :value="option.value">
-                {{ option.label }}
-              </option>
-            </select>
-          </label>
-        </div>
-        <div class="message">将调整 {{ willRotate }} 页;改动可用 Ctrl+Z 撤销。</div>
+        <div v-if="rows.length === 0" class="message">整份文档方向一致,未发现横躺或上下颠倒的页面。</div>
+        <template v-else>
+          <div class="message">
+            以{{ ORIENTATION_TEXT[orientationDialogState.base] }}页为基准,以下 {{ rows.length }} 页的内容方向与基准不一致。
+            已自动判断内容是否真的横躺或倒置,可逐页调整后再应用。
+          </div>
+          <div class="list">
+            <label v-for="(row, index) in rows" :key="row.item.page" class="row">
+              <input
+                :ref="index === 0 ? (firstCheckbox as any) : undefined"
+                v-model="row.selected"
+                type="checkbox"
+                class="check"
+              />
+              <span class="page-no">第 {{ row.item.page }} 页</span>
+              <span class="from">{{ ORIENTATION_TEXT[row.item.from] }}</span>
+              <span class="reason">{{ reasonText(row.item.reason) }}</span>
+              <select v-model.number="row.item.delta" class="delta">
+                <option v-for="option in DELTA_OPTIONS" :key="option.value" :value="option.value">
+                  {{ option.label }}
+                </option>
+              </select>
+            </label>
+          </div>
+          <div class="message">将调整 {{ willRotate }} 页;改动可用 Ctrl+Z 撤销。</div>
+        </template>
       </template>
 
       <div class="actions">

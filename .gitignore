@@ -10,3 +10,4 @@ src/renderer/public/standard_fonts/
 src/renderer/public/iccs/
 src/renderer/public/wasm/
 *.log
+src/renderer/public/ocr/

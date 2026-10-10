@@ -6,7 +6,14 @@ import { docState, getPage, pageDisplaySize } from '../store/document'
 import { searchState } from '../store/search'
 import { addAnnotation, addAnnotations, selectAnnotation } from '../store/annotations'
 import { ui } from '../store/ui'
-import { acquireRenderSlot, releaseRenderSlot, renderWatchdog, zoomWheelAt } from '../store/viewer'
+import {
+  acquireRenderSlot,
+  markFirstPaint,
+  notifyRenderDone,
+  releaseRenderSlot,
+  renderWatchdog,
+  zoomWheelAt
+} from '../store/viewer'
 import { getPageViewport, pdfjs } from '../lib/pdfjs'
 import { pdfRectToScreen, rectFromPoints, screenPointToPdf, type ScreenRect } from '../lib/geo'
 import { TOOL_DEFAULTS, withIdentity } from '../lib/annots'
@@ -27,6 +34,24 @@ const wrapEl = ref<HTMLElement | null>(null)
 const canvasEl = ref<HTMLCanvasElement | null>(null)
 const textLayerEl = ref<HTMLDivElement | null>(null)
 const rendered = ref(false)
+/**
+ * 当前位图对应的状态:缩放、视图旋转、几何版本(旋转/增删/移动)、文档身份。
+ * 四者都一样才认为位图还有效(预读或刚离开视口的页直接复用,省一次整页光栅化)。
+ * geometryVersion 必须算进来:180° 旋转不换宽高、缩放也不变,只看缩放会留下旧朝向的位图。
+ */
+let renderedSig: { scale: number; rotation: number; geometry: number; docId: string | null } | null = null
+
+function bitmapCurrent(): boolean {
+  const sig = renderedSig
+  return (
+    rendered.value &&
+    sig !== null &&
+    sig.scale === docState.scale &&
+    sig.rotation === docState.rotationView &&
+    sig.geometry === docState.geometryVersion &&
+    sig.docId === docState.docId
+  )
+}
 const viewport = ref<PageViewport | null>(null)
 
 let renderTask: RenderTask | null = null
@@ -144,7 +169,8 @@ async function renderPage(attempt = 0): Promise<void> {
   canvas.style.width = `${vp.width}px`
   canvas.style.height = `${vp.height}px`
 
-  await acquireRenderSlot()
+  const startedAt = performance.now()
+  await acquireRenderSlot(props.pageNumber === docState.currentPage ? 'current' : 'page')
   let timedOut = false
   try {
     // 排队期间可能已滚出视口或被新的渲染请求取代:直接释放槽,不做无用渲染
@@ -183,6 +209,14 @@ async function renderPage(attempt = 0): Promise<void> {
       if (mySeq !== seq) return
       viewport.value = vp
       rendered.value = true
+      renderedSig = {
+        scale: docState.scale,
+        rotation: docState.rotationView,
+        geometry: docState.geometryVersion,
+        docId: docState.docId
+      }
+      notifyRenderDone(performance.now() - startedAt)
+      if (props.pageNumber === docState.currentPage) markFirstPaint()
       renderWatchdog.renders++
       // 文本层与光栅化共用同一个 pdf.js worker:在渲染槽内 await 会让下一页的位图排在
       // 文本抽取之后(表现为"页面出现顺序错乱")。文本层不占槽,clearPage() 会 cancel 它。
@@ -210,6 +244,7 @@ function clearPage(): void {
   }
   viewport.value = null
   rendered.value = false
+  renderedSig = null
 }
 
 /* ---------------------------- 高亮工具 ---------------------------- */
@@ -328,6 +363,8 @@ watch(
       clearPage()
       return
     }
+    // 预读进来(或刚离开又回到视口)的页:位图与当前缩放/旋转一致就直接用,省一次整页光栅化
+    if (bitmapCurrent()) return
     if (scaleTimer !== 0) {
       clearTimeout(scaleTimer)
       scaleTimer = 0
@@ -366,6 +403,7 @@ defineExpose({ rendered, viewport })
     :class="shadowClass"
     :data-page="pageNumber"
     :data-visible="visible ? '1' : '0'"
+    :data-rendered="rendered ? '1' : '0'"
     :style="{ width: size.w + 'px', height: size.h + 'px' }"
     @pointerdown="onPagePointerDown"
     @pointerup="onPagePointerUp"

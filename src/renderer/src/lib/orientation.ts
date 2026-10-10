@@ -1,14 +1,20 @@
 /**
- * 页面朝向判定:扫描件里零星几页方向与其它页不一致(进纸歪斜)时,算出该转哪几页、转多少度。
+ * 页面朝向判定:扫描件里零星几页方向与其它页不一致(进纸歪斜、进纸倒置)时,
+ * 算出该转哪几页、转多少度。
  *
  * 两级判定:
  *  1) 页面方向 —— docState.pageBoxes 已按 /Rotate 交换过宽高,直接比宽高即可,无需渲染;
  *     多数页的方向就是基准方向。
- *  2) 内容朝向 —— 只对"方向与基准不同"的候选页做,避免误伤真正的横向页(宽表格、图纸):
- *     有文字层看文字基线角度(能精确算出 90 还是 270),纯图片扫描件退回墨迹投影。
+ *  2) 内容朝向 —— 「方向与基准不同」的候选页,避免误伤真正的横向页(宽表格、图纸):
+ *     有文字层看文字基线角度(能精确算出 90 还是 270),没有文字层先问 OCR(见 ocr.ts),
+ *     再退回墨迹剖面。
+ *     「方向与基准相同」的页只需查内容有没有被上下颠倒(180° 不改变页面框尺寸):
+ *     文字层同样给得出角度,图像页没有文字层,退回全篇剖面共识(见 invertedPages)。
  */
 import { docState, getPage } from '../store/document'
 import { getPageViewport, pdfjs } from './pdfjs'
+import { consensusProfile, invertedPages, sidewaysDirection, type RowProfile } from './inkprofile'
+import { detectOrientationByOcr, releaseOcrWorker } from './ocr'
 
 export type PageOrientation = 'portrait' | 'landscape' | 'square'
 
@@ -19,7 +25,7 @@ export interface OrientationPlanItem {
   to: PageOrientation
   /** 0 = 本次不动 */
   delta: 90 | 180 | 270 | 0
-  reason: 'text-sideways' | 'text-inverted' | 'page-only' | 'content-unknown'
+  reason: 'text-sideways' | 'text-inverted' | 'page-only' | 'content-unknown' | 'ocr'
 }
 
 /** 近方形(长宽差 ≤2%)视为 square:不参与基准判定,也不作为候选页 */
@@ -48,7 +54,8 @@ const REASON_TEXT: Record<OrientationPlanItem['reason'], string> = {
   'text-sideways': '内容横躺',
   'text-inverted': '内容倒置',
   'page-only': '页面方向不同,内容与页面一致',
-  'content-unknown': '无法判定内容方向'
+  'content-unknown': '无法判定内容方向',
+  ocr: '按 OCR 识别的内容方向'
 }
 
 export function reasonText(reason: OrientationPlanItem['reason']): string {
@@ -97,8 +104,13 @@ async function contentAngleFromText(pageNumber: number): Promise<0 | 90 | 180 | 
   return normalizeAngle(best + page.rotate)
 }
 
-/** 墨迹投影:正立文字在行方向上起伏明显(score>2),横躺则列方向起伏更明显(score<0.5) */
-async function contentUprightFromPixels(pageNumber: number): Promise<boolean | null> {
+/** 一页以小尺寸光栅化后的行/列墨迹量:方向判定用到的指标都从这一次取像里出 */
+interface InkMap {
+  rows: Float64Array
+  cols: Float64Array
+}
+
+async function rasterizeInk(pageNumber: number): Promise<InkMap | null> {
   const page = await getPage(pageNumber)
   const { viewport } = getPageViewport(page, 1, docState.rotationView)
   const scale = Math.min(160 / Math.max(viewport.width, 1), 160 / Math.max(viewport.height, 1))
@@ -134,21 +146,35 @@ async function contentUprightFromPixels(pageNumber: number): Promise<boolean | n
       cols[x] += dark
     }
   }
-  const variance = (values: Float64Array): number => {
-    let sum = 0
-    for (const v of values) sum += v
-    const mean = sum / values.length
-    let acc = 0
-    for (const v of values) acc += (v - mean) * (v - mean)
-    return acc / values.length
+  return { rows, cols }
+}
+
+function variance(values: ArrayLike<number>): number {
+  let sum = 0
+  for (let i = 0; i < values.length; i++) sum += values[i] ?? 0
+  const mean = sum / values.length
+  let acc = 0
+  for (let i = 0; i < values.length; i++) {
+    const diff = (values[i] ?? 0) - mean
+    acc += diff * diff
   }
-  const rowVar = variance(rows)
-  const colVar = variance(cols)
+  return acc / values.length
+}
+
+/** 墨迹投影:正立文字在行方向上起伏明显(score>2),横躺则列方向起伏更明显(score<0.5) */
+function uprightFromPixels(ink: InkMap): boolean | null {
+  const rowVar = variance(ink.rows)
+  const colVar = variance(ink.cols)
   if (rowVar === 0 && colVar === 0) return null // 纯白页,没有可比内容
   const score = rowVar / Math.max(colVar, 1e-6)
   if (score > 2) return true
   if (score < 0.5) return false
   return null
+}
+
+async function contentUprightFromPixels(pageNumber: number): Promise<boolean | null> {
+  const ink = await rasterizeInk(pageNumber)
+  return ink ? uprightFromPixels(ink) : null
 }
 
 /** 某一页的内容相对当前显示方向:正立 / 横躺 / 倒置 / 无法判定 */
@@ -176,6 +202,25 @@ export interface OrientationPlanResult {
   items: OrientationPlanItem[]
 }
 
+/** 文字层角度 → 让内容在显示方向上正立所需的旋转(90 是顺时针) */
+function deltaFromAngle(angle: 0 | 90 | 180 | 270): OrientationPlanItem['delta'] {
+  if (angle === 0) return 0
+  if (angle === 180) return 180
+  // 文字基线转了 angle,回转 angle 才正立:90° 的内容要顺时针 270°,270° 的反之
+  return angle === 90 ? 270 : 90
+}
+
+/** OCR 方向的置信度下限:低于它一律当没识别出来(误判会白转一整页) */
+const OCR_MIN_CONFIDENCE = 10
+
+/** 让 OCR 判一页的方向:没识别出来或置信不足(又不是"不用转")时返回 null */
+async function ocrDelta(page: number): Promise<OrientationPlanItem['delta'] | null> {
+  const result = await detectOrientationByOcr(page).catch(() => null)
+  if (!result) return null
+  if (result.delta !== 0 && result.confidence < OCR_MIN_CONFIDENCE) return null
+  return result.delta
+}
+
 /** 扫描整份文档,给出"该转哪几页、转多少度"的计划(不修改任何内容) */
 export async function planPageOrientation(): Promise<OrientationPlanResult> {
   const orientations = docState.pageBoxes.map((box) => orientationOf(box.w, box.h))
@@ -184,26 +229,98 @@ export async function planPageOrientation(): Promise<OrientationPlanResult> {
     return { base: null, baseError: '横向页与纵向页数量相同,无法判定基准方向', items: [] }
   }
   const items: OrientationPlanItem[] = []
+  /** 没有文字层的候选页:第一遍只取像,**方向留给第二遍的 OCR**(OCR 不行才退回墨迹剖面) */
+  const inkCandidates: Array<{
+    page: number
+    from: PageOrientation
+    upright: boolean | null
+    columns: Float64Array | null
+  }> = []
+  /** 没有文字层的基准页:第二遍用全篇剖面共识判上下颠倒 */
+  const inkBasePages: number[] = []
   for (let index = 0; index < orientations.length; index++) {
+    const page = index + 1
     const from = orientations[index]
-    if (from === base || from === 'square') continue
-    // 只分析候选页:整份文档都"方向不同"时也不会无谓地渲染全篇
+    if (from === 'square') continue
     await new Promise((resolve) => requestAnimationFrame(resolve))
-    const posture = await detectContentPosture(index + 1)
-    let delta: OrientationPlanItem['delta'] = 0
-    let reason: OrientationPlanItem['reason'] = 'content-unknown'
-    if (posture === 'sideways') {
-      // 图片页分不出 90 / 270:默认 +90(使其显示方向与基准一致),预览里可逐页改
-      delta = 90
-      reason = 'text-sideways'
-    } else if (posture === 'inverted') {
-      delta = 180
-      reason = 'text-inverted'
-    } else if (posture === 'upright') {
-      delta = 0
-      reason = 'page-only'
+    const angle = await contentAngleFromText(page).catch(() => null)
+    if (from === base) {
+      // 页面框已经对了:只有内容被上下颠倒才需要转(180° 不改变页面框尺寸)
+      if (angle === 180) {
+        items.push({ page, from, to: base, delta: 180, reason: 'text-inverted' })
+      } else if (angle === null) {
+        inkBasePages.push(page)
+      }
+      continue
     }
-    items.push({ page: index + 1, from, to: base, delta, reason })
+    // 页面框与基准不同:内容真的横躺才转,内容本来就正立(宽表格)则不动
+    if (angle !== null) {
+      const reason = angle === 0 ? 'page-only' : angle === 180 ? 'text-inverted' : 'text-sideways'
+      items.push({ page, from, to: base, delta: deltaFromAngle(angle), reason })
+      continue
+    }
+    const ink = await rasterizeInk(page)
+    inkCandidates.push({
+      page,
+      from,
+      upright: ink ? uprightFromPixels(ink) : null,
+      columns: ink ? ink.cols : null
+    })
   }
+
+  if (inkCandidates.length > 0 || inkBasePages.length > 0) {
+    try {
+      // 基准页的行墨迹剖面共识:既是"内容被上下颠倒"的参照,也是 OCR 不可用时的方向退路
+      // (同一份文档的多数页版式一致;版式千差万别或页面太少时相关度上不去,自然判不出、不乱转)
+      // ponytail: 逐页小图取像 ≈ 每页一次 160px 渲染;版式混杂时共识失效 → 由 OCR 兜底
+      const profiles: RowProfile[] = []
+      for (let index = 0; index < orientations.length; index++) {
+        if (orientations[index] !== base) continue
+        await new Promise((resolve) => requestAnimationFrame(resolve))
+        const ink = await rasterizeInk(index + 1)
+        if (ink) profiles.push({ page: index + 1, rows: ink.rows })
+      }
+      const reference = consensusProfile(profiles)
+      if (reference) {
+        for (const page of invertedPages(profiles)) {
+          items.push({ page, from: base, to: base, delta: 180, reason: 'text-inverted' })
+        }
+      } else {
+        // 可比页太少、共识无从谈起:逐页问 OCR,基准页只接受 180°(其它角度会换掉页面框)
+        for (const page of inkBasePages) {
+          if ((await ocrDelta(page)) === 180) {
+            items.push({ page, from: base, to: base, delta: 180, reason: 'ocr' })
+          }
+        }
+      }
+      for (const candidate of inkCandidates) {
+        const delta = await ocrDelta(candidate.page)
+        if (delta !== null) {
+          items.push({
+            page: candidate.page,
+            from: candidate.from,
+            to: base,
+            delta,
+            reason: delta === 0 ? 'page-only' : 'ocr'
+          })
+          continue
+        }
+        // OCR 不可用:退回墨迹投影(判竖直→不动;判横躺→剖面共识给方向,再不行按默认 +90)
+        const columns = candidate.upright === false ? candidate.columns : null
+        const direction = columns && reference ? sidewaysDirection(profiles, columns) : 0
+        items.push({
+          page: candidate.page,
+          from: candidate.from,
+          to: base,
+          delta: columns ? direction || 90 : 0,
+          reason: columns ? 'text-sideways' : candidate.upright === true ? 'page-only' : 'content-unknown'
+        })
+      }
+    } finally {
+      // 识别用完就把 worker 还回去(它带着几十 MB wasm 堆,不该常驻整个会话)
+      await releaseOcrWorker()
+    }
+  }
+  items.sort((a, b) => a.page - b.page)
   return { base, baseError: '', items }
 }

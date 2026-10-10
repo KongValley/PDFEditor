@@ -10,6 +10,9 @@ import {
   fitWidth,
   floorIndex,
   pageTopsOf,
+  prefetchDepth,
+  prefetchEpoch,
+  resetFirstPaint,
   rebuildLayoutCache,
   requestInitialFit,
   rowCount,
@@ -120,6 +123,11 @@ function setupObserver(): void {
     requestAnimationFrame(() => setupObserver())
     return
   }
+  // 预读余量:按实测渲染耗时决定提前铺几页(见 viewer.ts prefetchDepth)。
+  // 连续/单页模式下余量取整页高 ⇒ 当前页上下各多渲染 1–2 页,滚动时直接复用已有位图;
+  // 双页模式一屏 2 页,再铺 2 行会一次拉进 6 页把 worker 排满,所以维持原有的小余量。
+  const depth = prefetchDepth()
+  const buffer = docState.viewMode === 'two' ? 60 : Math.max(200, depth * rowHeight(Math.floor((docState.currentPage - 1) / 2)))
   observer = new IntersectionObserver(
     (entries) => {
       for (const entry of entries) {
@@ -132,7 +140,7 @@ function setupObserver(): void {
     },
     // 双页模式一屏就是 2 页,200px 缓冲会把 6 页拉进可见集合 → 渲染队列堆积;
     // 60px 只保留一点预读余量,模式切换时 refreshVisiblePages → setupObserver 会重建。
-    { root, rootMargin: `${docState.viewMode === 'two' ? 60 : 200}px 0px` }
+    { root, rootMargin: `${buffer}px 0px` }
   )
   for (const el of root.querySelectorAll<HTMLElement>('[data-page]')) observer.observe(el)
 }
@@ -232,6 +240,7 @@ onBeforeUnmount(() => {
 watch(
   () => [docState.docId, docState.pageBoxes.length] as const,
   async ([docId, pageCount], [prevDocId, prevPageCount]) => {
+    resetFirstPaint()
     visiblePages.clear()
     pinViewerPages(visiblePages)
     // 仅当文档身份或页数变化(真换文档 / 增删页)才归零:
@@ -259,6 +268,12 @@ watch(
     refreshVisiblePages()
   }
 )
+
+// 实测渲染耗时变了 ⇒ 预读页数可能变(见 viewer.ts):重建观察器让余量跟上机器当前状态
+watch(prefetchEpoch, async () => {
+  await nextTick()
+  refreshVisiblePages()
+})
 
 // 单页模式翻页:可见页集只含当前页(确定性,不依赖 IntersectionObserver 首次投递)
 watch(

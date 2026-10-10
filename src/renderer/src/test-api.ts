@@ -26,6 +26,7 @@ import {
 } from './lib/actions'
 import { parsePageRange, splitPageSegments } from '@shared/text'
 import { detectContentPosture, orientationOf, pickBaseOrientation } from './lib/orientation'
+import { detectOrientationByOcr } from './lib/ocr'
 import {
   docState,
   openByPath,
@@ -54,7 +55,7 @@ import {
   undo,
   updateAnnotation
 } from './store/annotations'
-import { renderGate, renderWatchdog, scrollToPage, zoomBy } from './store/viewer'
+import { prefetchDepth, renderGate, renderWatchdog, scrollToPage, thumbWatch, zoomBy } from './store/viewer'
 import { goBack, goForward, readingState, setRestoreLastPage } from './store/reading'
 import { TOOL_DEFAULTS, newId, withIdentity } from './lib/annots'
 import { pdfjs } from './lib/pdfjs'
@@ -101,6 +102,7 @@ export function installTestApi(): void {
     orientationOf,
     pickBaseOrientation,
     detectContentPosture,
+    detectOrientationByOcr,
     normalizePageOrientation,
     applyOrientationFix,
     imagePdfDialogState,
@@ -142,6 +144,8 @@ export function installTestApi(): void {
     splitPageSegments,
     scrollToPage,
     renderWatchdog,
+    prefetchDepth,
+    thumbWatch,
     renderGate,
     zoomBy,
     runBusy,
