@@ -54,7 +54,7 @@ describe('needsCjkFont', () => {
     ).toBe(true)
   })
 
-  it('不写文字的批注为 false(便签/空文本注释/纯图形)', async () => {
+  it('不写文字的批注为 false(便签/空文本注释/标签为空的图章/纯图形)', async () => {
     // 便签只画图标矩形,空文本注释一个字形都画不出:以前把它们算作"需要中文字体",
     // 会让只想存一个便签的文档嵌入 CJK 字体却零字形,触发 fontkit 的 CFF 子集编码崩溃
     const mod = await loadModule()
@@ -62,6 +62,11 @@ describe('needsCjkFont', () => {
     expect(mod.needsCjkFont([{ ...base, id: 'n', kind: 'note', page: 0, bbox: { x: 0, y: 0, w: 1, h: 1 }, text: '备注' }])).toBe(false)
     expect(mod.needsCjkFont([textAnn('t', '')])).toBe(false)
     expect(mod.needsCjkFont([textAnn('t', '   ')])).toBe(false)
+    expect(
+      mod.needsCjkFont([
+        { ...base, id: 's', kind: 'stamp', page: 0, bbox: { x: 0, y: 0, w: 1, h: 1 }, stampKey: 'approved', label: '  ', fontSize: 14, rotate: 0 }
+      ])
+    ).toBe(false)
   })
 })
 
@@ -184,5 +189,30 @@ describe('缺中文字体(PDF_EDITOR_SMOKE_CJK_FONT=none)', () => {
     // 图形/ASCII 批注能写成功,但缺字体的事实仍以 warning 形式告知
     expect(warnings.some((w) => w.includes('未找到可嵌入的中文字体'))).toBe(true)
     expect(mod.extractEditorAnnotations(await PDFDocument.load(bytes))).toHaveLength(1)
+  })
+
+  it('表单值落不到任何字段上时不请求中文字体(零字形嵌入会崩 CFF 字体)', async () => {
+    const mod = await loadModule()
+    // 文档没有表单字段:applyFormValues 会直接跳过,字体一个字形都用不上
+    const { bytes, warnings } = await mod.writeAnnotations(await samplePdf(), {
+      annotations: [],
+      formValues: { 不存在的字段: '中文值' },
+      resolveImage: async () => undefined
+    })
+    expect(bytes.byteLength).toBeGreaterThan(0)
+    expect(warnings.some((w) => w.includes('未找到可嵌入的中文字体'))).toBe(false)
+  })
+
+  it('表单值能落到字段上时仍会请求中文字体', async () => {
+    const mod = await loadModule()
+    const doc = await PDFDocument.create()
+    doc.addPage([200, 100])
+    doc.getForm().createTextField('姓名')
+    const { warnings } = await mod.writeAnnotations(Buffer.from(await doc.save()), {
+      annotations: [],
+      formValues: { 姓名: '张三' },
+      resolveImage: async () => undefined
+    })
+    expect(warnings.some((w) => w.includes('未找到可嵌入的中文字体'))).toBe(true)
   })
 })

@@ -122,11 +122,34 @@ function loadCjkFontBytes(): Buffer | null {
  */
 export function needsCjkFont(annotations: Annotation[]): boolean {
   for (const ann of annotations) {
-    // 图章与测量总会写出标签文字
-    if (ann.kind === 'stamp' || ann.kind === 'measure') return true
+    // 测量总会写出 "N mm";图章写出标签(标签为空时只画边框,不经过字体)
+    if (ann.kind === 'measure') return true
+    if (ann.kind === 'stamp' && ann.label.trim() !== '') return true
     if (ann.kind === 'text' && ann.text.trim() !== '') return true
   }
   return false
+}
+
+/**
+ * 这次保存有没有表单值真的会落到字段上?
+ * 字段找不到时 applyFormValues 会直接跳过(只留一条 warning),字体一个字形都不会用上 ——
+ * 所以「有 formValues」不能作为"需要中文字体"的依据(理由同上:零字形 + CFF 字体必崩)。
+ */
+function willWriteFormValue(doc: PDFDocument, values: Record<string, FormValue>): boolean {
+  const entries = Object.entries(values)
+  if (entries.length === 0) return false
+  let names: string[]
+  try {
+    names = doc.getForm().getFields().map((field) => field.getName())
+  } catch {
+    // 表单读不出来时 applyFormValues 同样会跳过(只记 warning)
+    return false
+  }
+  if (names.length === 0) return false
+  // 只有字符串值会真的画出文字(布尔是复选框,外观由 pdf-lib 自己的字形画)
+  return entries.some(
+    ([name, value]) => typeof value === 'string' && value !== '' && names.some((n) => n === name || n.endsWith(`.${name}`))
+  )
 }
 
 async function embedCjkFont(doc: PDFDocument, warnings: string[]): Promise<PDFFont | null> {
@@ -739,8 +762,8 @@ function applyFormValues(
 export async function writeAnnotations(buffer: Buffer, options: WriteOptions): Promise<WriteResult> {
   const warnings: string[] = []
   const doc = await PDFDocument.load(buffer, { ignoreEncryption: true })
-  // 图形批注 + 无表单值时跳过 9.75MB 中文字体的读盘/解析/子集嵌入
-  const skipCjk = !needsCjkFont(options.annotations) && Object.keys(options.formValues).length === 0
+  // 图形批注 + 没有真会写进字段的表单值时跳过 9.75MB 中文字体的读盘/解析/子集嵌入
+  const skipCjk = !needsCjkFont(options.annotations) && !willWriteFormValue(doc, options.formValues)
   const { ctx, cjkFont } = await createAnnotContext(doc, options.resolveImage, warnings, { skipCjkFont: skipCjk })
   await replaceOwnAnnotations(doc, options.annotations, (page) => page, ctx)
   applyFormValues(doc, options.formValues, cjkFont, warnings)
