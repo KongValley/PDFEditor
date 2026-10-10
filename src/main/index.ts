@@ -38,7 +38,9 @@ for (const stream of [process.stdout, process.stderr]) {
 // 未捕获异常只记录、不退出:内网用户没有控制台,进程静默消失比崩溃更难查
 // (日志目录在 whenReady 里确定,此前的异常会被丢弃而不是写到工作目录)
 process.on('uncaughtException', (err) => {
-  logEvent('error', 'app', '未捕获异常', { error: String(err?.message ?? err) })
+  // 带上第一层栈帧:pdf-lib/fontkit 这类库的异常抛在异步回调里,只有帧名能定位(路径由 logger 摘掉)
+  const frame = (err?.stack ?? '').split('\n')[1]?.trim() ?? ''
+  logEvent('error', 'app', '未捕获异常', { error: String(err?.message ?? err), at: frame })
 })
 process.on('unhandledRejection', (reason) => {
   logEvent('error', 'app', '未处理的 Promise 拒绝', { error: String(reason) })

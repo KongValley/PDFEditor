@@ -36,6 +36,7 @@ const ALLOWED_KEYS: Record<string, true> = {
   ms: true,
   ok: true,
   error: true,
+  at: true,
   count: true,
   failed: true,
   delta: true,
@@ -134,7 +135,7 @@ function sanitize(data?: Record<string, unknown>): Record<string, unknown> | nul
       clean[key] = basename(value)
       continue
     }
-    clean[key] = key === 'error' ? stripPaths(String(value)) : value
+    clean[key] = key === 'error' || key === 'at' ? stripPaths(String(value)) : value
   }
   return Object.keys(clean).length > 0 ? clean : null
 }

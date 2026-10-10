@@ -43,15 +43,25 @@ async function samplePdf(): Promise<Buffer> {
 }
 
 describe('needsCjkFont', () => {
-  it('含文字绘制类型时为 true', async () => {
+  it('会写出文字的批注为 true', async () => {
     const mod = await loadModule()
     expect(mod.needsCjkFont([rect('a'), textAnn('b', '中文')])).toBe(true)
-    expect(mod.needsCjkFont([{ ...base, id: 'n', kind: 'note', page: 0, bbox: { x: 0, y: 0, w: 1, h: 1 }, text: 'x' }])).toBe(true)
+    expect(mod.needsCjkFont([{ ...base, id: 's', kind: 'stamp', page: 0, bbox: { x: 0, y: 0, w: 1, h: 1 }, stampKey: 'approved', label: '已批准', fontSize: 14, rotate: 0 }])).toBe(true)
+    expect(
+      mod.needsCjkFont([
+        { ...base, id: 'm', kind: 'measure', page: 0, bbox: { x: 0, y: 0, w: 1, h: 1 }, from: { x: 0, y: 0 }, to: { x: 1, y: 1 }, unit: 'mm', thickness: 1 }
+      ])
+    ).toBe(true)
   })
 
-  it('只有图形类批注时为 false', async () => {
+  it('不写文字的批注为 false(便签/空文本注释/纯图形)', async () => {
+    // 便签只画图标矩形,空文本注释一个字形都画不出:以前把它们算作"需要中文字体",
+    // 会让只想存一个便签的文档嵌入 CJK 字体却零字形,触发 fontkit 的 CFF 子集编码崩溃
     const mod = await loadModule()
     expect(mod.needsCjkFont([rect('a')])).toBe(false)
+    expect(mod.needsCjkFont([{ ...base, id: 'n', kind: 'note', page: 0, bbox: { x: 0, y: 0, w: 1, h: 1 }, text: '备注' }])).toBe(false)
+    expect(mod.needsCjkFont([textAnn('t', '')])).toBe(false)
+    expect(mod.needsCjkFont([textAnn('t', '   ')])).toBe(false)
   })
 })
 
@@ -69,6 +79,20 @@ describe('批注写入往返', () => {
     })
     const read = mod.extractEditorAnnotations(await PDFDocument.load(bytes))
     expect(read.map((a) => `${a.id}@${a.page}:${a.kind}`).sort()).toEqual(input.map((a) => `${a.id}@${a.page}:${a.kind}`).sort())
+  })
+
+  it('空文本注释:保存不失败,注释仍能读回(无 /AP)', async () => {
+    // 空文本画不出任何内容,临时页没有 Contents —— 以前 pdf-lib 会在 save() 里抛
+    // "Can't embed page with missing Contents",让整次保存失败
+    const mod = await loadModule()
+    const { bytes, warnings } = await mod.writeAnnotations(await samplePdf(), {
+      annotations: [textAnn('t1', '')],
+      formValues: {},
+      resolveImage
+    })
+    expect(warnings).toEqual([])
+    const read = mod.extractEditorAnnotations(await PDFDocument.load(bytes))
+    expect(read.map((a) => a.id)).toEqual(['t1'])
   })
 
   it('同一份输入重复写入:输出稳定(条数与体积)', async () => {

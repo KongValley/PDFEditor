@@ -112,10 +112,19 @@ function loadCjkFontBytes(): Buffer | null {
   return cachedFontBytes
 }
 
-/** 该批注集是否需要中文字体(只有含文本绘制的类型需要;图形类不需要) */
+/**
+ * 该批注集是否需要中文字体:**只有真会写出文字的批注才需要**(图形类、便签不需要)。
+ * 便签只画图标矩形(文字进 /Contents,不经过字体);文本注释为空时也一个字形都画不出来。
+ * 为什么必须排除它们:嵌入了 CJK 字体却一个字形都没用到时,fontkit 的 CFF 子集编码会抛
+ * RangeError("value" argument is out of bounds) —— 而且它抛在字体编码的异步回调里,
+ * 逃出保存的 promise 链(guard 捕不到),表现为「保存永远没有回音」
+ * (实测半个字符都没画的便签保存 + Noto Sans SC / Source Han Sans OTF 必现)。
+ */
 export function needsCjkFont(annotations: Annotation[]): boolean {
   for (const ann of annotations) {
-    if (ann.kind === 'text' || ann.kind === 'note' || ann.kind === 'stamp' || ann.kind === 'measure') return true
+    // 图章与测量总会写出标签文字
+    if (ann.kind === 'stamp' || ann.kind === 'measure') return true
+    if (ann.kind === 'text' && ann.text.trim() !== '') return true
   }
   return false
 }
@@ -402,6 +411,15 @@ function shiftForScratch(ann: Annotation, dx: number, dy: number): Annotation {
   }
 }
 
+/**
+ * 该注释画得出外观吗?空文本注释一个字形都画不出来 —— 临时页没有 Contents,
+ * pdf-lib 的 embedPage 会抛 "Can't embed page with missing Contents"(在 save() 里),
+ * 让整次保存失败。这类注释不写 /AP 即可(本来也没有可显示的内容)。
+ */
+function hasDrawableAppearance(ann: Annotation): boolean {
+  return ann.kind !== 'text' || ann.text.trim() !== ''
+}
+
 /** 把注释画到临时页并嵌入为 Form XObject 作为 /AP /N;返回其引用 */
 async function buildAppearance(
   doc: PDFDocument,
@@ -535,7 +553,7 @@ export async function replaceOwnAnnotations(
       continue
     }
     try {
-      const apRef = await buildAppearance(doc, ann, ctx)
+      const apRef = hasDrawableAppearance(ann) ? await buildAppearance(doc, ann, ctx) : null
       const dict = buildAnnotDict(doc, ann, ctx, apRef)
       let annots = page.node.Annots()
       if (!annots) {
