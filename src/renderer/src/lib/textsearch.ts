@@ -20,6 +20,9 @@ interface PageTextIndex {
   items: TextItemRef[]
 }
 
+/** 页文本索引缓存上限:超长文档按页搜索时不让索引无限累积(Map 迭代顺序即插入顺序) */
+const INDEX_CACHE_MAX = 24
+
 const indexCache = new Map<number, PageTextIndex>()
 
 export function clearSearchIndex(): void {
@@ -28,7 +31,12 @@ export function clearSearchIndex(): void {
 
 async function getPageIndex(pageNumber: number): Promise<PageTextIndex> {
   const cached = indexCache.get(pageNumber)
-  if (cached) return cached
+  if (cached) {
+    // 命中即移到末尾(LRU:末尾是最近使用)
+    indexCache.delete(pageNumber)
+    indexCache.set(pageNumber, cached)
+    return cached
+  }
   const page = await getPage(pageNumber)
   const content = await page.getTextContent()
   let text = ''
@@ -47,6 +55,12 @@ async function getPageIndex(pageNumber: number): Promise<PageTextIndex> {
   }
   const index: PageTextIndex = { text, items }
   indexCache.set(pageNumber, index)
+  while (indexCache.size > INDEX_CACHE_MAX) {
+    // Map 迭代顺序 = 插入顺序:第一个键就是最久未使用的
+    const oldest = indexCache.keys().next()
+    if (oldest.done) break
+    indexCache.delete(oldest.value)
+  }
   return index
 }
 

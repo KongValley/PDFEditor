@@ -227,7 +227,10 @@ async function fillPageBoxes(
         const rotate = (((page.rotate % 360) + 360) % 360)
         const swapped = rotate === 90 || rotate === 270
         boxes[n - 1] = swapped ? { w: height, h: width } : { w: width, h: height }
-        // 只取尺寸,不驻留 PageProxy(低内存:渲染时再按需 getPage)
+        // 只取尺寸,不驻留 PageProxy(低内存:渲染时再按需 getPage)。
+        // 必须是逐页 cleanup:它只清本页本地状态、页面在渲染时自动放弃;
+        // 换成 doc.cleanup() 会在任何一页正在渲染时抛 "Page N is currently rendering."
+        // (pdf.js 3.11 startCleanup 的实现如此),打开/换页当场失败
         page.cleanup()
       })
     )
@@ -253,8 +256,15 @@ function releaseDocEntry(docId: string): void {
 export async function openByPath(path: string, options: OpenOptions = {}): Promise<boolean> {
   docState.loading = true
   docState.loadError = null
+  // 大文件在内网共享盘上读取要几秒到几十秒:订阅主进程的分块进度,并在标题区提供「取消」
+  const offProgress = window.pdfAPI.on('doc:openProgress', (raw) => {
+    const info = raw as { read?: number; total?: number }
+    const total = info?.total ?? 0
+    if (total > 0) docState.loadProgress = `正在读取文件 ${Math.round(((info?.read ?? 0) / total) * 100)}%`
+  })
   try {
     const result = (await window.pdfAPI.invoke('doc:open', path)) as OpenResult
+    if (result.error === 'canceled') return false
     if (!result.ok || !result.docId || !result.pageCount || (!result.buffer && result.stream !== 'range')) {
       docState.loadError = result.errorMessage ?? '打开文件失败'
       return false
@@ -338,9 +348,15 @@ export async function openByPath(path: string, options: OpenOptions = {}): Promi
     docState.loadError = err instanceof Error ? err.message : String(err)
     return false
   } finally {
+    offProgress()
     docState.loading = false
     docState.loadProgress = null
   }
+}
+
+/** 「取消」按钮:中断主进程的整份读取(共享盘上几十 MB 的文件要等几十秒) */
+export function cancelOpen(): void {
+  void window.pdfAPI.invoke('doc:cancelOpen')
 }
 
 /** 页面操作后:以新 buffer 重开 pdf.js 文档(保持缩放与视图旋转)。

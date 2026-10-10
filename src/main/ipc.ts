@@ -33,6 +33,7 @@ import type {
   Annotation,
   ChooseFileResult,
   FormValue,
+  LogLevel,
   PageOp,
   PageOpResult,
   RangeReadResult,
@@ -42,6 +43,7 @@ import type {
   SplitTask,
   SplitTaskResult
 } from '@shared/types'
+import { getLogDir, getLogLevel, logEvent, setLogLevel } from './lib/logger'
 
 /** 正在跑的拆分任务(供 pdf:splitCancel 置位;任务结束即删除) */
 const splitJobs = new Map<string, { cancelled: boolean }>()
@@ -85,6 +87,9 @@ async function guard<T extends OkResult>(run: () => Promise<T> | T): Promise<T> 
   }
 }
 
+/** 正在进行的打开(供 doc:cancelOpen 中断读取;每次 doc:open 开始时覆盖) */
+let currentOpenAbort: AbortController | null = null
+
 export function registerIpc(getWindow: () => BrowserWindow | null): void {
   ipcMain.handle('app:chooseFile', async (_e, multi: boolean): Promise<ChooseFileResult> => {
     const options: OpenDialogOptions = {
@@ -97,7 +102,55 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     return { canceled: result.canceled, paths: result.filePaths }
   })
 
-  ipcMain.handle('doc:open', async (_e, filePath: string) => openDocument(filePath))
+  ipcMain.handle('doc:open', async (_e, filePath: string) => {
+    const win = getWindow()
+    const controller = new AbortController()
+    currentOpenAbort = controller
+    const started = Date.now()
+    try {
+      const result = await openDocument(filePath, {
+        onProgress: (read, total) => win?.webContents.send('doc:openProgress', { read, total }),
+        signal: controller.signal
+      })
+      const ms = Date.now() - started
+      if (result.error === 'canceled') {
+        logEvent('info', 'open', '已取消', { file: filePath, ms })
+      } else if (result.ok) {
+        logEvent('info', 'open', '打开文件', {
+          file: filePath,
+          sizeMB: Math.round((result.fileSize ?? 0) / 1048576),
+          pages: result.pageCount,
+          mode: result.stream,
+          encrypted: result.encrypted ?? false,
+          ms,
+          ok: true
+        })
+      } else {
+        logEvent('error', 'open', '打开失败', {
+          file: filePath,
+          error: result.errorMessage ?? result.error,
+          ms,
+          ok: false
+        })
+      }
+      return result
+    } catch (err) {
+      logEvent('error', 'open', '打开失败', {
+        file: filePath,
+        error: (err as Error).message,
+        ms: Date.now() - started,
+        ok: false
+      })
+      throw err
+    } finally {
+      if (currentOpenAbort === controller) currentOpenAbort = null
+    }
+  })
+
+  ipcMain.handle('doc:cancelOpen', (): { ok: boolean } => {
+    currentOpenAbort?.abort()
+    return { ok: true }
+  })
 
   ipcMain.handle(
     'doc:readRange',
@@ -126,7 +179,12 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   ipcMain.handle(
     'pdf:pageCounts',
     async (_e, paths: string[]): Promise<Array<{ path: string; pageCount?: number; error?: string }>> => {
-      return Promise.all(paths.map(async (path) => ({ path, ...(await readPdfPageCount(path)) })))
+      const started = Date.now()
+      const results: Array<{ path: string; pageCount?: number; error?: string }> = []
+      // 串行而非并发:每份 buffer 与解析图随后出作用域,峰值内存从 Σ(文件+解析图) 降为单份
+      for (const path of paths) results.push({ path, ...(await readPdfPageCount(path)) })
+      logEvent('debug', 'pagecounts', '读取页数', { count: paths.length, ms: Date.now() - started })
+      return results
     }
   )
 
@@ -146,8 +204,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       const jobId = payload.jobId ?? ''
       const job = { cancelled: false }
       splitJobs.set(jobId, job)
+      const started = Date.now()
       try {
-        return await splitPdfTasks(
+        const results = await splitPdfTasks(
           payload.tasks,
           payload.outputDir,
           {
@@ -159,6 +218,14 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
             isCancelled: () => job.cancelled
           }
         )
+        const failed = results.filter((result) => !result.ok).length
+        logEvent(failed > 0 ? 'warn' : 'info', 'split', '拆分完成', {
+          count: results.length,
+          failed,
+          ms: Date.now() - started,
+          ok: failed === 0
+        })
+        return results
       } finally {
         splitJobs.delete(jobId)
       }
@@ -202,7 +269,17 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   )
 
   ipcMain.handle('pageops:apply', async (_e, payload: { docId: string; op: PageOp }) => {
-    return guard(() => applyPageOp(payload.docId, payload.op))
+    const started = Date.now()
+    const result = await guard(() => applyPageOp(payload.docId, payload.op))
+    logEvent(result.ok ? 'info' : 'error', 'pageops', result.ok ? '页面操作' : '页面操作失败', {
+      op: payload.op.kind,
+      // 各 kind 的字段名不同:没有 pages 的(move/insertBlank/append)只记 op
+      pages: 'pages' in payload.op ? payload.op.pages.length : undefined,
+      ms: Date.now() - started,
+      ok: result.ok,
+      error: result.ok ? undefined : result.error
+    })
+    return result
   })
 
   ipcMain.handle('pageops:undo', async (_e, docId: string): Promise<PageOpResult> => {
@@ -266,7 +343,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
         writeSidecar?: boolean
       }
     ): Promise<SaveResult> => {
-      return guard<SaveResult>(async () => {
+      const started = Date.now()
+      const result = await guard<SaveResult>(async () => {
         const entry = getDocEntry(payload.docId)
         if (!entry) return { ok: false, error: '文档未打开' }
 
@@ -335,6 +413,17 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
           throw err
         }
       })
+      if (!result.canceled) {
+        logEvent(result.ok ? 'info' : 'error', 'save', result.ok ? '保存完成' : '保存失败', {
+          file: result.savedPath,
+          pages: getDocEntry(payload.docId)?.pageCount,
+          count: payload.annotations.length,
+          ms: Date.now() - started,
+          ok: result.ok,
+          error: result.ok ? undefined : result.error
+        })
+      }
+      return result
     }
   )
 
@@ -351,11 +440,51 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     guard(() => addPrintPage(payload))
   )
 
-  ipcMain.handle('app:printCommit', (_e, payload: { jobId: string; dryRun?: boolean }) =>
-    guard(() => commitPrintJob(payload))
-  )
+  ipcMain.handle('app:printCommit', async (_e, payload: { jobId: string; dryRun?: boolean }) => {
+    const started = Date.now()
+    const result = await guard(() => commitPrintJob(payload))
+    // dryRun 是冒烟/预览路径,不产生真实打印记录
+    if (!payload?.dryRun) {
+      logEvent(result.ok ? 'info' : 'error', 'print', result.ok ? '打印' : '打印失败', {
+        pages: result.pageCount,
+        ms: Date.now() - started,
+        ok: result.ok,
+        error: result.ok ? undefined : result.error
+      })
+    }
+    return result
+  })
 
   ipcMain.handle('app:printAbort', (_e, jobId: string) => guard(() => abortPrintJob(String(jobId))))
+
+  // 渲染层的日志经此落盘(主进程是唯一落盘方,见 lib/logger.ts)
+  ipcMain.handle(
+    'log:write',
+    (
+      _e,
+      payload: { level: LogLevel; scope: string; message: string; data?: Record<string, unknown> }
+    ): { ok: boolean } => {
+      logEvent(payload.level, String(payload.scope), String(payload.message), payload.data)
+      return { ok: true }
+    }
+  )
+
+  ipcMain.handle('log:setLevel', (_e, level: LogLevel | 'off'): { ok: boolean } => {
+    setLogLevel(level)
+    return { ok: true }
+  })
+
+  /** 打开日志目录(关于对话框):目录不存在时不调用 shell.openPath(Electron 22 会弹阻塞式系统框) */
+  ipcMain.handle('app:openLogDir', async (): Promise<{ ok: boolean }> => {
+    const dir = getLogDir()
+    if (!dir || !existsSync(dir)) {
+      console.warn('[openLogDir] 日志目录不存在:', dir)
+      return { ok: false }
+    }
+    const error = await shell.openPath(dir)
+    if (error) console.warn('[openLogDir]', error)
+    return { ok: !error }
+  })
 
   ipcMain.handle(
     'app:runtimeInfo',
@@ -375,7 +504,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       gpuDisabled: process.env['PDF_EDITOR_HWACCEL'] !== '1',
       // 只判权限不落盘:环境自检必须无副作用
       userDataWritable: isWritable(app.getPath('userData')),
-      cjkFontFile: findCjkFontFile()
+      cjkFontFile: findCjkFontFile(),
+      logDir: getLogDir(),
+      logLevel: getLogLevel()
     })
   )
 
@@ -440,11 +571,18 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       errors?: Array<{ path: string; error: string }>
     }> => {
       const win = getWindow()
+      const started = Date.now()
       const converted = await imagesToPdf(payload.paths, payload.pageMode, {
         onProgress: (info) => win?.webContents.send('img:toPdfProgress', { jobId: payload.jobId, ...info })
       })
       const bytes = converted.bytes
       if (converted.pages === 0 || !bytes) {
+        logEvent('error', 'img2pdf', '转换失败', {
+          count: payload.paths.length,
+          ms: Date.now() - started,
+          ok: false,
+          error: converted.errors[0]?.error ?? '没有可转换的图片'
+        })
         return { ok: false, error: converted.errors[0]?.error ?? '没有可转换的图片', errors: converted.errors }
       }
       let savedPath: string
@@ -464,6 +602,12 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
         savedPath = result.filePath
       }
       await writeFile(savedPath, Buffer.from(bytes))
+      logEvent(converted.errors.length > 0 ? 'warn' : 'info', 'img2pdf', '完成', {
+        count: converted.pages,
+        failed: converted.errors.length,
+        ms: Date.now() - started,
+        ok: true
+      })
       return { ok: true, savedPath, pages: converted.pages, errors: converted.errors }
     }
   )

@@ -53,6 +53,8 @@ export async function loadPdfDocumentByRange(options: RangeLoadOptions): Promise
   })
   task = pdfjs.getDocument({
     range: transport,
+    // pdf.js 默认 64KB:内网共享盘上 30MB 文档要十几次小包 IPC
+    rangeChunkSize: 512 * 1024,
     cMapUrl: `${assetBase}cmaps/`,
     cMapPacked: true,
     standardFontDataUrl: `${assetBase}standard_fonts/`

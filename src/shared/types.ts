@@ -10,6 +10,9 @@ export interface Rect {
   h: number
 }
 
+/** 运行日志等级(主进程落盘 / 渲染进程转发同一套字面量) */
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
+
 export interface Point {
   x: number
   y: number
@@ -192,7 +195,8 @@ export interface SidecarData {
 
 export interface OpenResult {
   ok: boolean
-  error?: 'password' | 'corrupt' | 'unknown'
+  /** canceled = 用户在读取阶段点了「取消」(不是失败,渲染层静默返回) */
+  error?: 'password' | 'corrupt' | 'unknown' | 'canceled'
   errorMessage?: string
   docId?: string
   path?: string
@@ -229,6 +233,10 @@ export interface RuntimeInfo {
   userDataWritable: boolean
   /** 找到的中文字体文件;null = 缺字体,文字批注/图章无法保存 */
   cjkFontFile: string | null
+  /** 运行日志目录(关于对话框里展示并提供打开入口) */
+  logDir: string
+  /** 当前生效的日志等级 */
+  logLevel: LogLevel | 'off'
 }
 
 /** 渲染层按需分段读取(大文件 Range 流式加载)的返回 */

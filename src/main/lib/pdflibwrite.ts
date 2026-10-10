@@ -507,7 +507,8 @@ export async function replaceOwnAnnotations(
   mapPage: (page: number) => number | null,
   ctx: AnnotWriteContext
 ): Promise<void> {
-  for (const page of doc.getPages()) {
+  const pages = doc.getPages()
+  for (const page of pages) {
     const annots = page.node.Annots()
     if (!annots) continue
     const keep: PDFObject[] = []
@@ -525,7 +526,6 @@ export async function replaceOwnAnnotations(
     }
   }
 
-  const pages = doc.getPages()
   for (const ann of annotations) {
     const index = mapPage(ann.page)
     if (index === null) continue

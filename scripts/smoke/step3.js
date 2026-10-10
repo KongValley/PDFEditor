@@ -145,6 +145,9 @@ check('delete key removes selection', t.annotState.items.length === beforeDelete
 window.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }))
 await sleep(80)
 check('ctrl+z restores', t.annotState.items.length === beforeDelete, t.annotState.items.length)
+// 撤销删除必须把形状真的画回来(按页批注缓存要跟着失效,否则模型对了但页面仍是旧的那一份)
+const shapesAfterUndo = wrap.querySelectorAll('.ann-layer > g.shape').length
+check('ctrl+z 恢复后形状重新渲染', shapesAfterUndo === shapes, { shapes, shapesAfterUndo })
 
 t.ui.selectedAnnotationIds = []
 await sleep(200)

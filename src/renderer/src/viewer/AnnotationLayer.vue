@@ -9,6 +9,7 @@ import {
   annotState,
   commitAnnotation,
   commitAnnotations,
+  pageAnnotations,
   patchAnnotation,
   removeAnnotation,
   selectAnnotation,
@@ -29,7 +30,7 @@ const editorText = ref('')
 
 const DRAW_TOOLS = ['rect', 'ellipse', 'ink', 'arrow', 'measure', 'text', 'note', 'stamp', 'image']
 
-const items = computed(() => annotState.items.filter((a) => a.page === props.pageNumber - 1))
+const items = computed(() => pageAnnotations(props.pageNumber - 1))
 const interactive = computed(() => DRAW_TOOLS.includes(ui.tool))
 
 interface DrawState {

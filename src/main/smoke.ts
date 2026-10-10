@@ -17,6 +17,41 @@ export function isSmokeMode(): boolean {
   return process.env['PDF_EDITOR_SMOKE'] === '1'
 }
 
+/** 把结果 JSON 写到 PDF_EDITOR_SMOKE_OUT;没设该变量时只打 stderr(宁可不落盘,不静默丢结果) */
+export function writeSmokeReport(payload: Record<string, unknown>): void {
+  const outPath = process.env['PDF_EDITOR_SMOKE_OUT'] ?? ''
+  const text = JSON.stringify(payload, null, 2)
+  if (!outPath) {
+    console.error(`[smoke] ${text}`)
+    return
+  }
+  try {
+    writeFileSync(outPath, text)
+  } catch (err) {
+    console.error('[smoke] 结果写入失败:', err)
+  }
+}
+
+let smokeWatchdog: NodeJS.Timeout | undefined
+
+/**
+ * 窗口就绪前武装看门狗:窗口建不出来/渲染进程起不来时必须快速失败并落盘。
+ * 没有它,外部 runner 只能等到进程级超时(600s+)才强杀,既看不出原因也不生成结果文件。
+ */
+export function armSmokeWatchdog(ms = 30000): void {
+  disarmSmokeWatchdog()
+  smokeWatchdog = setTimeout(() => {
+    writeSmokeReport({ ok: false, error: '窗口未能创建/渲染进程未就绪' })
+    app.exit(1)
+  }, ms)
+}
+
+/** 渲染层加载完成即解除;重复调用安全 */
+export function disarmSmokeWatchdog(): void {
+  clearTimeout(smokeWatchdog)
+  smokeWatchdog = undefined
+}
+
 /**
  * 原生对话框替身(仅当 PDF_EDITOR_SMOKE_DIALOG_DIR 指向目录时安装)。
  * 没有它,「提取页面」「另存为」「打开」这类必须弹原生框的流程在自动化里走不通。
@@ -46,7 +81,6 @@ export function installSmokeDialogs(): void {
 
 export async function runSmoke(win: BrowserWindow): Promise<void> {
   const scriptPath = process.env['PDF_EDITOR_SMOKE_SCRIPT'] ?? ''
-  const outPath = process.env['PDF_EDITOR_SMOKE_OUT'] ?? ''
   const shotPath = process.env['PDF_EDITOR_SMOKE_SHOT'] ?? ''
   const timeoutMs = Number(process.env['PDF_EDITOR_SMOKE_TIMEOUT'] ?? 60000)
   const settleMs = Number(process.env['PDF_EDITOR_SMOKE_SETTLE'] ?? 800)
@@ -62,9 +96,8 @@ export async function runSmoke(win: BrowserWindow): Promise<void> {
   }
 
   const report = (payload: Record<string, unknown>): void => {
-    const text = JSON.stringify(payload, null, 2)
-    if (outPath) writeFileSync(outPath, text)
-    console.log('[smoke] ' + text)
+    writeSmokeReport(payload)
+    console.log('[smoke] ' + JSON.stringify(payload))
   }
 
   /**
@@ -91,6 +124,17 @@ export async function runSmoke(win: BrowserWindow): Promise<void> {
 
   try {
     if (!scriptPath) throw new Error('缺少 PDF_EDITOR_SMOKE_SCRIPT')
+    // 渲染层没起来时 executeJavaScript 会永远挂着(外部 runner 只能等进程级超时强杀):
+    // 加载失败立即落盘并退出,未完成加载则等 did-finish-load(看门狗仍在计时,兜底不会一直等)
+    win.webContents.on('did-fail-load', (_e, code, desc) => {
+      // -3 = ERR_ABORTED(退出/导航被打断):不是加载失败,否则会把已经写好的结果覆盖成失败
+      if (code === -3) return
+      writeSmokeReport({ ok: false, error: `渲染层加载失败 ${code} ${desc}` })
+      app.exit(1)
+    })
+    if (win.webContents.isLoading()) {
+      await new Promise((resolve) => win.webContents.once('did-finish-load', resolve))
+    }
     const code = readFileSync(scriptPath, 'utf8')
 
     // Electron 22 的 Node 16 无 Promise.withResolvers,使用执行器形式

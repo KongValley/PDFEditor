@@ -29,10 +29,17 @@ function hexToRgba(hex: string, alpha: number): string {
 
 const FONT_FAMILY = 'SimHei, "Microsoft YaHei", sans-serif'
 
+/** 上次写入的字体串:wrapText 逐字符 measure 时不必重复重设字体状态 */
+let lastFont = ''
+
 function measureText(text: string, size: number): number {
   const probe = measureTextCtx ?? (measureTextCtx = document.createElement('canvas').getContext('2d'))
   if (!probe) return text.length * size
-  probe.font = `${size}px ${FONT_FAMILY}`
+  const font = `${size}px ${FONT_FAMILY}`
+  if (font !== lastFont) {
+    probe.font = font
+    lastFont = font
+  }
   return probe.measureText(text).width
 }
 

@@ -39,9 +39,13 @@ check(
 // 后者会让同屏每一页都必然超时,断言结果随机器负载漂移(step17 已覆盖通用重试链路)
 btn('连续').click()
 await sleep(2500)
+// 本步的等待预算按 8s 看门狗 + 400/800/1200ms 退避算;慢机自适应放宽会超出该预算,
+// 用 overrideMs 固定成默认值,让断言只测"超时→重试→自愈"这条链路本身
+t.renderWatchdog.overrideMs = 8000
 t.renderWatchdog.stallNext = true // 下一次渲染模拟停摆:真实结果忽略,靠看门狗超时后重试自愈
 btn('双页').click()
 await sleep(14000) // 等 8s 看门狗超时 + 400/800/1200ms 退避重试链跑完
+t.renderWatchdog.overrideMs = 0
 const vis2 = visible()
 check('超时计数已记录', t.renderWatchdog.timeouts > 0, t.renderWatchdog.timeouts)
 check(

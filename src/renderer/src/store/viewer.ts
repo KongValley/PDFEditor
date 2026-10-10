@@ -1,5 +1,6 @@
 import { nextTick, ref } from 'vue'
 import { docState, machineProfile, pageDisplaySize, type ViewMode } from './document'
+import { logEvent } from '../lib/log'
 
 export const PAGE_GAP = 16
 export const VIEWER_PADDING = 24
@@ -11,7 +12,14 @@ let container: HTMLElement | null = null
 let fitMode: 'none' | 'width' | 'page' = 'none'
 
 /** 渲染看门狗:worker 偶发停摆时 render().promise 永不 settle(代码审查报告存疑 #4);冒烟可调 */
-export const renderWatchdog = { timeoutMs: 8000, timeouts: 0, renders: 0, stallNext: false }
+export const renderWatchdog = { timeoutMs: 8000, overrideMs: 0, timeouts: 0, renders: 0, stallNext: false }
+
+/** 生效超时:测试用 overrideMs 覆盖;实测慢机(最近均值 >2.5s)放宽到 3 倍均值,上限 30s */
+export function renderTimeoutMs(): number {
+  if (renderWatchdog.overrideMs > 0) return renderWatchdog.overrideMs
+  const avg = renderStats.avg()
+  return avg > 2500 ? Math.min(30000, Math.round(avg * 3)) : renderWatchdog.timeoutMs
+}
 
 /**
  * 并发渲染上限:双页模式一次可见 6 页(连续模式仅 1 页),若全部并发提交,
@@ -103,6 +111,7 @@ export function notifyRenderDone(ms: number): void {
   if (depth !== lastDepth) {
     lastDepth = depth
     prefetchEpoch.value++
+    logEvent('info', 'render', '预读深度', { depth, avgMs: Math.round(renderStats.avg()) })
   }
 }
 

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import type { Annotation } from '@shared/types'
-import { annotState, removeAnnotation, selectAnnotation, toggleAnnotationSelection } from '../store/annotations'
+import { annotState, pageAnnotations, removeAnnotation, selectAnnotation, toggleAnnotationSelection } from '../store/annotations'
 import { docState } from '../store/document'
 import { scrollToPage } from '../store/viewer'
 import { ui } from '../store/ui'
@@ -15,7 +15,7 @@ const KINDS = Object.keys(KIND_LABEL) as Annotation['kind'][]
 const pageItems = computed(() => {
   const base =
     pageScope.value === 'current'
-      ? annotState.items.filter((a) => a.page === docState.currentPage - 1)
+      ? pageAnnotations(docState.currentPage - 1)
       : annotState.items
   const list = kindFilter.value === 'all' ? base : base.filter((a) => a.kind === kindFilter.value)
   return pageScope.value === 'all' ? [...list].sort((a, b) => a.page - b.page) : list

@@ -1,8 +1,17 @@
 import { app, BrowserWindow, dialog, protocol, shell } from 'electron'
+import { totalmem } from 'node:os'
 import { join, normalize } from 'node:path'
 import { isRendererDirty, registerIpc, setRendererDirty } from './ipc'
 import { cleanupPrintJobs } from './lib/print'
-import { installSmokeDialogs, isSmokeMode, runSmoke } from './smoke'
+import { initLogger, logEvent } from './lib/logger'
+import {
+  armSmokeWatchdog,
+  disarmSmokeWatchdog,
+  installSmokeDialogs,
+  isSmokeMode,
+  runSmoke,
+  writeSmokeReport
+} from './smoke'
 
 // 内网 32 位老机器优先稳定:默认禁用硬件加速(老显卡驱动黑屏/崩溃)。
 // 有独立显卡的新机器可用 PDF_EDITOR_HWACCEL=1 打开 —— 软件光栅之外最大的吞吐杠杆。
@@ -25,6 +34,15 @@ for (const stream of [process.stdout, process.stderr]) {
     /* 忽略 EPIPE 等写入错误 */
   })
 }
+
+// 未捕获异常只记录、不退出:内网用户没有控制台,进程静默消失比崩溃更难查
+// (日志目录在 whenReady 里确定,此前的异常会被丢弃而不是写到工作目录)
+process.on('uncaughtException', (err) => {
+  logEvent('error', 'app', '未捕获异常', { error: String(err?.message ?? err) })
+})
+process.on('unhandledRejection', (reason) => {
+  logEvent('error', 'app', '未处理的 Promise 拒绝', { error: String(reason) })
+})
 
 // 生产环境经 app:// 提供渲染资源(Electron 22 无 protocol.handle,使用 registerFileProtocol)
 protocol.registerSchemesAsPrivileged([
@@ -61,7 +79,9 @@ function createWindow(): void {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false
+      sandbox: false,
+      // 冒烟:窗口不在前台时 rAF 会被节流 → 首屏永不绘制(表现为 layers=0 的白屏)
+      ...(isSmokeMode() ? { backgroundThrottling: false } : {})
     }
   })
 
@@ -112,7 +132,18 @@ function createWindow(): void {
 
   mainWindow.webContents.on('render-process-gone', (_e, details) => {
     console.error('[renderer] 进程崩溃:', details.reason)
+    logEvent('error', 'app', '渲染进程退出', { error: details.reason })
+    // 冒烟:渲染进程没了就再也等不到脚本结果,立刻落盘失败原因并退出(而不是等外部强杀)
+    if (isSmokeMode() && details.reason !== 'clean-exit') {
+      writeSmokeReport({ ok: false, error: `渲染进程崩溃:${details.reason}` })
+      app.exit(1)
+    }
   })
+
+  // 渲染层加载完成 = 冒烟看门狗解除(窗口创建/加载失败由看门狗与 did-fail-load 兜底)
+  if (isSmokeMode()) {
+    mainWindow.webContents.once('did-finish-load', () => disarmSmokeWatchdog())
+  }
 
   if (process.env['ELECTRON_RENDERER_URL']) {
     void mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
@@ -122,9 +153,32 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
-  registerAppProtocol()
-  registerIpc(() => mainWindow)
-  createWindow()
+  // 日志放在 ready 之后定目录:`--user-data-dir` 覆盖在 ready 时才反映到 getPath('userData'),
+  // 提前初始化会把日志写到默认目录(冒烟用临时目录时就对不上了)
+  initLogger({
+    dir: process.env['PDF_EDITOR_LOG_DIR'] ?? join(app.getPath('userData'), 'logs'),
+    level: process.env['PDF_EDITOR_LOG']
+  })
+  logEvent('info', 'app', '启动', {
+    version: app.getVersion(),
+    arch: process.arch,
+    electron: process.versions.electron ?? '',
+    lowMem: totalmem() <= 4 * 1024 * 1024 * 1024
+  })
+  // 冒烟:窗口还没建好就先武装看门狗,建不出来时 30s 内落盘失败原因并退出
+  if (isSmokeMode()) armSmokeWatchdog()
+  try {
+    registerAppProtocol()
+    registerIpc(() => mainWindow)
+    createWindow()
+  } catch (err) {
+    logEvent('error', 'app', '启动失败', { error: err instanceof Error ? err.message : String(err) })
+    if (isSmokeMode()) {
+      writeSmokeReport({ ok: false, error: `主进程启动失败:${err instanceof Error ? err.message : String(err)}` })
+      app.exit(1)
+    }
+    throw err
+  }
   if (isSmokeMode() && mainWindow) {
     void runSmoke(mainWindow)
     return

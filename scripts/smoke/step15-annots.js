@@ -3,6 +3,15 @@ const t = window.__pdfEditorTest
 if (!t) throw new Error('测试 API 未安装')
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+/** 有界轮询:等"下一步断言要用的值"就绪,而不是赌一个固定等待(固定 sleep 是这一步被强杀的主因) */
+const until = async (cond, timeout = 3000) => {
+  const t0 = Date.now()
+  while (Date.now() - t0 < timeout) {
+    if (cond()) return true
+    await sleep(50)
+  }
+  return false
+}
 const check = (name, cond, extra) => {
   if (!cond) throw new Error(`断言失败: ${name} ${extra === undefined ? '' : JSON.stringify(extra)}`)
 }
@@ -32,7 +41,7 @@ log('copyA:make')
 const copyA = await makeCopy('sample-zh.pdf', [0, 1, 2], `ann-copy-${stamp}`)
 log('copyA:open')
 await t.openPath(copyA)
-await sleep(1400)
+await until(() => t.docState.pageCount === 3 && t.annotState.items.length === 0, 1400)
 check('副本初始无注释', t.annotState.items.length === 0, t.annotState.items.length)
 
 const rectId = t.withIdentity({
@@ -63,7 +72,7 @@ await sleep(900)
 // 重开:注释从 PDF /Annots 读回(sidecar 已写 annotations: [])
 log('reopen:1')
 await t.openPath(copyA)
-await sleep(1500)
+await until(() => t.annotState.items.length === 2, 1500)
 check('重开恢复 2 条(来自 PDF)', t.annotState.items.length === 2, t.annotState.items.length)
 const kinds = t.annotState.items
   .map((a) => a.kind)
@@ -82,7 +91,7 @@ await t.saveDocument()
 await sleep(900)
 log('reopen:2')
 await t.openPath(copyA)
-await sleep(1500)
+await until(() => t.annotState.items.length === 1, 1500)
 check('重开仍 1 条(删除生效)', t.annotState.items.length === 1, t.annotState.items.length)
 check('剩下的是另一条', t.annotState.items[0].id !== rectId.id)
 
@@ -92,7 +101,7 @@ await t.saveDocument()
 await sleep(900)
 log('reopen:3')
 await t.openPath(copyA)
-await sleep(1500)
+await until(() => t.annotState.items.length === 1, 1500)
 check('二次保存后仍 1 条(幂等)', t.annotState.items.length === 1, t.annotState.items.length)
 
 /* ---------- 2. 导出勾选「包含注释」 ---------- */
@@ -103,21 +112,21 @@ log('export:in')
 await t.exportPages([0], exportIn, true)
 await sleep(600)
 await t.openPath(exportIn)
-await sleep(1400)
+await until(() => t.annotState.items.length === 1, 1400)
 check('勾选:导出文件继承该页注释', t.annotState.items.length === 1, t.annotState.items.length)
 
 log('export:out')
 await t.exportPages([0], exportOut, false)
 await sleep(600)
 await t.openPath(exportOut)
-await sleep(1400)
+await until(() => t.docState.pageCount === 1 && t.annotState.items.length === 0, 1400)
 check('不勾:导出文件无注释', t.annotState.items.length === 0, t.annotState.items.length)
 
 /* ---------- 2b. 其它阅读器可见(pdf.js 原生批注绘制,即标准阅读器路径) ---------- */
 
 log('foreign-reader')
 await t.openPath(exportIn)
-await sleep(1300)
+await until(() => t.annotState.items.length === 1, 1300)
 const kept = t.annotState.items[0]
 check('导出文件注释已恢复(供阅读器验证)', !!kept, t.annotState.items.length)
 const native = await t.renderWithNativeAnnotations(exportIn, 1)
@@ -146,7 +155,7 @@ check('标准阅读器渲染路径可见注释', nativeTinted, [nativePixel[0], 
 
 log('png-paint')
 await t.openPath(exportIn)
-await sleep(1300)
+await until(() => t.annotState.items.length === 1, 1300)
 const withPaint = await t.renderPageWithAnnotations(exportIn, 1, true)
 const withoutPaint = await t.renderPageWithAnnotations(exportIn, 1, false)
 function pixelAt(dataUrl, x, y) {
@@ -184,7 +193,7 @@ check('drop(5,1,true)=1', t.dropTargetIndex(5, 1, true) === 1)
 
 log('search:open')
 await t.openPath(`${__smokeRoot}/samples/sample-zh.pdf`)
-await sleep(1500)
+await until(() => t.docState.pageCount > 0, 1500)
 const hits = await t.search('第')
 check('原始搜索命中 ≥3', hits.matches.length >= 3, hits.matches.length)
 t.searchState.results = hits.matches
@@ -204,7 +213,7 @@ log('keep:make')
 const copyC = await makeCopy('sample-zh.pdf', [0, 1, 2], `ann-keep-${stamp}`)
 log('keep:open')
 await t.openPath(copyC)
-await sleep(1400)
+await until(() => t.docState.pageCount === 3, 1400)
 check('现场文档 3 页', t.docState.pageCount === 3, t.docState.pageCount)
 const keepId = t.withIdentity({
   kind: 'rect',
@@ -271,7 +280,7 @@ log('undo:make')
 const copyB = await makeCopy('sample-zh.pdf', [0, 1, 2], `ann-copy2-${stamp}`)
 log('undo:open')
 await t.openPath(copyB)
-await sleep(1400)
+await until(() => t.docState.pageCount === 3, 1400)
 check('副本 3 页', t.docState.pageCount === 3, t.docState.pageCount)
 log('undo:delete')
 await t.deletePages([0])
@@ -283,7 +292,7 @@ await sleep(900)
 check('保存后不脏', t.docState.dirty === false, t.docState.dirty)
 log('undo:undo')
 await t.undo()
-await sleep(1600)
+await until(() => t.docState.pageCount === 3, 1600)
 check('撤销后回到 3 页', t.docState.pageCount === 3, t.docState.pageCount)
 check('撤销后置脏(内存偏离磁盘)', t.docState.dirty === true, t.docState.dirty)
 
@@ -366,7 +375,7 @@ const split = (tasks, outputDir) => window.pdfAPI.invoke('pdf:splitTasks', { tas
 const dirDup = `${tmp}/rev-dup-${stamp}`
 const dupA = (await split([{ mode: 'ranges', path: `${__smokeRoot}/samples/sample-zh.pdf`, ranges: [[0, 1, 2]] }], dirDup))[0].outputs[0]
 await t.openPath(dupA)
-await sleep(1400)
+await until(() => t.docState.pageCount === 3, 1400)
 const dupRect = t.withIdentity({
   kind: 'rect',
   page: 0,
@@ -382,18 +391,18 @@ await sleep(900)
 // 副本:复制 A 的第 1 页,携带同一个批注 id
 const dupB = (await split([{ mode: 'ranges', path: dupA, ranges: [[0]] }], dirDup))[0].outputs[0]
 await t.openPath(dupA)
-await sleep(1400)
+await until(() => t.docState.pageCount === 3, 1400)
 check('合并前 3 页', t.docState.pageCount === 3, t.docState.pageCount)
 const dupOut = `${dirDup}/out.pdf`
 await t.mergePdfs([{ path: dupB, pages: [0] }], dupOut)
-await sleep(1300)
+await until(() => t.annotState.items.length === 2, 1300)
 check(
   '同 id 副本重新发号后导入(模型 2 条)',
   t.annotState.items.length === 2 && new Set(t.annotState.items.map((a) => a.id)).size === 2,
   t.annotState.items.map((a) => `${a.id.slice(0, 8)}@p${a.page}`)
 )
 await t.openPath(dupOut)
-await sleep(1500)
+await until(() => t.docState.pageCount === 4, 1500)
 check('合并产物 4 页', t.docState.pageCount === 4, t.docState.pageCount)
 // A 的 3 页在前,被并页追加为第 4 页(index 3)
 const dupPages = [...new Set(t.annotState.items.map((a) => a.page))].sort((a, b) => a - b).join(',')
@@ -418,7 +427,7 @@ log('thumbPlain')
 const dirThumb = `${tmp}/rev-thumb-${stamp}`
 const thumbDoc = (await split([{ mode: 'ranges', path: `${__smokeRoot}/samples/sample-zh.pdf`, ranges: [[0, 1]] }], dirThumb))[0].outputs[0]
 await t.openPath(thumbDoc)
-await sleep(1400)
+await until(() => t.docState.pageCount === 2, 1400)
 t.addAnnotation(
   t.withIdentity({ kind: 'note', page: 0, bbox: { x: 480, y: 740, w: 26, h: 26 }, color: '#f7c948', opacity: 1, text: '缩略图检查' })
 )
@@ -426,7 +435,10 @@ await sleep(200)
 await t.saveDocument()
 await sleep(900)
 await t.openPath(thumbDoc)
-await sleep(2600)
+await until(() => {
+  const canvas = document.querySelector('[data-thumb="1"] canvas')
+  return !!canvas && canvas.width > 0
+}, 2600)
 const thumbCanvas = document.querySelector('[data-thumb="1"] canvas')
 check('缩略图画布已渲染', !!thumbCanvas && thumbCanvas.width > 0, thumbCanvas ? [thumbCanvas.width, thumbCanvas.height] : null)
 let thumbYellow = 0
@@ -445,7 +457,7 @@ log('editorCommit')
 const dirEdit = `${tmp}/rev-edit-${stamp}`
 const editDoc = (await split([{ mode: 'ranges', path: `${__smokeRoot}/samples/sample-zh.pdf`, ranges: [[0]] }], dirEdit))[0].outputs[0]
 await t.openPath(editDoc)
-await sleep(1400)
+await until(() => t.docState.pageCount === 1, 1400)
 const editText = t.withIdentity({
   kind: 'text',
   page: 0,
@@ -474,7 +486,7 @@ const editOut = `${dirEdit}/edit-export.pdf`
 await t.exportPages([0], editOut, true)
 await sleep(700)
 await t.openPath(editOut)
-await sleep(1500)
+await until(() => t.annotState.items.length === 1, 1500)
 check(
   '导出件包含未提交的编辑',
   t.annotState.items.some((a) => a.text === '导出的新文本'),
@@ -485,20 +497,20 @@ check(
 
 log('formExport')
 await t.openPath(`${__smokeRoot}/samples/sample-form.pdf`)
-await sleep(1600)
+await until(() => t.docState.formFields.length === 2, 1600)
 check('原表单字段 2 个', t.docState.formFields.length === 2, t.docState.formFields.length)
 const formOut = `${tmp}/rev-form-${stamp}.pdf`
 await t.exportPages([0], formOut, true)
 await sleep(700)
 await t.openPath(formOut)
-await sleep(1600)
+await until(() => t.docState.formFields.length === 2, 1600)
 check('导出件仍识别到 2 个表单字段', t.docState.formFields.length === 2, t.docState.formFields.length)
 const formName = t.docState.formFields[0].fullName
 t.docState.formValues[formName] = '写入测试'
 await t.saveDocument()
 await sleep(1000)
 await t.openPath(formOut)
-await sleep(1600)
+await until(() => t.docState.formFields.some((f) => f.fullName === formName && f.value === '写入测试'), 1600)
 const savedField = t.docState.formFields.find((f) => f.fullName === formName)
 check('表单值已写回 PDF 并可读回', savedField?.value === '写入测试', savedField?.value ?? t.docState.formFields)
 

@@ -9,6 +9,7 @@ import type {
   SaveResult,
   SplitTaskResult
 } from '@shared/types'
+import { logEvent } from './log'
 import {
   docState,
   editVersion,
@@ -24,6 +25,7 @@ import {
   applyPageMap,
   exportAnnotations,
   importAnnotations,
+  pageAnnotations,
   pushPageHistory,
   resetAnnotations,
   setImageUrl
@@ -332,7 +334,7 @@ export async function exportPageImage(pageNumber: number): Promise<void> {
       annotationMode: pdfjs.AnnotationMode.DISABLE
     }).promise
     // 与导出对话框「包含注释」默认勾选一致:快速导出也叠加当前模型注释
-    paintAnnotations(ctx, viewport, pageNumber - 1, annotState.items, annotState.imageUrls)
+    paintAnnotations(ctx, viewport, pageNumber - 1, pageAnnotations(pageNumber - 1), annotState.imageUrls)
     const dataUrl = canvas.toDataURL('image/png')
     const stem = docState.filePath?.split(/[\\/]/).pop()?.replace(/\.pdf$/i, '') ?? 'document'
     const result = (await window.pdfAPI.invoke('app:saveImage', {
@@ -723,7 +725,7 @@ async function renderPageToCanvas(
     annotationMode: pdfjs.AnnotationMode.DISABLE
   }).promise
   if (includeAnnotations) {
-    paintAnnotations(ctx, viewport, pageNumber - 1, annotState.items, annotState.imageUrls)
+    paintAnnotations(ctx, viewport, pageNumber - 1, pageAnnotations(pageNumber - 1), annotState.imageUrls)
   }
   return canvas
 }
@@ -740,6 +742,7 @@ export async function exportPagesAsImages(
     return
   }
   commitOpenEditor()
+  const started = Date.now()
   await runBusy(mode === 'long' ? '正在拼接长图…' : `正在导出 ${pages.length} 张图片…`, async () => {
     try {
     if (mode === 'long') {
@@ -809,6 +812,8 @@ export async function exportPagesAsImages(
     showToast(`导出图片失败:${err instanceof Error ? err.message : String(err)}`, 'error')
     }
   })
+  // 导出图片的渲染与 base64 全在渲染层,主进程只收到结果:这里记入口耗时(排障唯一来源)
+  logEvent('info', 'export', '导出图片', { mode, count: pages.length, ms: Date.now() - started })
 }
 
 /** 打印 scale:高清 ≈300dpi 单页位图 33MB,叠加 print.ts 隐藏窗口的解码峰值;

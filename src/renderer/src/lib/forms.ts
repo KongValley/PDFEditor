@@ -58,6 +58,8 @@ export async function discoverFormFields(
 ): Promise<FormFieldInfo[]> {
   const targetPages = pageNumbers ?? Array.from({ length: doc.numPages }, (_, i) => i + 1)
   const fieldObjects = await doc.getFieldObjects()
+  // 没有 AcroForm ⇒ 逐页 getAnnotations 找 Widget 也产不出可填控件(Widget 必须挂在字段上)
+  if (fieldObjects === null) return []
   const fullNameById = new Map<string, string>()
   const objectTypeById = new Map<string, string>()
   if (fieldObjects) {

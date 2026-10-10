@@ -13,10 +13,16 @@ const scale = computed(() => props.viewport.scale)
 const box = computed(() => pdfRectToScreen(vp.value, props.ann.bbox))
 
 let measureCtx: CanvasRenderingContext2D | null = null
+/** 上次写入的字体串:wrapText 逐字符 measure 时不必重复重设字体状态 */
+let lastFont = ''
 function measureText(text: string, size: number): number {
   if (!measureCtx) measureCtx = document.createElement('canvas').getContext('2d')
   if (!measureCtx) return text.length * size
-  measureCtx.font = `${size}px SimHei, "Microsoft YaHei", sans-serif`
+  const font = `${size}px SimHei, "Microsoft YaHei", sans-serif`
+  if (font !== lastFont) {
+    measureCtx.font = font
+    lastFont = font
+  }
   return measureCtx.measureText(text).width
 }
 

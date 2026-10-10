@@ -11,10 +11,12 @@ import {
   markFirstPaint,
   notifyRenderDone,
   releaseRenderSlot,
+  renderTimeoutMs,
   renderWatchdog,
   zoomWheelAt
 } from '../store/viewer'
 import { getPageViewport, pdfjs } from '../lib/pdfjs'
+import { logEvent } from '../lib/log'
 import { pdfRectToScreen, rectFromPoints, screenPointToPdf, type ScreenRect } from '../lib/geo'
 import { TOOL_DEFAULTS, withIdentity } from '../lib/annots'
 import AnnotationLayer from './AnnotationLayer.vue'
@@ -151,10 +153,13 @@ async function renderPage(attempt = 0): Promise<void> {
   const canvas = canvasEl.value
   if (!canvas || !props.visible) return
   const mySeq = ++seq
-  const page = await settleWithin(getPage(props.pageNumber), renderWatchdog.timeoutMs)
+  // 生效超时按实测自适应(慢机放宽),一次渲染内固定,告警里带上实际值
+  const timeoutMs = renderTimeoutMs()
+  const page = await settleWithin(getPage(props.pageNumber), timeoutMs)
   if (page === 'timeout') {
     renderWatchdog.timeouts++
-    console.warn(`[render] 第 ${props.pageNumber} 页 getPage 超时(${renderWatchdog.timeoutMs}ms)`)
+    console.warn(`[render] 第 ${props.pageNumber} 页 getPage 超时(${timeoutMs}ms)`)
+    logEvent('warn', 'render', '看门狗超时', { page: props.pageNumber, ms: timeoutMs, attempt })
     return retryAfterTimeout(attempt, mySeq)
   }
   if (mySeq !== seq) return
@@ -191,7 +196,7 @@ async function renderPage(attempt = 0): Promise<void> {
     try {
       const result = await settleWithin(
         stalled ? new Promise<never>(() => {}) : renderTask.promise,
-        renderWatchdog.timeoutMs
+        timeoutMs
       )
       outcome = result === 'timeout' ? 'timeout' : 'ok'
     } catch (err) {
@@ -200,7 +205,8 @@ async function renderPage(attempt = 0): Promise<void> {
     }
     if (outcome === 'timeout') {
       renderWatchdog.timeouts++
-      console.warn(`[render] 第 ${props.pageNumber} 页渲染超时(${renderWatchdog.timeoutMs}ms),取消并重试`)
+      console.warn(`[render] 第 ${props.pageNumber} 页渲染超时(${timeoutMs}ms),取消并重试`)
+      logEvent('warn', 'render', '看门狗超时', { page: props.pageNumber, ms: timeoutMs, attempt })
       renderTask.cancel()
       // 只置标记,不在这里 return:return 会连同 finally 一起结束函数,走不到下面的重试。
       // 重试必须等渲染槽归还之后再排队,否则会带着旧槽再申请一个 —— 多页同时超时会互相等死。

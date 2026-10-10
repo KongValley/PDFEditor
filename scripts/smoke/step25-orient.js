@@ -105,17 +105,19 @@ const thumb4 = document.querySelector('[data-thumb="4"] canvas')
 check('第 4 页缩略图已重绘', !!thumb4 && thumb4.width > 0, { w: thumb4?.width })
 
 /* ---------- 8. 没有文字层的扫描件:靠全篇行墨迹剖面的共识 ---------- */
-// 夹具(scripts/make-image-orient-sample.mjs):p1-3 图像页正立 | p4 图像页内容转 180° | p5 横向内容(不该被转)
+// 夹具(scripts/make-image-orient-sample.mjs):p1-3 图像页正立 | p4 图像页内容转 180°
+// | p5 横向框、内容正立(只报不转)| p6 纵向框、内容整体转 90°(横躺,要转正)
 // 单页剖面在 180° 前后完全镜像,判不出上下;只有与其它页的共识比较才认得出 p4
 await t.openPath(`${__smokeRoot}/samples/sample-image-orient.pdf`)
 await sleep(1500)
-check('图像夹具 5 页', t.docState.pageCount === 5, t.docState.pageCount)
+check('图像夹具 6 页', t.docState.pageCount === 6, t.docState.pageCount)
+check('p6 为纵向', t.docState.pageBoxes[5].w < t.docState.pageBoxes[5].h, t.docState.pageBoxes[5])
 check('图像页没有文字层', (await t.detectContentPosture(1)) === 'upright', await t.detectContentPosture(1))
 await t.normalizePageOrientation()
 await sleep(800)
 const imageState = t.orientationDialogState
 const imagePlan = imageState.items.map((i) => `${i.page}:${i.from}->${i.to} d=${i.delta} ${i.reason}`)
-check('第 4 页报倒置、第 5 页不动', imageState.items.length === 2, imagePlan)
+check('第 4 页报倒置、第 5/6 页报待调整', imageState.items.length === 3, imagePlan)
 check(
   '第 4 页判为倒置并建议转 180°',
   byPlan(imageState.items, 4)?.delta === 180 && byPlan(imageState.items, 4)?.reason === 'text-inverted',
@@ -126,6 +128,15 @@ check(
   byPlan(imageState.items, 5)?.delta === 0 && byPlan(imageState.items, 5)?.reason === 'page-only',
   imagePlan
 )
+// 页面框已是基准向、内容却横躺:旧实现直接丢弃这类页,现在要转正(页面框随之翻转)
+const sideways6 = byPlan(imageState.items, 6)
+check(
+  '纵向框 + 横躺内容页转正 90/270° 且页面框翻为横向',
+  (sideways6?.delta === 90 || sideways6?.delta === 270) &&
+    sideways6?.to === 'landscape' &&
+    sideways6?.reason === 'text-sideways',
+  sideways6
+)
 await t.applyOrientationFix(imageState.items)
 await sleep(2500)
 check('第 4 页仍为纵向(180° 不换宽高)', t.docState.pageBoxes[3].w < t.docState.pageBoxes[3].h, t.docState.pageBoxes[3])
@@ -133,6 +144,11 @@ check('第 4 页仍为纵向(180° 不换宽高)', t.docState.pageBoxes[3].w < t
 await t.normalizePageOrientation()
 await sleep(1500)
 check('修复后不再报第 4 页', t.orientationDialogState.items.every((item) => item.page !== 4), t.orientationDialogState.items)
+check(
+  '修复后没有待转页(第 5/6 页若仍列出,delta 必须为 0)',
+  t.orientationDialogState.items.every((item) => item.delta === 0),
+  t.orientationDialogState.items.map((i) => `${i.page}:d=${i.delta} ${i.reason}`)
+)
 
 /* ---------- 8.1 整份文档方向一致时:不报任何页,并给出明确提示 ---------- */
 await t.openPath(`${__smokeRoot}/samples/sample-zh.pdf`)

@@ -103,6 +103,21 @@ check('拖动改变了位置', Math.abs(afterMove.x - beforeMove.x) > 5 || Math.
 })
 check('拖动未改变尺寸', Math.abs(afterMove.w - beforeMove.w) < 0.01 && Math.abs(afterMove.h - beforeMove.h) < 0.01, afterMove)
 
+// 4b) 按页索引:改动第 1 页的注释不该让第 2 页的批注数组跟着重算
+// (拖拽逐帧只让本页重算;没有这一层记忆化时每帧都会把所有页的覆盖层击穿重画)
+const page0Before = t.pageAnnotations(0)
+const page1Before = t.pageAnnotations(1)
+check(
+  '同页批注数组被记忆化(引用稳定)',
+  t.pageAnnotations(0) === page0Before && t.pageAnnotations(1) === page1Before
+)
+fire(shapeEl, 'pointerdown', shapeRect.left + 10, shapeRect.top + 10)
+fire(window, 'pointermove', shapeRect.left + 70, shapeRect.top + 50)
+fire(window, 'pointerup', shapeRect.left + 70, shapeRect.top + 50)
+await sleep(200)
+check('第 1 页缓存已失效(引用变化)', t.pageAnnotations(0) !== page0Before)
+check('第 2 页缓存未被击穿(引用不变)', t.pageAnnotations(1) === page1Before)
+
 // 5) 把手缩放(右下角)
 const handles = wrap.querySelectorAll('.ann-layer .handle')
 check('把手数量 8', handles.length === 8, handles.length)

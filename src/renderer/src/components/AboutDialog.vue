@@ -15,8 +15,27 @@ interface NoticeEntry {
 const runtimeInfo = ref<RuntimeInfo | null>(null)
 const entries = ref<NoticeEntry[]>([])
 const loadError = ref('')
+const actionError = ref('')
 
 const version = computed(() => runtimeInfo.value?.version ?? '')
+
+/** 当前生效的日志等级(来自主进程,变更后回写本地,便于重开对话框显示一致) */
+const logLevel = computed<'debug' | 'info' | 'off'>(() => {
+  const level = runtimeInfo.value?.logLevel
+  return level === 'debug' || level === 'off' ? level : 'info'
+})
+
+async function onLogLevelChange(event: Event): Promise<void> {
+  const level = (event.target as HTMLSelectElement).value
+  await window.pdfAPI.invoke('log:setLevel', level)
+  if (runtimeInfo.value) runtimeInfo.value.logLevel = level as RuntimeInfo['logLevel']
+}
+
+async function openLogDir(): Promise<void> {
+  actionError.value = ''
+  const result = (await window.pdfAPI.invoke('app:openLogDir')) as { ok: boolean }
+  if (!result.ok) actionError.value = '日志目录不存在或无法打开(还没有产生日志)'
+}
 
 /** 环境自检:内网 IT 遇到"字体不对 / 打不开 / 很卡"时的第一手材料(只读,不采集任何用户数据) */
 const envRows = computed<Array<[string, string]>>(() => {
@@ -39,7 +58,8 @@ const envRows = computed<Array<[string, string]>>(() => {
       '中文字体',
       info.cjkFontFile ? (info.cjkFontFile.split(/[\\/]/).pop() as string) : '未找到 —— 文字批注/图章将无法保存'
     ],
-    ['用户数据目录', info.userDataWritable ? '可写' : '不可写']
+    ['用户数据目录', info.userDataWritable ? '可写' : '不可写'],
+    ['运行日志', info.logDir || '未启用']
   ]
 })
 
@@ -77,6 +97,16 @@ watch(
           <span class="env-label">{{ row[0] }}</span>
           <span class="env-value">{{ row[1] }}</span>
         </div>
+      </div>
+      <div class="log-row">
+        <span class="log-label">运行日志等级</span>
+        <select :value="logLevel" title="运行日志等级" @change="onLogLevelChange">
+          <option value="info">信息(默认)</option>
+          <option value="debug">调试(详细)</option>
+          <option value="off">关闭</option>
+        </select>
+        <button :disabled="!runtimeInfo" @click="openLogDir">打开日志文件夹</button>
+        <span v-if="actionError" class="error">{{ actionError }}</span>
       </div>
       <div v-if="loadError" class="error">许可清单加载失败:{{ loadError }}</div>
       <div v-else-if="entries.length === 0" class="message">加载中…</div>
@@ -158,6 +188,17 @@ watch(
 
 .error {
   color: var(--danger);
+}
+
+.log-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.log-label {
+  color: var(--toolbar-fg-dim);
 }
 
 .list {

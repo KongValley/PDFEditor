@@ -14,7 +14,7 @@ import ImageToPdfDialog from './components/ImageToPdfDialog.vue'
 import PageContextMenu from './components/PageContextMenu.vue'
 import ZoomControl from './components/ZoomControl.vue'
 import PdfViewer from './viewer/PdfViewer.vue'
-import { docReady, docState } from './store/document'
+import { cancelOpen, docReady, docState } from './store/document'
 import { showToast, ui } from './store/ui'
 import { fitPage, fitWidth, scrollToPage, setViewMode, stepPage, zoomAt } from './store/viewer'
 import { goBack, goForward, readingState, useReading } from './store/reading'
@@ -151,6 +151,7 @@ watch(
       <div v-if="!docReady" class="empty-area">
         <div class="empty-hint">{{ docState.loading ? (docState.loadProgress ?? '加载中…') : '打开或拖入 PDF 文件' }}</div>
         <div v-if="docState.loadError" class="empty-error">{{ docState.loadError }}</div>
+        <button v-if="docState.loading" class="empty-open" @click="cancelOpen">取消</button>
         <button v-if="!docState.loading && !docState.loadError" class="empty-open" @click="openFileDialog">打开文件</button>
         <button
           v-if="!docState.loading && !docState.loadError"

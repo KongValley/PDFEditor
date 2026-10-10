@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs'
-import { readFile } from 'node:fs/promises'
+import { existsSync, createReadStream, readFileSync } from 'node:fs'
+import { readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { PDFDocument } from 'pdf-lib'
@@ -138,11 +138,51 @@ export async function readPdfPageCount(
   }
 }
 
-export async function openDocument(filePath: string): Promise<OpenResult> {
+export interface ReadProgress {
+  onProgress?: (read: number, total: number) => void
+  signal?: AbortSignal
+}
+
+/**
+ * 整份读取但要看得见进度、叫得停:内网共享盘上几十 MB 的文件 readFile 会长时间无反馈。
+ * 分块(4MB)读入预分配 buffer,每满 1MB 或每 200ms 报一次进度;abort 时中断读取。
+ */
+async function readFileWithProgress(filePath: string, options: ReadProgress): Promise<Buffer> {
+  const { size } = await stat(filePath)
+  const buffer = Buffer.allocUnsafe(size)
+  const stream = createReadStream(filePath, { highWaterMark: 4 * 1024 * 1024 })
+  let read = 0
+  let lastBytes = 0
+  let lastAt = Date.now()
+  try {
+    for await (const chunk of stream) {
+      if (options.signal?.aborted) throw new Error('canceled')
+      const piece = chunk as Buffer
+      piece.copy(buffer, read)
+      read += piece.length
+      const now = Date.now()
+      if (options.onProgress && (read - lastBytes >= 1024 * 1024 || now - lastAt >= 200)) {
+        lastBytes = read
+        lastAt = now
+        options.onProgress(read, size)
+      }
+    }
+  } catch (err) {
+    stream.destroy()
+    throw err
+  }
+  // 读取期间文件被改写时按实际读到的长度截断(allocUnsafe 的尾部是未初始化内存)
+  return read === size ? buffer : buffer.subarray(0, read)
+}
+
+export async function openDocument(filePath: string, options: ReadProgress = {}): Promise<OpenResult> {
   let buffer: Buffer
   try {
-    buffer = await readFile(filePath)
+    buffer = await readFileWithProgress(filePath, options)
   } catch (err) {
+    if ((err as Error).message === 'canceled') {
+      return { ok: false, error: 'canceled', errorMessage: '已取消' }
+    }
     return { ok: false, error: 'unknown', errorMessage: `无法读取文件:${(err as Error).message}` }
   }
 

@@ -49,6 +49,7 @@ import {
   exportAnnotations,
   moveDown,
   moveUp,
+  pageAnnotations,
   pasteClipboard,
   redo,
   sendToBack,
@@ -111,6 +112,7 @@ export function installTestApi(): void {
     splitDialogState,
     searchState,
     annotState,
+    pageAnnotations,
     addAnnotation,
     withIdentity,
     newId,
@@ -184,7 +186,7 @@ export function installTestApi(): void {
       if (!ctx) throw new Error('canvas 2d 不可用')
       await page.render({ canvasContext: ctx, viewport, annotationMode: pdfjs.AnnotationMode.DISABLE }).promise
       if (includeAnnotations) {
-        paintAnnotations(ctx, viewport, pageNumber - 1, annotState.items, annotState.imageUrls)
+        paintAnnotations(ctx, viewport, pageNumber - 1, pageAnnotations(pageNumber - 1), annotState.imageUrls)
       }
       const dataUrl = canvas.toDataURL('image/png')
       await doc.cleanup()

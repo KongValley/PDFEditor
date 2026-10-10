@@ -29,7 +29,7 @@ if (!t.machineProfile.lowMem) {
 
 const beforeTimeout = t.renderWatchdog.timeouts
 const beforeRenders = t.renderWatchdog.renders
-t.renderWatchdog.timeoutMs = 400
+t.renderWatchdog.overrideMs = 400
 t.renderWatchdog.stallNext = true
 t.docState.scale = 1.5 // 触发可见页重渲染,首次渲染被模拟停摆
 // 重试带退避(400/800/1200ms),等足够长时间让重试链跑完
@@ -39,5 +39,5 @@ check('stallNext 已被消费', t.renderWatchdog.stallNext === false)
 check('重试成功重新渲染', t.renderWatchdog.renders >= beforeRenders + 1, [beforeRenders, t.renderWatchdog.renders])
 check('重试后仍渲染完成', !!document.querySelector('[data-page="1"] .ann-layer'))
 
-t.renderWatchdog.timeoutMs = 8000
+t.renderWatchdog.overrideMs = 0
 return { watchdog: 'ok', gate: t.renderGate.max }

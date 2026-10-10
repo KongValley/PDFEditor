@@ -1,4 +1,4 @@
-import { computed, reactive } from 'vue'
+import { computed, reactive, shallowRef } from 'vue'
 import type { Annotation, ImageAnnotation, ImageInfo, PageOpResult } from '@shared/types'
 import { annotationBounds } from '@shared/types'
 import { docState, markDirty, pageDisplaySize, reloadDocument } from './document'
@@ -50,15 +50,56 @@ export const canRedo = computed(() => redoStack.length > 0)
 /** 注释剪贴板(复制/粘贴/再制,Ctrl+C/V/D) */
 let clipboard: Annotation[] = []
 
+/* --------------------------- 按页索引 --------------------------- */
+
+/**
+ * 按页取批注的记忆化:只在该页内容变化后重算 —— 拖拽逐帧只让本页重算。
+ * pageStamp 必须是**响应式**的:组件依赖的是「本页版本号」;命中缓存时返回同一个数组引用,
+ * Vue 的 computed 发现值没变就不会往外触发,其它页的覆盖层因此不会被击穿重画。
+ * 整体重建(恢复现场/页序迁移/导入)用 cacheEpoch 一次唤醒所有页。
+ */
+const pageStamp = reactive(new Map<number, number>())
+const cacheEpoch = shallowRef(0)
+const pageCache = new Map<number, { stamp: number; epoch: number; list: Annotation[] }>()
+
+function bumpPage(page: number): void {
+  pageStamp.set(page, (pageStamp.get(page) ?? 0) + 1)
+}
+
+function invalidatePageCache(): void {
+  pageStamp.clear()
+  pageCache.clear()
+  cacheEpoch.value++
+}
+
+/** 按页取批注(顺序与 annotState.items 一致;返回缓存数组,调用方不得修改) */
+export function pageAnnotations(page: number): Annotation[] {
+  const epoch = cacheEpoch.value
+  const stamp = pageStamp.get(page) ?? 0
+  const cached = pageCache.get(page)
+  if (cached && cached.stamp === stamp && cached.epoch === epoch) return cached.list
+  const list = annotState.items.filter((ann) => ann.page === page)
+  pageCache.set(page, { stamp, epoch, list })
+  return list
+}
+
 function removeById(id: string): void {
   const index = annotState.items.findIndex((a) => a.id === id)
-  if (index >= 0) annotState.items.splice(index, 1)
+  if (index >= 0) {
+    bumpPage(annotState.items[index].page)
+    annotState.items.splice(index, 1)
+  }
 }
 
 function replace(ann: Annotation): void {
   const index = annotState.items.findIndex((a) => a.id === ann.id)
-  if (index >= 0) annotState.items[index] = ann
-  else annotState.items.push(ann)
+  if (index >= 0) {
+    bumpPage(annotState.items[index].page)
+    annotState.items[index] = ann
+  } else {
+    annotState.items.push(ann)
+  }
+  bumpPage(ann.page)
 }
 
 function moveItem(from: number, to: number): void {
@@ -67,12 +108,14 @@ function moveItem(from: number, to: number): void {
   if (clamped === from) return
   const [item] = annotState.items.splice(from, 1)
   annotState.items.splice(clamped, 0, item)
+  bumpPage(item.page)
 }
 
 function applyForward(entry: Command): void {
   switch (entry.type) {
     case 'add':
       annotState.items.push(entry.ann)
+      bumpPage(entry.ann.page)
       break
     case 'remove':
       removeById(entry.ann.id)
@@ -98,8 +141,9 @@ function applyInverse(entry: Command): void {
       removeById(entry.ann.id)
       break
     case 'remove':
-      // 按删除时的原位置插回(保持层级顺序)
+      // 按删除时的原位置插回(保持层级顺序);按页缓存必须跟着失效,否则撤销后该页仍不显示它
       annotState.items.splice(Math.min(entry.index, annotState.items.length), 0, entry.ann)
+      bumpPage(entry.ann.page)
       break
     case 'update':
       replace(entry.before)
@@ -192,7 +236,9 @@ export function updateAnnotation(id: string, patch: Partial<Annotation>): void {
 export function patchAnnotation(id: string, patch: Partial<Annotation>): void {
   const index = annotState.items.findIndex((a) => a.id === id)
   if (index < 0) return
-  annotState.items[index] = normalize({ ...annotState.items[index], ...patch } as Annotation)
+  const next = normalize({ ...annotState.items[index], ...patch } as Annotation)
+  annotState.items[index] = next
+  bumpPage(next.page)
 }
 
 /** 将实时修改提交为一条历史命令(多条合并为 batch) */
@@ -304,6 +350,7 @@ async function redoSinglePage(entry: PageEntry): Promise<void> {
 /** 恢复注释现场(保留历史栈,区别于 resetAnnotations) */
 function restoreItems(items: Annotation[]): void {
   annotState.items = items.map((ann) => ({ ...ann }))
+  invalidatePageCache()
   pruneImageUrls()
   const alive = new Set(annotState.items.map((ann) => ann.id))
   ui.selectedAnnotationIds = ui.selectedAnnotationIds.filter((id) => alive.has(id))
@@ -388,10 +435,6 @@ function remapStacks(map: number[]): void {
 }
 
 /* ------------------------------ 选择 ------------------------------ */
-
-export function annotationsForPage(pageNumber: number): Annotation[] {
-  return annotState.items.filter((a) => a.page === pageNumber)
-}
 
 export function primarySelectionId(): string | null {
   const ids = ui.selectedAnnotationIds
@@ -555,6 +598,7 @@ function pruneImageUrls(): void {
 /** 打开文档 / 恢复 sidecar 时重置(清空历史与剪贴板) */
 export function resetAnnotations(items: Annotation[] = []): void {
   annotState.items = items.map((ann) => ({ ...ann }))
+  invalidatePageCache()
   undoStack.length = 0
   redoStack.length = 0
   clipboard = []
@@ -578,10 +622,17 @@ export function importAnnotations(anns: Annotation[]): void {
     annotState.items.push({ ...ann })
     added = true
   }
-  if (added) void ensureImageUrls()
+  if (added) {
+    invalidatePageCache()
+    void ensureImageUrls()
+  }
 }
 
-/** 保存用:序列化快照 */
+/**
+ * 保存用:序列化快照。
+ * 不能用 structuredClone:模型里的批注经 `{...ann}` 浅拷贝后,嵌套字段(bbox/points)仍是
+ * Vue 的响应式 Proxy,结构化克隆会抛 DataCloneError;JSON 往返读的是 proxy 的取值,天然安全。
+ */
 export function exportAnnotations(): Annotation[] {
   return JSON.parse(JSON.stringify(annotState.items)) as Annotation[]
 }
@@ -608,6 +659,7 @@ export function applyPageMap(pageMap: number[]): void {
     moved.push({ ...ann, page: next })
   }
   annotState.items = moved
+  invalidatePageCache()
   remapStacks(pageMap)
   const alive = new Set(annotState.items.map((ann) => ann.id))
   ui.selectedAnnotationIds = ui.selectedAnnotationIds.filter((id) => alive.has(id))

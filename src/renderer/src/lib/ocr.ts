@@ -10,6 +10,7 @@
 import { createWorker, type Worker } from 'tesseract.js'
 import { docState, getPage } from '../store/document'
 import { getPageViewport, pdfjs } from './pdfjs'
+import { logEvent } from './log'
 
 /** 渲染给 OSD 的尺寸:实测 1500px 与全尺寸(2481px)结论一致而更快;再小置信度会掉 */
 const OCR_LONG_SIDE = 1500
@@ -90,5 +91,7 @@ export async function detectOrientationByOcr(pageNumber: number): Promise<OcrOri
   const { data } = await withDeadline(worker.detect(canvas), `识别第 ${pageNumber} 页方向`)
   const degrees = data.orientation_degrees
   if (degrees !== 0 && degrees !== 90 && degrees !== 180 && degrees !== 270) return null
-  return { delta: degrees, confidence: Number(data.orientation_confidence ?? 0) }
+  const confidence = Number(data.orientation_confidence ?? 0)
+  logEvent('debug', 'ocr', '方向识别', { page: pageNumber, delta: degrees, confidence })
+  return { delta: degrees, confidence }
 }

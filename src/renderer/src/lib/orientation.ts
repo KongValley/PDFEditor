@@ -8,13 +8,15 @@
  *  2) 内容朝向 —— 「方向与基准不同」的候选页,避免误伤真正的横向页(宽表格、图纸):
  *     有文字层看文字基线角度(能精确算出 90 还是 270),没有文字层先问 OCR(见 ocr.ts),
  *     再退回墨迹剖面。
- *     「方向与基准相同」的页只需查内容有没有被上下颠倒(180° 不改变页面框尺寸):
- *     文字层同样给得出角度,图像页没有文字层,退回全篇剖面共识(见 invertedPages)。
+ *     「方向与基准相同」的页:文字层角度给出 180(上下颠倒)或 90/270(内容相对页面横躺,
+ *     转正后页面框随之翻转);没有文字层的图像页退回全篇剖面共识判 180,判出横躺则走同一段
+ *     方向解析(OCR → 剖面共识 → 默认 +90,见 invertedPages / sidewaysDirection)。
  */
 import { docState, getPage } from '../store/document'
 import { getPageViewport, pdfjs } from './pdfjs'
 import { consensusProfile, invertedPages, sidewaysDirection, type RowProfile } from './inkprofile'
 import { detectOrientationByOcr, releaseOcrWorker } from './ocr'
+import { logEvent } from './log'
 
 export type PageOrientation = 'portrait' | 'landscape' | 'square'
 
@@ -215,7 +217,10 @@ const OCR_MIN_CONFIDENCE = 10
 
 /** 让 OCR 判一页的方向:没识别出来或置信不足(又不是"不用转")时返回 null */
 async function ocrDelta(page: number): Promise<OrientationPlanItem['delta'] | null> {
-  const result = await detectOrientationByOcr(page).catch(() => null)
+  const result = await detectOrientationByOcr(page).catch((err: unknown) => {
+    logEvent('warn', 'ocr', '识别失败', { page, error: err instanceof Error ? err.message : String(err) })
+    return null
+  })
   if (!result) return null
   if (result.delta !== 0 && result.confidence < OCR_MIN_CONFIDENCE) return null
   return result.delta
@@ -223,12 +228,15 @@ async function ocrDelta(page: number): Promise<OrientationPlanItem['delta'] | nu
 
 /** 扫描整份文档,给出"该转哪几页、转多少度"的计划(不修改任何内容) */
 export async function planPageOrientation(): Promise<OrientationPlanResult> {
+  const started = Date.now()
   const orientations = docState.pageBoxes.map((box) => orientationOf(box.w, box.h))
   const base = pickBaseOrientation(orientations)
   if (base === null) {
     return { base: null, baseError: '横向页与纵向页数量相同,无法判定基准方向', items: [] }
   }
   const items: OrientationPlanItem[] = []
+  /** 基准方向的反向:内容横躺的页转 90/270 后页面框必然翻转 */
+  const flipped: PageOrientation = base === 'portrait' ? 'landscape' : 'portrait'
   /** 没有文字层的候选页:第一遍只取像,**方向留给第二遍的 OCR**(OCR 不行才退回墨迹剖面) */
   const inkCandidates: Array<{
     page: number
@@ -236,7 +244,7 @@ export async function planPageOrientation(): Promise<OrientationPlanResult> {
     upright: boolean | null
     columns: Float64Array | null
   }> = []
-  /** 没有文字层的基准页:第二遍用全篇剖面共识判上下颠倒 */
+  /** 没有文字层的基准页:第二遍用全篇剖面共识判上下颠倒,并判内容是否相对页面横躺 */
   const inkBasePages: number[] = []
   for (let index = 0; index < orientations.length; index++) {
     const page = index + 1
@@ -245,9 +253,17 @@ export async function planPageOrientation(): Promise<OrientationPlanResult> {
     await new Promise((resolve) => requestAnimationFrame(resolve))
     const angle = await contentAngleFromText(page).catch(() => null)
     if (from === base) {
-      // 页面框已经对了:只有内容被上下颠倒才需要转(180° 不改变页面框尺寸)
+      // 页面框已经对了:内容上下颠倒(180)或横躺(90/270)都需要处理(后者的页面框会随之翻转)
       if (angle === 180) {
         items.push({ page, from, to: base, delta: 180, reason: 'text-inverted' })
+      } else if (angle === 90 || angle === 270) {
+        items.push({
+          page,
+          from,
+          to: flipped,
+          delta: deltaFromAngle(angle),
+          reason: 'text-sideways'
+        })
       } else if (angle === null) {
         inkBasePages.push(page)
       }
@@ -274,24 +290,47 @@ export async function planPageOrientation(): Promise<OrientationPlanResult> {
       // (同一份文档的多数页版式一致;版式千差万别或页面太少时相关度上不去,自然判不出、不乱转)
       // ponytail: 逐页小图取像 ≈ 每页一次 160px 渲染;版式混杂时共识失效 → 由 OCR 兜底
       const profiles: RowProfile[] = []
+      /** 基准页的取像结果:同一张图既出剖面共识,也判内容是否相对页面横躺 */
+      const baseInk = new Map<number, InkMap>()
+      const basePending = new Set(inkBasePages)
       for (let index = 0; index < orientations.length; index++) {
         if (orientations[index] !== base) continue
         await new Promise((resolve) => requestAnimationFrame(resolve))
         const ink = await rasterizeInk(index + 1)
-        if (ink) profiles.push({ page: index + 1, rows: ink.rows })
+        if (!ink) continue
+        profiles.push({ page: index + 1, rows: ink.rows })
+        if (basePending.has(index + 1)) baseInk.set(index + 1, ink)
       }
       const reference = consensusProfile(profiles)
       if (reference) {
         for (const page of invertedPages(profiles)) {
           items.push({ page, from: base, to: base, delta: 180, reason: 'text-inverted' })
         }
-      } else {
-        // 可比页太少、共识无从谈起:逐页问 OCR,基准页只接受 180°(其它角度会换掉页面框)
-        for (const page of inkBasePages) {
-          if ((await ocrDelta(page)) === 180) {
-            items.push({ page, from: base, to: base, delta: 180, reason: 'ocr' })
-          }
+      }
+      for (const page of inkBasePages) {
+        const ink = baseInk.get(page)
+        const upright = ink ? uprightFromPixels(ink) : null
+        if (upright === false) {
+          // 页面框是基准向、内容却横躺:转 90/270 会连带翻转页面框。
+          // OCR 只在"也判横躺"时才可用 —— 合成图案/无正文页常返回 0°,那是"没读出来"而不是"正立"
+          const fromOcr = await ocrDelta(page)
+          const delta =
+            fromOcr === 90 || fromOcr === 270 ? fromOcr : ink ? sidewaysDirection(profiles, ink.cols) || 90 : 90
+          items.push({ page, from: base, to: flipped, delta, reason: 'text-sideways' })
+          continue
         }
+        // 内容相对页面正立(或判不出):有剖面共识时倒置已由 invertedPages 产出,不再多问;
+        // 没有共识才逐页问 OCR —— 接受 90/270,横躺页与倒置页同样要处理
+        if (reference) continue
+        const delta = await ocrDelta(page)
+        if (delta === null || delta === 0) continue
+        items.push({
+          page,
+          from: base,
+          to: delta === 180 ? base : flipped,
+          delta,
+          reason: 'ocr'
+        })
       }
       for (const candidate of inkCandidates) {
         const delta = await ocrDelta(candidate.page)
@@ -322,5 +361,11 @@ export async function planPageOrientation(): Promise<OrientationPlanResult> {
     }
   }
   items.sort((a, b) => a.page - b.page)
+  logEvent('info', 'orient', '分析完成', {
+    pages: orientations.length,
+    candidates: items.length,
+    applied: items.filter((item) => item.delta !== 0).length,
+    ms: Date.now() - started
+  })
   return { base, baseError: '', items }
 }
