@@ -44,7 +44,8 @@ const FONT_FAMILY = 'SimHei, "Microsoft YaHei", sans-serif'
 /** 上次写入的字体串:wrapText 逐字符 measure 时不必重复重设字体状态 */
 let lastFont = ''
 
-function measureText(text: string, size: number): number {
+/** CJK 文本测宽(SimHei 优先):overlay 与位图绘制共用模块级 canvas,字体状态经 lastFont 记忆 */
+export function measureCjkText(text: string, size: number): number {
   const probe = measureTextCtx ?? (measureTextCtx = document.createElement('canvas').getContext('2d'))
   if (!probe) return text.length * size
   const font = `${size}px ${FONT_FAMILY}`
@@ -156,7 +157,7 @@ export function paintAnnotations(
         ctx.globalAlpha = ann.opacity
         ctx.fillStyle = ann.color
         ctx.font = `${ann.fontSize * scale}px ${FONT_FAMILY}`
-        const lines = wrapText(ann.text, Math.max(ann.bbox.w, 8), (s) => measureText(s, ann.fontSize))
+        const lines = wrapText(ann.text, Math.max(ann.bbox.w, 8), (s) => measureCjkText(s, ann.fontSize))
         const angle = (((viewport.rotation - ann.rotate) % 360) + 360) % 360
         lines.forEach((line, index) => {
           const baseline = pdfPointToScreen(viewport, {
@@ -201,7 +202,7 @@ export function paintAnnotations(
         break
       }
       case 'stamp': {
-        const fontSize = fitFontSize(ann.label, ann.bbox, (s, size) => measureText(s, size)) * scale
+        const fontSize = fitFontSize(ann.label, ann.bbox, (s, size) => measureCjkText(s, size)) * scale
         ctx.fillStyle = hexToRgba(ann.color, 0.08)
         ctx.strokeStyle = ann.color
         ctx.lineWidth = 2 * Math.min(scale, 2)

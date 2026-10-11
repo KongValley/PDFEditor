@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import type { PageViewport } from 'pdfjs-dist'
 import type { Annotation } from '@shared/types'
+import { measureCjkText } from '../lib/canvasannot'
 import { pdfPointToScreen, pdfRectToScreen } from '../lib/geo'
 import { annotState } from '../store/annotations'
 import { fitFontSize, pointsToMm, wrapText } from '@shared/text'
@@ -12,25 +13,11 @@ const vp = computed(() => props.viewport)
 const scale = computed(() => props.viewport.scale)
 const box = computed(() => pdfRectToScreen(vp.value, props.ann.bbox))
 
-let measureCtx: CanvasRenderingContext2D | null = null
-/** 上次写入的字体串:wrapText 逐字符 measure 时不必重复重设字体状态 */
-let lastFont = ''
-function measureText(text: string, size: number): number {
-  if (!measureCtx) measureCtx = document.createElement('canvas').getContext('2d')
-  if (!measureCtx) return text.length * size
-  const font = `${size}px SimHei, "Microsoft YaHei", sans-serif`
-  if (font !== lastFont) {
-    measureCtx.font = font
-    lastFont = font
-  }
-  return measureCtx.measureText(text).width
-}
-
 /** 文本注释:逐行基线(屏幕坐标)与旋转角 */
 const textLines = computed(() => {
   const ann = props.ann
   if (ann.kind !== 'text') return []
-  const lines = wrapText(ann.text, Math.max(ann.bbox.w, 8), (s) => measureText(s, ann.fontSize))
+  const lines = wrapText(ann.text, Math.max(ann.bbox.w, 8), (s) => measureCjkText(s, ann.fontSize))
   const screenAngle = ((vp.value.rotation - ann.rotate) % 360 + 360) % 360
   return lines.map((line, index) => {
     const baselinePdf = {
@@ -82,7 +69,7 @@ const measureGeom = computed(() => {
 const stampGeom = computed(() => {
   const ann = props.ann
   if (ann.kind !== 'stamp') return null
-  const fontSize = fitFontSize(ann.label, ann.bbox, (s, size) => measureText(s, size))
+  const fontSize = fitFontSize(ann.label, ann.bbox, (s, size) => measureCjkText(s, size))
   const center = pdfPointToScreen(vp.value, {
     x: ann.bbox.x + ann.bbox.w / 2,
     y: ann.bbox.y + ann.bbox.h / 2
