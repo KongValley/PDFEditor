@@ -6,6 +6,7 @@ import { invalidateSearch } from './search'
 import { newId } from '../lib/annots'
 import { orientationFlipped, refitAfterOrientationChange, scrollToPage } from './viewer'
 import { showToast, ui } from './ui'
+import { clearImageCache } from '../lib/canvasannot'
 
 type Command =
   | { type: 'add'; ann: Annotation }
@@ -593,6 +594,12 @@ function pruneImageUrls(): void {
   for (const imgId of Object.keys(annotState.imageUrls)) {
     if (!used.has(imgId)) delete annotState.imageUrls[imgId]
   }
+}
+
+/** 换文档时整表清空:base64 与解码缓存都不跨文档保留 */
+export function resetImageUrls(): void {
+  clearImageCache()
+  annotState.imageUrls = {}
 }
 
 /** 打开文档 / 恢复 sidecar 时重置(清空历史与剪贴板) */

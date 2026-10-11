@@ -26,12 +26,38 @@ function locate(ann: Annotation): void {
   if (ann.page !== docState.currentPage - 1) scrollToPage(ann.page + 1)
 }
 
+/** 区间选择锚点:Shift+点击从锚到当前条整段选中 */
+let anchorId: string | null = null
+
 function onItemClick(ann: Annotation, event: MouseEvent): void {
   if (event.shiftKey) {
+    if (anchorId !== null) {
+      const from = pageItems.value.findIndex((a) => a.id === anchorId)
+      const to = pageItems.value.findIndex((a) => a.id === ann.id)
+      if (from >= 0 && to >= 0) {
+        const [lo, hi] = from <= to ? [from, to] : [to, from]
+        for (const item of pageItems.value.slice(lo, hi + 1)) {
+          if (!ui.selectedAnnotationIds.includes(item.id)) toggleAnnotationSelection(item.id)
+        }
+        return
+      }
+    }
     toggleAnnotationSelection(ann.id)
+    anchorId = ann.id
     return
   }
   locate(ann)
+}
+
+function selectAllAnnotations(): void {
+  for (const ann of pageItems.value) {
+    if (!ui.selectedAnnotationIds.includes(ann.id)) toggleAnnotationSelection(ann.id)
+  }
+}
+
+function clearAnnotationSelection(): void {
+  for (const id of [...ui.selectedAnnotationIds]) toggleAnnotationSelection(id)
+  anchorId = null
 }
 </script>
 
@@ -46,6 +72,8 @@ function onItemClick(ann: Annotation, event: MouseEvent): void {
         <option value="all">全部类型</option>
         <option v-for="kind in KINDS" :key="kind" :value="kind">{{ KIND_LABEL[kind] }}</option>
       </select>
+      <button class="sel-btn" title="选中列表中全部注释" @click="selectAllAnnotations">全选</button>
+      <button class="sel-btn" title="清空注释选择" @click="clearAnnotationSelection">清空</button>
     </div>
     <div v-if="pageItems.length === 0" class="empty">
       {{ pageScope === 'current' ? '本页暂无注释' : '暂无注释' }}
@@ -84,6 +112,16 @@ function onItemClick(ann: Annotation, event: MouseEvent): void {
 .filters select {
   flex: 1;
   min-width: 0;
+}
+
+.filters .sel-btn {
+  flex: none;
+  padding: 2px 6px;
+  font-size: 12px;
+  border: 1px solid var(--panel-border);
+  background: var(--panel-bg);
+  color: var(--toolbar-fg);
+  cursor: pointer;
 }
 
 .empty {

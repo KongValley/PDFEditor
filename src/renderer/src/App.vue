@@ -1,19 +1,23 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, ref, watch } from 'vue'
 import Toolbar from './components/Toolbar.vue'
 import SearchBar from './components/SearchBar.vue'
 import ThumbnailsPanel from './components/ThumbnailsPanel.vue'
 import RightPanel from './components/RightPanel.vue'
-import PasswordDialog from './components/PasswordDialog.vue'
-import MergeDialog from './components/MergeDialog.vue'
-import SplitDialog from './components/SplitDialog.vue'
-import AboutDialog from './components/AboutDialog.vue'
-import PagesRangeDialog from './components/PagesRangeDialog.vue'
-import OrientationDialog from './components/OrientationDialog.vue'
-import ImageToPdfDialog from './components/ImageToPdfDialog.vue'
+// 对话框按需加载:打开前根本用不到,不值得让它们占首屏解析(各自 v-if 触发时才拉 chunk)
+const PasswordDialog = defineAsyncComponent(() => import('./components/PasswordDialog.vue'))
+const MergeDialog = defineAsyncComponent(() => import('./components/MergeDialog.vue'))
+const SplitDialog = defineAsyncComponent(() => import('./components/SplitDialog.vue'))
+const AboutDialog = defineAsyncComponent(() => import('./components/AboutDialog.vue'))
+const PagesRangeDialog = defineAsyncComponent(() => import('./components/PagesRangeDialog.vue'))
+const ImageToPdfDialog = defineAsyncComponent(() => import('./components/ImageToPdfDialog.vue'))
+const ProblemsDialog = defineAsyncComponent(() => import('./components/ProblemsDialog.vue'))
+const PageNumberDialog = defineAsyncComponent(() => import('./components/PageNumberDialog.vue'))
+const WatermarkDialog = defineAsyncComponent(() => import('./components/WatermarkDialog.vue'))
 import PageContextMenu from './components/PageContextMenu.vue'
-import ZoomControl from './components/ZoomControl.vue'
+import { baseNameOf } from '@shared/paths'
 import PdfViewer from './viewer/PdfViewer.vue'
+import ZoomControl from './components/ZoomControl.vue'
 import { cancelOpen, docReady, docState } from './store/document'
 import { showToast, ui } from './store/ui'
 import { fitPage, fitWidth, scrollToPage, setViewMode, stepPage, zoomAt } from './store/viewer'
@@ -90,7 +94,7 @@ function onDrop(event: DragEvent): void {
   showToast('仅支持 PDF 或 PNG/JPEG 图片', 'error')
 }
 
-const fileName = computed(() => docState.filePath?.split(/[\\/]/).pop() ?? '')
+const fileName = computed(() => baseNameOf(docState.filePath ?? ''))
 
 /* ---------- 窗口标题:文件名 + 未保存标记(任务栏可区分多份文档) ---------- */
 function syncTitle(): void {
@@ -106,10 +110,6 @@ interface RecentItem {
   page: number
 }
 const recentFiles = ref<RecentItem[]>([])
-
-function baseNameOf(path: string): string {
-  return path.split(/[\\/]/).pop() ?? path
-}
 
 async function loadRecentFiles(): Promise<void> {
   try {
@@ -152,16 +152,16 @@ watch(
         <div class="empty-hint">{{ docState.loading ? (docState.loadProgress ?? '加载中…') : '打开或拖入 PDF 文件' }}</div>
         <div v-if="docState.loadError" class="empty-error">{{ docState.loadError }}</div>
         <button v-if="docState.loading" class="empty-open" @click="cancelOpen">取消</button>
-        <button v-if="!docState.loading && !docState.loadError" class="empty-open" @click="openFileDialog">打开文件</button>
+        <button v-if="!docState.loading" class="empty-open" @click="openFileDialog">打开文件</button>
         <button
-          v-if="!docState.loading && !docState.loadError"
+          v-if="!docState.loading"
           class="empty-open"
           title="把 PNG/JPEG 图片合并为一份 PDF"
           @click="openImageToPdfDialog()"
         >
           图片转 PDF
         </button>
-        <div v-if="!docState.loading && !docState.loadError && recentFiles.length > 0" class="recent-list">
+        <div v-if="!docState.loading && recentFiles.length > 0" class="recent-list">
           <div class="recent-title">最近打开</div>
           <button v-for="item in recentFiles" :key="item.path" class="recent-item" :title="item.path" @click="openRecent(item)">
             <span class="recent-name">{{ baseNameOf(item.path) }}</span>
@@ -219,6 +219,14 @@ watch(
       </template>
 
       <span v-if="ui.busy" class="status-busy">{{ ui.busy }}</span>
+      <button
+        v-if="ui.problems.length > 0"
+        class="status-problems"
+        title="查看最近的问题详情与警告"
+        @click="ui.problemsOpen = true"
+      >
+        问题 ({{ ui.problems.length }})
+      </button>
       <span v-if="docState.dirty" class="status-dirty">未保存</span>
       <span v-if="docState.encrypted" class="status-warn">加密文档</span>
     </footer>
@@ -231,6 +239,9 @@ watch(
     <ImageToPdfDialog />
     <SplitDialog />
     <AboutDialog />
+    <ProblemsDialog />
+    <PageNumberDialog />
+    <WatermarkDialog />
     <PageContextMenu />
     <div v-if="ui.toast" class="toast" :class="ui.toast.kind">{{ ui.toast.text }}</div>
   </div>
@@ -371,6 +382,13 @@ watch(
 
 .status-warn {
   color: #f0c36d;
+}
+
+.status-problems {
+  color: #ff8787;
+  border: 1px solid var(--panel-border);
+  background: var(--panel-bg);
+  cursor: pointer;
 }
 
 .status-dirty {

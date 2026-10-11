@@ -1,6 +1,11 @@
-import { PDFDocument, StandardFonts } from 'pdf-lib'
+import { existsSync } from 'node:fs'
+import { PDFDocument, StandardFonts, type PDFForm, type PDFPage } from 'pdf-lib'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Annotation } from '../../src/shared/types'
+import type { Annotation, FormValue } from '../../src/shared/types'
+
+/** CFF(OTF)中文字体才会复现子集崩溃;未配置或指向 TTF 时跳过(见 .github/workflows/ci.yml 的字体步骤) */
+const cffPath = process.env['PDF_EDITOR_CJK_FONT'] ?? ''
+const hasCffFont = /\.otf$/i.test(cffPath) && existsSync(cffPath)
 
 /**
  * 本文件在「缺中文字体」用例里必须动态 import:该模块在首次加载时缓存字体字节,
@@ -214,5 +219,143 @@ describe('缺中文字体(PDF_EDITOR_SMOKE_CJK_FONT=none)', () => {
       resolveImage: async () => undefined
     })
     expect(warnings.some((w) => w.includes('未找到可嵌入的中文字体'))).toBe(true)
+  })
+})
+
+describe('willWriteFormValue:只算真会用中文字体画字的字段', () => {
+  const withFormField = async (setup: (form: PDFForm, page: PDFPage) => void): Promise<Buffer> => {
+    const doc = await PDFDocument.create()
+    const page = doc.addPage([300, 300])
+    setup(doc.getForm(), page)
+    return Buffer.from(await doc.save())
+  }
+  it('文本域非空字符串 → true;空字符串 → false', async () => {
+    const mod = await loadModule()
+    const pdf = await withFormField((form) => {
+      form.createTextField('name')
+    })
+    const doc = await PDFDocument.load(pdf)
+    expect(mod.willWriteFormValue(doc, { name: '中文值' })).toBe(true)
+    expect(mod.willWriteFormValue(doc, { name: '' })).toBe(false)
+  })
+
+  it('单选组(选中值是字符串)不请求字体:外观忽略 font 只画矢量,零字形会崩 CFF 字体', async () => {
+    const mod = await loadModule()
+    const pdf = await withFormField((form, page) => {
+      const group = form.createRadioGroup('color')
+      group.addOptionToPage('On', page, { x: 20, y: 20, width: 20, height: 20 })
+      group.select('On')
+    })
+    expect(mod.willWriteFormValue(await PDFDocument.load(pdf), { color: 'On' })).toBe(false)
+  })
+
+  it('复选框布尔值不请求字体', async () => {
+    const mod = await loadModule()
+    const pdf = await withFormField((form, page) => {
+      form.createCheckBox('agree').addToPage(page, { x: 20, y: 60, width: 18, height: 18 })
+    })
+    expect(mod.willWriteFormValue(await PDFDocument.load(pdf), { agree: true })).toBe(false)
+  })
+
+  it('下拉的选中字符串会请求字体(外观用传入字体画字)', async () => {
+    const mod = await loadModule()
+    const pdf = await withFormField((form, page) => {
+      const dropdown = form.createDropdown('city')
+      dropdown.addOptions(['北京'])
+      dropdown.addToPage(page, { x: 20, y: 100, width: 120, height: 18 })
+    })
+    expect(mod.willWriteFormValue(await PDFDocument.load(pdf), { city: '北京' })).toBe(true)
+  })
+
+  it('字段不存在或没有任何表单值 → false', async () => {
+    const mod = await loadModule()
+    const pdf = await withFormField(() => {})
+    expect(mod.willWriteFormValue(await PDFDocument.load(pdf), { nope: 'x' })).toBe(false)
+    expect(mod.willWriteFormValue(await PDFDocument.load(await samplePdf()), {})).toBe(false)
+  })
+
+  it('层级名后缀多字段歧义 → false;唯一后缀 → true', async () => {
+    const mod = await loadModule()
+    const ambiguous = await withFormField((form) => {
+      form.createTextField('a.tel')
+      form.createTextField('b.tel')
+    })
+    expect(mod.willWriteFormValue(await PDFDocument.load(ambiguous), { tel: '123' })).toBe(false)
+    const unique = await withFormField((form) => {
+      form.createTextField('x.tel')
+    })
+    expect(mod.willWriteFormValue(await PDFDocument.load(unique), { tel: '123' })).toBe(true)
+  })
+})
+
+describe('单选组写入不请求中文字体(PDF_EDITOR_SMOKE_CJK_FONT=none)', () => {
+  beforeEach(() => {
+    process.env['PDF_EDITOR_SMOKE_CJK_FONT'] = 'none'
+    vi.resetModules()
+  })
+
+  afterEach(() => {
+    delete process.env['PDF_EDITOR_SMOKE_CJK_FONT']
+    vi.resetModules()
+  })
+
+  it('只填单选组时不请求字体(修复前会因字符串值请求,零字形必崩 CFF 字体)', async () => {
+    const mod = await loadModule()
+    const doc = await PDFDocument.create()
+    doc.addPage([300, 300])
+    const group = doc.getForm().createRadioGroup('color')
+    group.addOptionToPage('On', doc.getPages()[0], { x: 20, y: 20, width: 20, height: 20 })
+    group.select('On')
+    const { bytes, warnings } = await mod.writeAnnotations(Buffer.from(await doc.save()), {
+      annotations: [],
+      formValues: { color: 'On' } as Record<string, FormValue>,
+      resolveImage: async () => undefined
+    })
+    expect(bytes.byteLength).toBeGreaterThan(0)
+    expect(warnings.some((w) => w.includes('未找到可嵌入的中文字体'))).toBe(false)
+  })
+})
+
+describe.runIf(hasCffFont)('CFF 字体零字形也要能保存', () => {
+  it(
+    '嵌入 CFF 中文字体后一个字形都不画,保存仍有回音',
+    async () => {
+      const mod = await loadModule()
+      const doc = await PDFDocument.load(await samplePdf())
+      await mod.createAnnotContext(doc, async () => undefined, [], { skipCjkFont: false })
+      const save = doc.save({ useObjectStreams: false })
+      const outcome = await new Promise<Uint8Array | Error>((resolve) => {
+        save.then((bytes) => resolve(bytes), (err) => resolve(err))
+      })
+      expect(outcome).not.toBeInstanceOf(Error)
+      expect((outcome as Uint8Array).byteLength).toBeGreaterThan(0)
+    },
+    20_000
+  )
+})
+
+describe('savePdf 保存超时兜底', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('正常保存:resolve 出文档字节', async () => {
+    const mod = await loadModule()
+    const doc = await PDFDocument.create()
+    doc.addPage([100, 100])
+    const bytes = await mod.savePdf(doc)
+    expect(bytes.byteLength).toBeGreaterThan(0)
+  })
+
+  it('保存流程没有结束时,时限到达转成可读错误而不是永远挂起', async () => {
+    vi.useFakeTimers()
+    const mod = await loadModule()
+    const doc = await PDFDocument.create()
+    // 假 save:既不 resolve 也不 reject,复现字体子集异常逃进 nextTick 后的形态
+    const save = new Promise<Uint8Array>(() => {})
+    vi.spyOn(doc, 'save').mockReturnValue(save)
+    const pending = mod.savePdf(doc)
+    vi.advanceTimersByTimeAsync(mod.PDF_SAVE_TIMEOUT_MS)
+    await expect(pending).rejects.toThrow(/PDF 保存超时/)
   })
 })

@@ -2,12 +2,20 @@
 const t = window.__pdfEditorTest
 if (!t) throw new Error('测试 API 未安装')
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+const until = async (cond, timeout = 8000) => {
+  const t0 = Date.now()
+  while (Date.now() - t0 < timeout) {
+    if (cond()) return true
+    await sleep(50)
+  }
+  return false
+}
 const check = (name, cond, extra) => {
   if (!cond) throw new Error(`断言失败: ${name} ${extra === undefined ? '' : JSON.stringify(extra)}`)
 }
 
 await t.openPath(`${__smokeRoot}/samples/sample-zh.pdf`)
-await sleep(1500)
+if (!(await until(() => !!document.querySelector('[data-page="1"] .ann-layer')))) throw new Error('首页未渲染')
 check('首页已渲染', !!document.querySelector('[data-page="1"] .ann-layer'))
 check('默认看门狗参数', t.renderWatchdog.timeoutMs === 8000 && t.renderWatchdog.stallNext === false)
 check('并发渲染闸门已定义', t.renderGate && t.renderGate.max === 2, t.renderGate)
@@ -32,10 +40,21 @@ const beforeRenders = t.renderWatchdog.renders
 t.renderWatchdog.overrideMs = 400
 t.renderWatchdog.stallNext = true
 t.docState.scale = 1.5 // 触发可见页重渲染,首次渲染被模拟停摆
-// 重试带退避(400/800/1200ms),等足够长时间让重试链跑完
-await sleep(6000)
+// 等超时真的发生 + 重试真的补上:两个都是链路的真实标志;预读残留的渲染可能消费 stallNext
+// 但不会带来 timeouts 增量,所以必须等到 timeouts+1 才算停摆被看门狗捕获
+if (
+  !(
+    await until(
+      () => t.renderWatchdog.timeouts >= beforeTimeout + 1 && t.renderWatchdog.renders >= beforeRenders + 1,
+      30000
+    )
+  )
+)
+  throw new Error(
+    '停摆重试链未完成: ' +
+      JSON.stringify({ timeouts: t.renderWatchdog.timeouts, renders: t.renderWatchdog.renders, stallNext: t.renderWatchdog.stallNext })
+  )
 check('看门狗超时计数 ≥ +1', t.renderWatchdog.timeouts >= beforeTimeout + 1, t.renderWatchdog.timeouts)
-check('stallNext 已被消费', t.renderWatchdog.stallNext === false)
 check('重试成功重新渲染', t.renderWatchdog.renders >= beforeRenders + 1, [beforeRenders, t.renderWatchdog.renders])
 check('重试后仍渲染完成', !!document.querySelector('[data-page="1"] .ann-layer'))
 

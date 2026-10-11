@@ -2,7 +2,9 @@
  * 主进程 / 预加载 / 渲染进程共享的类型定义。
  * 注释坐标一律为 PDF 用户空间坐标(pt,原点左下,未旋转)。
  */
+import type { PageNumberFormat } from './pagehead'
 
+export type { PageNumberFormat }
 export interface Rect {
   x: number
   y: number
@@ -298,6 +300,33 @@ export type PageOp =
       /** 勾选「包含注释」时按输出页序重建的本应用批注 */
       annotations?: Annotation[]
     }
+  | {
+      /** 添加页码(0-based 页序;空数组 = 全部页) */
+      kind: 'pagenumber'
+      pages: number[]
+      format: PageNumberFormat
+      /** 首个目标页显示的页码(默认 1) */
+      start: number
+      position: 'bottom-center' | 'bottom-right' | 'top-center' | 'top-right'
+      fontSize: number
+      /** 距页边,pt */
+      margin: number
+    }
+  | {
+      /** 添加文字水印(0-based 页序;空数组 = 全部页) */
+      kind: 'watermark'
+      pages: number[]
+      text: string
+      fontSize: number
+      /** 0–1 */
+      opacity: number
+      /** 顺时针角度 */
+      rotation: number
+      /** true = 铺满页面;false = 居中单条 */
+      tile: boolean
+      /** '#rrggbb' */
+      color: string
+    }
 
 export interface SaveResult {
   ok: boolean
@@ -326,4 +355,6 @@ export interface OutlineNode {
   title: string
   page: number | null
   children: OutlineNode[]
+  /** 索引路径(顶层序号、下一层序号……):书签编辑按它定位 /Outlines 里的条目 */
+  path: number[]
 }

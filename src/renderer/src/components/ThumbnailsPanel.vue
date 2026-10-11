@@ -42,10 +42,21 @@ const items = computed(() =>
 const selectedList = computed(() => [...selected.value].sort((a, b) => a - b))
 const rotateTargets = computed(() => (selectedList.value.length > 0 ? selectedList.value : [docState.currentPage]))
 
-function toggleSelect(page: number): void {
+/** 区间选择锚点:Shift+点击时从锚到当前页整段选中(与文件管理器一致) */
+const anchorPage = ref<number | null>(null)
+
+function toggleSelect(page: number, event?: { shiftKey?: boolean } | MouseEvent): void {
   const next = new Set(selected.value)
+  if (event?.shiftKey && anchorPage.value !== null) {
+    const from = Math.min(anchorPage.value, page)
+    const to = Math.max(anchorPage.value, page)
+    for (let p = from; p <= to; p++) next.add(p)
+    selected.value = next
+    return
+  }
   if (next.has(page)) next.delete(page)
   else next.add(page)
+  anchorPage.value = page
   selected.value = next
 }
 
@@ -56,6 +67,21 @@ function openThumbMenu(page: number, event: MouseEvent): void {
 
 function clearSelection(): void {
   selected.value = new Set()
+  anchorPage.value = null
+}
+
+function selectAllPages(): void {
+  const next = new Set<number>()
+  for (let page = 1; page <= docState.pageCount; page++) next.add(page)
+  selected.value = next
+}
+
+function invertSelection(): void {
+  const next = new Set<number>()
+  for (let page = 1; page <= docState.pageCount; page++) {
+    if (!selected.value.has(page)) next.add(page)
+  }
+  selected.value = next
 }
 
 function setupObserver(): void {
@@ -84,12 +110,27 @@ function setupObserver(): void {
 }
 
 async function onRangeAction(action: PagesAction): Promise<void> {
-  const result = await requestPagesRange(action)
-  if (!result) return
-  const pages = parsePageRange(result.input, docState.pageCount)
-  if (!pages || pages.length === 0) {
-    showToast('页码范围无效', 'error')
-    return
+  // 勾选了页面就直接作用于选中页;否则弹范围对话框手输
+  // (此前勾选只对旋转生效,点「删除」却弹空范围框,极易误删首页)
+  let pages: number[] | null = null
+  let includeAnnotations: boolean | undefined
+  let mode: 'each' | 'long' | undefined
+  let direction: 'h' | 'v' | undefined
+  let format: string | undefined
+  if (selectedList.value.length > 0) {
+    pages = selectedList.value.map((page) => page - 1)
+  } else {
+    const result = await requestPagesRange(action)
+    if (!result) return
+    pages = parsePageRange(result.input, docState.pageCount)
+    includeAnnotations = result.includeAnnotations
+    mode = result.mode
+    direction = result.direction
+    format = result.format
+    if (!pages || pages.length === 0) {
+      showToast('页码范围无效', 'error')
+      return
+    }
   }
   switch (action) {
     case 'delete':
@@ -97,13 +138,13 @@ async function onRangeAction(action: PagesAction): Promise<void> {
       clearSelection()
       break
     case 'extract':
-      await extractPages(pages, result.includeAnnotations)
+      await extractPages(pages, includeAnnotations)
       break
     case 'export':
-      if (result.format === 'png') {
-        await exportPagesAsImages(pages, result.mode ?? 'each', result.direction, result.includeAnnotations)
+      if (format === 'png') {
+        await exportPagesAsImages(pages, mode ?? 'each', direction, includeAnnotations)
       } else {
-        await extractPages(pages, result.includeAnnotations)
+        await extractPages(pages, includeAnnotations)
       }
       break
   }
@@ -252,16 +293,21 @@ watch(
 <template>
   <aside class="thumbs">
     <div class="pages-toolbar">
-      <button :disabled="busy" title="按页码范围删除页面" @click="onRangeAction('delete')">删除</button>
-      <button :disabled="busy" title="按页码范围提取为新 PDF" @click="onRangeAction('extract')">提取</button>
+      <button :disabled="busy" title="选中全部页面" @click="selectAllPages">全选</button>
+      <button :disabled="busy" title="反选(选中未选中的页面)" @click="invertSelection">反选</button>
+      <button :disabled="busy" title="清空页面选择" @click="clearSelection">清空</button>
+      <button :disabled="busy" title="按选中页或页码范围删除页面" @click="onRangeAction('delete')">删除</button>
+      <button :disabled="busy" title="提取选中页或页码范围为新 PDF" @click="onRangeAction('extract')">提取</button>
       <button :disabled="busy" title="批量拆分 PDF 页面" @click="onSplit">拆分</button>
-      <button :disabled="busy" title="按范围导出(PDF / PNG多图 / 长图)" @click="onRangeAction('export')">导出</button>
-      <button title="左旋 90°(选中页或当前页)" @click="onRotate(-90)">左旋</button>
-      <button title="右旋 90°(选中页或当前页)" @click="onRotate(90)">右旋</button>
+      <button :disabled="busy" title="按选中页或页码范围导出(PDF / PNG多图 / 长图)" @click="onRangeAction('export')">导出</button>
+      <button :disabled="busy" title="左旋 90°(选中页或当前页)" @click="onRotate(-90)">左旋</button>
+      <button :disabled="busy" title="右旋 90°(选中页或当前页)" @click="onRotate(90)">右旋</button>
       <button :disabled="busy" title="按内容方向统一整份文档的页面朝向(扫描件零星几页横躺/上下颠倒时用)" @click="normalizePageOrientation">
         统一方向
       </button>
-      <button title="在当前页之后插入空白页" @click="onInsertBlank">空白页</button>
+      <button :disabled="busy" title="在当前页之后插入空白页" @click="onInsertBlank">空白页</button>
+      <button :disabled="busy" title="给选中页或全部页添加页码" @click="ui.pageNumberDialog.open = true">页码</button>
+      <button :disabled="busy" title="给选中页或全部页添加文字水印" @click="ui.watermarkDialog.open = true">水印</button>
       <button :disabled="busy" title="合并其他 PDF(可指定页码,另存为新文件)" @click="onMerge">合并</button>
     </div>
     <div ref="containerEl" class="thumbs-scroll">
@@ -297,8 +343,7 @@ watch(
               type="checkbox"
               :checked="selected.has(item.page)"
               title="选中该页"
-              @click.stop
-              @change="toggleSelect(item.page)"
+              @click.stop="toggleSelect(item.page, $event)"
             />
           </div>
           <span class="thumb-label">{{ item.page }}</span>

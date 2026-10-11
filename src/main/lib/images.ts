@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { nativeImage } from 'electron'
+import { statSync } from 'node:fs'
 import type { ImageInfo } from '@shared/types'
 
 const images = new Map<string, Buffer>()
@@ -13,6 +14,19 @@ function evictImages(): void {
     const oldest = images.keys().next().value
     if (oldest === undefined) break
     images.delete(oldest)
+  }
+}
+
+/** refPath 磁盘读取的小缓存(拆分多块/连续保存时同一张图不再反复读盘);
+ * 键含 mtime+size,文件被替换后自然失效 */
+const DISK_CACHE_MAX = 8
+const diskCache = new Map<string, Buffer>()
+
+function evictDiskCache(): void {
+  while (diskCache.size > DISK_CACHE_MAX) {
+    const oldest = diskCache.keys().next().value
+    if (oldest === undefined) break
+    diskCache.delete(oldest)
   }
 }
 
@@ -37,13 +51,26 @@ async function loadImage(
   }
   const mime = mimeOf(buffer)
   if (!mime) return { error: '仅支持 PNG/JPEG 格式图片' }
-  const size = nativeImage.createFromBuffer(buffer).getSize()
+  const decoded = nativeImage.createFromBuffer(buffer)
+  const size = decoded.getSize()
+  // 屏显 dataUrl 按最长边降采样:一张 12MP 照片的 base64 约 27MB 字符串 + 解码位图约 48MB,
+  // 全分辨率只会撑爆内存;PDF 嵌入仍用下面的原始 buffer,输出质量不受影响
+  const MAX_DISPLAY_EDGE = 2400
+  let dataUrlBuffer = buffer
+  if (Math.max(size.width, size.height) > MAX_DISPLAY_EDGE) {
+    const ratio = MAX_DISPLAY_EDGE / Math.max(size.width, size.height)
+    const resized = decoded.resize({
+      width: Math.max(1, Math.round(size.width * ratio)),
+      height: Math.max(1, Math.round(size.height * ratio))
+    })
+    dataUrlBuffer = mime === 'image/png' ? Buffer.from(resized.toPNG()) : Buffer.from(resized.toJPEG(82))
+  }
   return {
     buffer,
     info: {
       imgId: '',
       refPath,
-      dataUrl: `data:${mime};base64,${buffer.toString('base64')}`,
+      dataUrl: `data:${mime};base64,${dataUrlBuffer.toString('base64')}`,
       width: size.width,
       height: size.height
     }
@@ -75,8 +102,21 @@ export function getImageBuffer(imgId: string): Buffer | undefined {
 }
 
 export async function readImageBuffer(refPath: string): Promise<Buffer | undefined> {
+  let key: string
   try {
-    return await readFile(refPath)
+    const st = statSync(refPath)
+    key = `${refPath}|${st.mtimeMs}|${st.size}`
+  } catch {
+    return undefined
+  }
+  const cached = diskCache.get(key)
+  if (cached) return cached
+  try {
+    const buffer = await readFile(refPath)
+    diskCache.delete(key)
+    diskCache.set(key, buffer)
+    evictDiskCache()
+    return buffer
   } catch {
     return undefined
   }

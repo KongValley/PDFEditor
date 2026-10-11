@@ -3,6 +3,14 @@
 const t = window.__pdfEditorTest
 if (!t) throw new Error('测试 API 未安装')
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+const until = async (cond, timeout = 10000) => {
+  const t0 = Date.now()
+  while (Date.now() - t0 < timeout) {
+    if (cond()) return true
+    await sleep(50)
+  }
+  return false
+}
 const check = (name, cond, extra) => {
   if (!cond) throw new Error(`断言失败: ${name} ${extra === undefined ? '' : JSON.stringify(extra)}`)
 }
@@ -10,7 +18,7 @@ const page0Ids = () => t.annotState.items.filter((a) => a.page === 0).map((a) =>
 const toastText = () => t.ui.toast?.text ?? ''
 
 await t.openPath(`${__smokeRoot}/samples/sample-zh.pdf`)
-await sleep(1600)
+if (!(await until(() => !!document.querySelector('[data-page="1"] .ann-layer')))) throw new Error('首页未渲染')
 
 /* ---------- 1. 层级:置底 / 下移 / 边界钳制 ---------- */
 const [A, B, C] = ['rect', 'rect', 'rect'].map((kind, i) =>
@@ -38,48 +46,49 @@ check('置顶后 C 回到末位', page0Ids()[page0Ids().length - 1] === C.id, af
 /* ---------- 2. 搜索失效:页面操作后结果清空 ---------- */
 // 走真实搜索栏(输入 + Enter),只有 UI 路径才会写 searchState.results
 t.ui.searchOpen = true
-await sleep(300)
+await new Promise((r) => setTimeout(r, 0))
 const input = document.querySelector('.search-bar .search-input')
 check('搜索栏已打开', !!input)
 input.value = '编辑器'
 input.dispatchEvent(new Event('input', { bubbles: true }))
-await sleep(1500)
+if (!(await until(() => t.searchState.results.length > 0))) throw new Error('搜索无命中')
 check('搜索有命中', t.searchState.results.length > 0, t.searchState.results.length)
 await t.insertBlankPage(0)
-await sleep(1200)
+if (!(await until(() => t.searchState.results.length === 0))) throw new Error('搜索结果未清空')
 check('页面操作后搜索结果被清空', t.searchState.results.length === 0, t.searchState.results.length)
 t.ui.searchOpen = false
-await sleep(200)
+await new Promise((r) => setTimeout(r, 0))
 
 /* ---------- 3. 前进历史(直接调用 goForward,step19 只从快捷键走) ---------- */
 t.scrollToPage(3)
-await sleep(1200) // 等 700ms 去抖把页码记进历史
+// canBack 要等 700ms 阅读位置去抖落账;默认 10s 预算足够
+if (!(await until(() => t.docState.currentPage === 3 && t.readingState.canBack === true, 10000))) throw new Error('未定位第 3 页')
 check('已定位到第 3 页', t.docState.currentPage === 3, t.docState.currentPage)
 check('可后退', t.readingState.canBack === true, t.readingState)
 t.goBack()
-await sleep(400)
+if (!(await until(() => t.docState.currentPage === 1))) throw new Error('后退未生效')
 check('后退到第 1 页', t.docState.currentPage === 1, t.docState.currentPage)
 check('可前进', t.readingState.canForward === true, t.readingState)
 t.goForward()
-await sleep(1200)
+if (!(await until(() => t.docState.currentPage === 3))) throw new Error('前进未生效')
 check('前进回到第 3 页', t.docState.currentPage === 3, t.docState.currentPage)
 
 /* ---------- 4. 提取页面(走原生对话框替身) ---------- */
 await t.openPath(`${__smokeRoot}/samples/sample-zh.pdf`)
-await sleep(1500)
+if (!(await until(() => t.docState.pageCount === 3))) throw new Error('重开样本失败')
 await t.extractPages([0, 1])
-await sleep(1500)
+if (!(await until(() => toastText().startsWith('已提取 2 页')))) throw new Error('提取无成功提示: ' + toastText())
 const extractToast = toastText()
 check('提取成功提示', extractToast.startsWith('已提取 2 页'), extractToast)
 const extractedPath = extractToast.slice('已提取 2 页:'.length).trim()
 check('提取产物落在替身目录', extractedPath.includes('dialog'), extractedPath)
 await t.openPath(extractedPath)
-await sleep(1500)
+if (!(await until(() => t.docState.pageCount === 2))) throw new Error('提取产物页数不对: ' + t.docState.pageCount)
 check('导出文件只有 2 页', t.docState.pageCount === 2, t.docState.pageCount)
 
 /* ---------- 5. 另存为(走原生对话框替身) ---------- */
 await t.saveDocumentAs()
-await sleep(1500)
+if (!(await until(() => toastText().startsWith('已保存')))) throw new Error('另存为无成功提示: ' + toastText())
 check('另存为成功提示', toastText().startsWith('已保存'), toastText())
 check('另存为落在替身目录', t.docState.filePath.includes('dialog'), t.docState.filePath)
 

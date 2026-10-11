@@ -1,9 +1,20 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
-import { PDFDocument, degrees } from 'pdf-lib'
+import { stemOf } from '@shared/paths'
+import { PDFDocument, degrees, rgb } from 'pdf-lib'
 import { getDocEntry, pruneBufferStack, pushBufferSnapshot, setDocBuffer, toArrayBuffer, uniqueFilePath } from './pdfio'
 import { getImageBuffer, readImageBuffer } from './images'
-import { createAnnotContext, mergeAcroForm, needsCjkFont, replaceOwnAnnotations, stripAllAnnotations } from './pdflibwrite'
+import {
+  createAnnotContext,
+  hexToRgb,
+  mergeAcroForm,
+  needsCjkFont,
+  replaceOwnAnnotations,
+  savePdf,
+  stripAllAnnotations,
+  withCjkFont
+} from './pdflibwrite'
+import { formatPageNumber, pageNumberNeedsCjk, watermarkPlacements } from '@shared/pagehead'
 import type { Annotation, PageOp, PageOpResult, SplitTask, SplitTaskResult } from '@shared/types'
 
 function identityMap(count: number): number[] {
@@ -83,6 +94,61 @@ export async function applyPageOp(docId: string, op: PageOp): Promise<PageOpResu
       }
       break
     }
+    case 'pagenumber': {
+      const targets = op.pages.length > 0 ? op.pages.filter((i) => i >= 0 && i < oldCount) : Array.from({ length: oldCount }, (_, i) => i)
+      if (targets.length === 0) return { ok: false, error: '页码范围全部越界' }
+      const warnings: string[] = []
+      const { ctx } = await createAnnotContext(doc, async () => undefined, warnings, {
+        skipCjkFont: !pageNumberNeedsCjk(op.format)
+      })
+      for (const warningsEntry of warnings) console.warn('[pagenumber]', warningsEntry)
+      targets.forEach((index, k) => {
+        const page = doc.getPage(index)
+        const text = formatPageNumber(op.format, op.start + k, oldCount)
+        const size = page.getSize()
+        // widthOfTextAtSize 同样先做编码(WinAnsi 遇中文会抛),必须与 drawText 一起包进守卫
+        withCjkFont(() => {
+          const width = ctx.font.widthOfTextAtSize(text, op.fontSize)
+          const x =
+            op.position === 'bottom-center' || op.position === 'top-center'
+              ? (size.width - width) / 2
+              : size.width - op.margin - width
+          const y = op.position === 'bottom-center' || op.position === 'bottom-right' ? op.margin : size.height - op.margin - op.fontSize
+          page.drawText(text, { x, y, size: op.fontSize, font: ctx.font })
+        })
+      })
+      break
+    }
+    case 'watermark': {
+      if (op.text.trim() === '') return { ok: false, error: '水印文本不能为空' }
+      const targets = op.pages.length > 0 ? op.pages.filter((i) => i >= 0 && i < oldCount) : Array.from({ length: oldCount }, (_, i) => i)
+      if (targets.length === 0) return { ok: false, error: '水印范围全部越界' }
+      const warnings: string[] = []
+      const needCjk = /[^\x00-\x7F]/.test(op.text)
+      const { ctx } = await createAnnotContext(doc, async () => undefined, warnings, { skipCjkFont: !needCjk })
+      for (const warningsEntry of warnings) console.warn('[watermark]', warningsEntry)
+      const { r, g, b } = hexToRgb(op.color)
+      for (const index of targets) {
+        const page = doc.getPage(index)
+        const size = page.getSize()
+        withCjkFont(() => {
+          const textWidth = ctx.font.widthOfTextAtSize(op.text, op.fontSize)
+          const placements = watermarkPlacements(size, { width: textWidth, height: op.fontSize * 1.2 }, op.tile)
+          for (const spot of placements) {
+            page.drawText(op.text, {
+              x: spot.x,
+              y: spot.y,
+              size: op.fontSize,
+              font: ctx.font,
+              color: rgb(r, g, b),
+              opacity: op.opacity,
+              rotate: degrees(op.rotation)
+            })
+          }
+        })
+      }
+      break
+    }
     case 'export': {
       if (op.pages.length === 0) return { ok: false, error: '未指定要导出的页面' }
       const indices = op.pages.filter((i) => i >= 0 && i < oldCount)
@@ -117,13 +183,13 @@ export async function applyPageOp(docId: string, op: PageOp): Promise<PageOpResu
         }
       }
       await mkdir(dirname(op.targetPath), { recursive: true })
-      await writeFile(op.targetPath, await out.save({ useObjectStreams: false }))
+      await writeFile(op.targetPath, await savePdf(out))
       return { ok: true, savedPath: op.targetPath }
     }
   }
 
   const snapshotted = pushBufferSnapshot(entry)
-  const bytes = await doc.save({ useObjectStreams: false })
+  const bytes = await savePdf(doc)
   const buffer = Buffer.from(bytes)
   setDocBuffer(docId, buffer, doc.getPageCount())
   return {
@@ -219,7 +285,7 @@ export async function splitPdfTasks(
     try {
       const destDir = outputDir ?? dirname(task.path)
       await mkdir(destDir, { recursive: true })
-      const stem = basename(task.path).replace(/\.pdf$/i, '') || 'document'
+      const stem = stemOf(task.path) || 'document'
       const written: string[] = []
       for (const [i, chunk] of chunks.entries()) {
         if (hooks.isCancelled?.()) {
@@ -255,7 +321,7 @@ export async function splitPdfTasks(
           for (const warning of warnings) console.warn('[split]', warning)
         }
         const target = uniqueFilePath(destDir, `${stem}-${i + 1}.pdf`)
-        await writeFile(target, await out.save({ useObjectStreams: false }))
+        await writeFile(target, await savePdf(out))
         written.push(target)
         outputs++
         hooks.onProgress?.({ processed: processed + 1, total: tasks.length, outputs })

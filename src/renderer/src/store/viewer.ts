@@ -102,7 +102,10 @@ export function prefetchDepth(): number {
 
 /** 预读余量变化时自增:PdfViewer 用它重建观察器(depth 从实测中得出,会中途变) */
 export const prefetchEpoch = ref(0)
-let lastDepth = prefetchDepth()
+// 不在模块加载期调用 prefetchDepth():它读的 machineProfile 来自 ./document,
+ // 与本模块存在 import 循环(document → viewer 的 refitAfterOrientationChange),加载期
+ // reactive 对象尚未初始化 → 单测里炸 "reading 'lowMem'"。首帧渲染后自然补齐。
+let lastDepth = 1
 
 /** 每次页面渲染完成后调用:耗时均值变化可能改变预读页数 */
 export function notifyRenderDone(ms: number): void {
@@ -139,6 +142,12 @@ export function markFirstPaint(): void {
 
 export function attachContainer(el: HTMLElement | null): void {
   container = el
+  // 视口被卸载时丢弃挂起的滚轮缩放,避免 rAF 回调在旧容器上写 scrollTop
+  if (!el && zoomFrame !== 0) {
+    cancelAnimationFrame(zoomFrame)
+    zoomFrame = 0
+    pendingZoom = null
+  }
 }
 
 /** 缩放来源标记:Ctrl+滚轮置位,PageCanvas 据此对连续 scale 变更做 120ms 渲染去抖 */
@@ -295,11 +304,33 @@ export function computeCurrentPage(): number {
   return floorIndex(pageTops, probe) + 1
 }
 
+// Ctrl+滚轮逐事件改 scale:连续触发会反复重建 O(页数) 几何并让全部页重渲染,
+// 每帧最多提交一次(zoomBy/fitWidth 等菜单来源仍即时生效)
+let pendingZoom: { scale: number; clientY?: number } | null = null
+let zoomFrame = 0
+
+function commitZoom(): void {
+  zoomFrame = 0
+  const pending = pendingZoom
+  pendingZoom = null
+  if (pending) applyZoom(pending.scale, pending.clientY)
+}
+
 export function zoomAt(newScale: number, clientY?: number, source?: 'wheel'): void {
   zoomWheelAt.active = source === 'wheel'
   // 上限 4 倍:再放大单页位图会超过 30MB(低内存机器上不可接受)
   const clamped = Math.min(Math.max(newScale, 0.25), 4)
   fitMode = 'none'
+  if (source !== 'wheel') {
+    applyZoom(clamped, clientY)
+    return
+  }
+  // 同一帧内的多个滚轮事件只保留最后一次的目标值,锚点也取最新光标位置
+  pendingZoom = { scale: clamped, clientY }
+  if (zoomFrame === 0) zoomFrame = requestAnimationFrame(commitZoom)
+}
+
+function applyZoom(clamped: number, clientY?: number): void {
   if (!container || clamped === docState.scale) {
     docState.scale = clamped
     return

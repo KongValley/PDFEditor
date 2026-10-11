@@ -4,6 +4,14 @@ const t = window.__pdfEditorTest
 if (!t) throw new Error('测试 API 未安装')
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+const until = async (cond, timeout = 15000) => {
+  const t0 = Date.now()
+  while (Date.now() - t0 < timeout) {
+    if (cond()) return true
+    await sleep(50)
+  }
+  return false
+}
 const check = (name, cond, extra) => {
   if (!cond) throw new Error(`断言失败: ${name} ${extra === undefined ? '' : JSON.stringify(extra)}`)
 }
@@ -23,7 +31,7 @@ check('方形不参与基准', t.pickBaseOrientation(['square', 'landscape', 'la
 // 夹具(scripts/make-mixed-orient-sample.mjs):
 //   p1-3 纵向正立 | p4 横向框+内容转 90°(横躺) | p5 纵向框+内容转 180°(倒置) | p6 横向框+内容正立(宽表格)
 await t.openPath(`${__smokeRoot}/samples/sample-mixed-orient.pdf`)
-await sleep(1500)
+if (!(await until(() => t.docState.pageCount === 6))) throw new Error('文档未就绪')
 check('夹具 6 页', t.docState.pageCount === 6, t.docState.pageCount)
 check('p4 为横向', t.docState.pageBoxes[3].w > t.docState.pageBoxes[3].h, t.docState.pageBoxes[3])
 check('p6 为横向', t.docState.pageBoxes[5].w > t.docState.pageBoxes[5].h, t.docState.pageBoxes[5])
@@ -36,7 +44,7 @@ check('p6 内容相对页面正立(真正横向页)', (await t.detectContentPost
 
 /* ---------- 4. 统一方向的分析与计划 ---------- */
 await t.normalizePageOrientation()
-await sleep(500)
+if (!(await until(() => t.orientationDialogState.open === true && t.orientationDialogState.scanning === false, 30000))) throw new Error('方向分析未完成')
 const state = t.orientationDialogState
 check('对话框已打开', state.open === true, state.open)
 check('分析结束', state.scanning === false, state.scanning)
@@ -52,8 +60,12 @@ check('p6 真正横向页不被误伤(delta=0)', byPage[6]?.delta === 0 && byPag
 check('与基准一致的页不在计划里', byPage[1] === undefined && byPage[2] === undefined && byPage[3] === undefined, dump)
 
 // 对话框必须把计划显示出来:改前 rows 只在 open 变化时填充(那一刻计划还是空的),
-// 计划到达后界面停在"以下 0 页"、"应用"置灰 —— 用户看到的就是卡住
-const dialogRows = [...document.querySelectorAll('.dialog .row')]
+// 计划到达后界面停在“以下 0 页”、“应用”置灰 —— 用户看到的就是卡住。
+// 对话框已改异步组件(B3):分析完成 ≠ chunk 已挂载,rows 要轮询到条数对齐
+const dialogRowsNow = () => [...document.querySelectorAll('.dialog .row')]
+if (!(await until(() => dialogRowsNow().length === state.items.length, 10000)))
+  throw new Error('对话框行数未对齐: ' + JSON.stringify({ rows: dialogRowsNow().length, items: state.items.length }))
+const dialogRows = dialogRowsNow()
 check('对话框逐页列出待调整页', dialogRows.length === state.items.length, {
   rows: dialogRows.length,
   items: state.items.length
@@ -72,7 +84,7 @@ check('「应用」可点击(有计划就点得动)', !!applyButton && applyButt
 
 /* ---------- 5. 应用:页面框与内容姿态都要对 ---------- */
 await t.applyOrientationFix(state.items)
-await sleep(2500)
+if (!(await until(() => t.orientationDialogState.open === false && t.docState.pageBoxes[3].w < t.docState.pageBoxes[3].h))) throw new Error('应用后几何未更新')
 check('对话框已关闭', t.orientationDialogState.open === false, t.orientationDialogState.open)
 check('p4 应用后变为纵向', t.docState.pageBoxes[3].w < t.docState.pageBoxes[3].h, t.docState.pageBoxes[3])
 check('p4 应用后内容正立(改前会转到倒置)', (await t.detectContentPosture(4)) === 'upright', await t.detectContentPosture(4))
@@ -83,18 +95,19 @@ check('页数不变', t.docState.pageCount === 6, t.docState.pageCount)
 
 /* ---------- 6. 撤销 ---------- */
 await t.undo()
-await sleep(2500)
+if (!(await until(() => t.docState.pageBoxes[3].w > t.docState.pageBoxes[3].h))) throw new Error('撤销后几何未恢复')
 check('撤销后 p4 恢复横向', t.docState.pageBoxes[3].w > t.docState.pageBoxes[3].h, t.docState.pageBoxes[3])
 check('撤销后 p5 恢复倒置', (await t.detectContentPosture(5)) === 'inverted', await t.detectContentPosture(5))
 
 /* ---------- 7. 页面几何变化后必须重绘(geometryVersion) ---------- */
 await t.normalizePageOrientation()
-await sleep(500)
+if (!(await until(() => t.orientationDialogState.open === true && t.orientationDialogState.scanning === false, 30000))) throw new Error('第二次分析未完成')
 await t.applyOrientationFix(t.orientationDialogState.items)
-await sleep(2000)
+if (!(await until(() => t.orientationDialogState.open === false, 30000))) throw new Error('应用未完成')
 // 位图只为可见页渲染(见 PageCanvas.renderPage 的 !props.visible 早退),先滚到第 4 页
 await t.scrollToPage(4)
-await sleep(2500)
+const canvas4Now = () => document.querySelector('[data-page="4"] .page-canvas')
+if (!(await until(() => { const c = canvas4Now(); return !!c && c.height > c.width }))) throw new Error('第 4 页位图未按新方向重绘')
 const canvas4 = document.querySelector('[data-page="4"] .page-canvas')
 // 修复后第 4 页是纵向 → 位图应呈纵向(w < h);改前位图停留在旧朝向(横向)
 check('第 4 页位图已按新方向重绘', !!canvas4 && canvas4.width > 0 && canvas4.height > canvas4.width, {
@@ -109,12 +122,12 @@ check('第 4 页缩略图已重绘', !!thumb4 && thumb4.width > 0, { w: thumb4?.
 // | p5 横向框、内容正立(只报不转)| p6 纵向框、内容整体转 90°(横躺,要转正)
 // 单页剖面在 180° 前后完全镜像,判不出上下;只有与其它页的共识比较才认得出 p4
 await t.openPath(`${__smokeRoot}/samples/sample-image-orient.pdf`)
-await sleep(1500)
+if (!(await until(() => t.docState.pageCount === 6, 20000))) throw new Error('图像文档未就绪')
 check('图像夹具 6 页', t.docState.pageCount === 6, t.docState.pageCount)
 check('p6 为纵向', t.docState.pageBoxes[5].w < t.docState.pageBoxes[5].h, t.docState.pageBoxes[5])
 check('图像页没有文字层', (await t.detectContentPosture(1)) === 'upright', await t.detectContentPosture(1))
 await t.normalizePageOrientation()
-await sleep(800)
+if (!(await until(() => t.orientationDialogState.open === true && t.orientationDialogState.scanning === false, 30000))) throw new Error('图像页方向分析未完成')
 const imageState = t.orientationDialogState
 const imagePlan = imageState.items.map((i) => `${i.page}:${i.from}->${i.to} d=${i.delta} ${i.reason}`)
 check('第 4 页报倒置、第 5/6 页报待调整', imageState.items.length === 3, imagePlan)
@@ -138,11 +151,11 @@ check(
   sideways6
 )
 await t.applyOrientationFix(imageState.items)
-await sleep(2500)
+if (!(await until(() => t.orientationDialogState.open === false && t.docState.pageBoxes[3].w < t.docState.pageBoxes[3].h, 30000))) throw new Error('图像页应用未完成')
 check('第 4 页仍为纵向(180° 不换宽高)', t.docState.pageBoxes[3].w < t.docState.pageBoxes[3].h, t.docState.pageBoxes[3])
 // 修好后同一套分析必须不再报它(倒置已消除,共识剖面也回到了正立)
 await t.normalizePageOrientation()
-await sleep(1500)
+if (!(await until(() => t.orientationDialogState.open === true && t.orientationDialogState.scanning === false, 30000))) throw new Error('复检分析未完成')
 check('修复后不再报第 4 页', t.orientationDialogState.items.every((item) => item.page !== 4), t.orientationDialogState.items)
 check(
   '修复后没有待转页(第 5/6 页若仍列出,delta 必须为 0)',
@@ -152,9 +165,9 @@ check(
 
 /* ---------- 8.1 整份文档方向一致时:不报任何页,并给出明确提示 ---------- */
 await t.openPath(`${__smokeRoot}/samples/sample-zh.pdf`)
-await sleep(1500)
+if (!(await until(() => t.docState.pageCount === 3))) throw new Error('样本未就绪')
 await t.normalizePageOrientation()
-await sleep(1500)
+if (!(await until(() => t.orientationDialogState.open === true && t.orientationDialogState.scanning === false, 30000))) throw new Error('一致方向分析未完成')
 check('方向一致的文档不报任何页', t.orientationDialogState.items.length === 0, t.orientationDialogState.items)
 check(
   '无待调整页时给出明确提示(而不是"以下 0 页")',
@@ -166,7 +179,7 @@ check(
 /* ---------- 9. 离线 OCR 方向识别(密排/无文字层页面的唯一手段) ---------- */
 // 直接验机制:夹具是干净的矢量文字页,OSD 判得出朝向(合成图案页返回 null,由调用方退回墨迹判据)
 await t.openPath(`${__smokeRoot}/samples/sample-mixed-orient.pdf`)
-await sleep(1500)
+if (!(await until(() => t.docState.pageCount === 6))) throw new Error('OCR 前文档未就绪')
 const ocr = {}
 for (const page of [1, 5, 6]) ocr[page] = await t.detectOrientationByOcr(page)
 check('OCR 认出正立页为 0°', ocr[1]?.delta === 0, ocr[1])

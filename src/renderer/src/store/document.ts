@@ -2,6 +2,7 @@ import { computed, markRaw, reactive } from 'vue'
 import { destroyPdfDocument, loadPdfDocument, loadPdfDocumentByRange, type PDFDocumentProxy, type PDFPageProxy } from '../lib/pdfjs'
 import { loadOutline } from '../lib/outline'
 import { discoverFormFields } from '../lib/forms'
+import { resetImageUrls } from './annotations'
 import type {
   Annotation,
   FormFieldInfo,
@@ -434,6 +435,7 @@ export function closeDocument(): void {
   docState.sidecar = null
   docState.formValues = {}
   docState.formFields = []
+  resetImageUrls()
   docState.outline = []
   docState.loadError = null
   docState.dirty = false

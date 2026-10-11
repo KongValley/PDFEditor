@@ -65,12 +65,22 @@ check('删空被拒绝,仍剩 1 页', t.docState.pageCount === 1, t.docState.pag
 /* ---------- 5. 页码范围对话框:实时校验 + Esc 关闭 ---------- */
 await t.openPath(`${__smokeRoot}/samples/sample-zh.pdf`)
 await sleep(1200)
-const exportBtn = () => document.querySelector('.thumbs .pages-toolbar button[title^="按范围导出"]')
+// 工具栏「导出」按钮 title 已随 A1 改为「按选中页或页码范围导出…」
+const exportBtn = () => document.querySelector('.thumbs .pages-toolbar button[title^="按选中页或页码范围导出"]')
 const dialog = () => document.querySelector('.mask .dialog')
 const actionBtn = (label) => [...document.querySelectorAll('.mask .dialog .actions button')].find((b) => b.textContent.trim() === label)
 
 exportBtn()?.click()
-await sleep(400)
+// 对话框已改异步组件:点击后 chunk 需要一拍加载,用有界轮询代替固定 400ms
+const until = async (cond, timeout = 5000) => {
+  const t0 = Date.now()
+  while (Date.now() - t0 < timeout) {
+    if (cond()) return true
+    await sleep(50)
+  }
+  return false
+}
+if (!(await until(() => !!dialog()))) throw new Error('范围对话框未打开')
 check('范围对话框已打开', !!dialog())
 const rangeInput = dialog()?.querySelector('input')
 check('存在输入框与确定按钮', !!rangeInput && !!actionBtn('确定'))

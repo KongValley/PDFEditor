@@ -16,13 +16,19 @@ import { PDFDocument } from 'pdf-lib'
 import {
   openDocument,
   getDocEntry,
+  pushBufferSnapshot,
   readDocRange,
   readPdfPageCount,
   releaseDocument,
+  setDocBuffer,
   sidecarPathFor,
+  toArrayBuffer,
   uniqueFilePath
 } from './lib/pdfio'
+import { savePdf } from './lib/pdflibwrite'
+import { stemOf } from '@shared/paths'
 import { applyPageOp, redoPageOp, splitPdfTasks, undoPageOp } from './lib/docops'
+import { applyOutlineEdit, type OutlineEdit } from './lib/outlineedit'
 import { getImageBuffer, importImage, readImageBuffer, readImageInfo, type ImageImport } from './lib/images'
 import { imagesToPdf, type ImagePageMode } from './lib/imagetopdf'
 import { abortPrintJob, addPrintPage, commitPrintJob, preparePrintJob } from './lib/print'
@@ -288,6 +294,28 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
 
   ipcMain.handle('pageops:redo', async (_e, docId: string): Promise<PageOpResult> => {
     return guard(() => redoPageOp(docId))
+  })
+
+  // 书签编辑:与页面操作同一套撤销栈(写盘前 pushBufferSnapshot),页数不变 → identity pageMap
+  ipcMain.handle('outline:apply', async (_e, payload: { docId: string; edit: OutlineEdit }): Promise<PageOpResult> => {
+    return guard(async () => {
+      const entry = getDocEntry(payload.docId)
+      if (!entry) return { ok: false, error: '文档未打开' }
+      if (entry.encrypted) return { ok: false, error: '加密文档不支持书签编辑' }
+      const doc = await PDFDocument.load(entry.buffer)
+      applyOutlineEdit(doc, payload.edit)
+      const snapshotted = pushBufferSnapshot(entry)
+      const bytes = await savePdf(doc)
+      const buffer = Buffer.from(bytes)
+      setDocBuffer(payload.docId, buffer, doc.getPageCount())
+      return {
+        ok: true,
+        buffer: toArrayBuffer(buffer),
+        pageCount: doc.getPageCount(),
+        pageMap: Array.from({ length: doc.getPageCount() }, (_, i) => i),
+        snapshotted
+      }
+    })
   })
 
   ipcMain.handle('app:setDirty', (_e, dirty: boolean): { ok: boolean } => {
@@ -599,7 +627,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
         const first = payload.paths[0]
         const options: SaveDialogOptions = {
           title: '保存生成的 PDF',
-          defaultPath: join(dirname(first), `${basename(first).replace(/\.[^.]+$/, '')}-图片合集.pdf`),
+          defaultPath: join(dirname(first), `${stemOf(first)}-图片合集.pdf`),
           filters: [{ name: 'PDF 文档', extensions: ['pdf'] }]
         }
         const result = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options)

@@ -24,12 +24,13 @@ async function resolveDestPage(doc: PDFDocumentProxy, dest: unknown): Promise<nu
   }
 }
 
-async function resolveItems(doc: PDFDocumentProxy, items: RawOutlineItem[]): Promise<OutlineNode[]> {
+async function resolveItems(doc: PDFDocumentProxy, items: RawOutlineItem[], base: number[]): Promise<OutlineNode[]> {
   const nodes: OutlineNode[] = []
-  for (const item of items) {
+  for (const [index, item] of items.entries()) {
     const page = await resolveDestPage(doc, item.dest)
-    const children = item.items && item.items.length > 0 ? await resolveItems(doc, item.items) : []
-    nodes.push({ title: item.title && item.title.trim() !== '' ? item.title : '(无标题)', page, children })
+    const path = [...base, index]
+    const children = item.items && item.items.length > 0 ? await resolveItems(doc, item.items, path) : []
+    nodes.push({ title: item.title && item.title.trim() !== '' ? item.title : '(无标题)', page, children, path })
   }
   return nodes
 }
@@ -39,7 +40,7 @@ export async function loadOutline(doc: PDFDocumentProxy): Promise<OutlineNode[]>
   try {
     const raw = (await doc.getOutline()) as RawOutlineItem[] | null
     if (!raw || raw.length === 0) return []
-    return await resolveItems(doc, raw)
+    return await resolveItems(doc, raw, [])
   } catch (err) {
     console.warn('大纲解析失败:', err)
     return []

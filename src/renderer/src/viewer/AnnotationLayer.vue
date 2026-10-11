@@ -52,6 +52,9 @@ interface DragState {
   /** 参与本次拖动的注释(多选批量移动;resize 只有自身) */
   movers: Annotation[]
   pointerId: number
+  /** move 模式的累计位移(PDF 点):拖动期间只更新它 + CSS 平移,松手才写回模型,
+   *  否则每帧全量重算 ink 点集并重建 SVG points 字符串,长笔画拖动必然掉帧 */
+  offset: { dx: number; dy: number }
 }
 
 const drag = ref<DragState | null>(null)
@@ -271,13 +274,15 @@ function onAnnPointerDown(ann: Annotation, event: PointerEvent): void {
     startPdf,
     startClient: { x: event.clientX, y: event.clientY },
     movers,
-    pointerId: event.pointerId
+    pointerId: event.pointerId,
+    offset: { dx: 0, dy: 0 }
   }
   try {
     svgEl.value?.setPointerCapture(event.pointerId)
   } catch {
     // 合成事件/无活动指针时 capture 会抛错;拖拽仍由 window 监听兜底
   }
+  ui.dragging = true
   window.addEventListener('pointermove', onDragMove)
   window.addEventListener('pointerup', onDragEnd)
   window.addEventListener('pointercancel', onDragEnd)
@@ -297,16 +302,26 @@ function onHandlePointerDown(ann: Annotation, handle: string, event: PointerEven
     startPdf,
     startClient: { x: event.clientX, y: event.clientY },
     movers: [before],
-    pointerId: event.pointerId
+    pointerId: event.pointerId,
+    offset: { dx: 0, dy: 0 }
   }
   try {
     svgEl.value?.setPointerCapture(event.pointerId)
   } catch {
     // 同上:忽略 capture 失败
   }
+  ui.dragging = true
   window.addEventListener('pointermove', onDragMove)
   window.addEventListener('pointerup', onDragEnd)
   window.addEventListener('pointercancel', onDragEnd)
+}
+/** 拖动期间的 CSS 平移:PDF 位移按当前 viewport 换算成屏幕像素(含旋转变换) */
+function dragTransform(offset: { dx: number; dy: number }): string {
+  const vp = props.viewport
+  if (!vp) return ''
+  const zero = pdfPointToScreen(vp, { x: 0, y: 0 })
+  const shifted = pdfPointToScreen(vp, { x: offset.dx, y: offset.dy })
+  return `translate(${shifted.x - zero.x}px, ${shifted.y - zero.y}px)`
 }
 
 /** 位移一个注释(按类型走几何点或 bbox) */
@@ -349,9 +364,8 @@ function applyDragMove(event: PointerEvent): void {
   const before = state.before
 
   if (state.mode === 'move') {
-    for (const mover of state.movers) {
-      patchAnnotation(mover.id, shiftAnnotation(mover, dx, dy))
-    }
+    // 只更新累计位移:AnnotationShape 用它做 CSS 平移,模型与 points 字符串到松手才重算
+    state.offset = { dx, dy }
     return
   }
 
@@ -399,11 +413,18 @@ function onDragEnd(): void {
   // 冲刷后的遗留帧不再跑(commitCommands 以最终模型为准)
   pendingDragEvent = null
   drag.value = null
+  ui.dragging = false
   if (!state) return
   try {
     svgEl.value?.releasePointerCapture(state.pointerId)
   } catch {
     // 指针已释放(如 pointercancel 后):忽略
+  }
+  // move 模式拖动期间没写模型:这里一次性落值(平移才进模型/历史/导出)
+  if (state.mode === 'move' && (state.offset.dx !== 0 || state.offset.dy !== 0)) {
+    for (const mover of state.movers) {
+      patchAnnotation(mover.id, shiftAnnotation(mover, state.offset.dx, state.offset.dy))
+    }
   }
   commitAnnotations(state.movers)
 }
@@ -568,6 +589,7 @@ onBeforeUnmount(() => {
       :key="ann.id"
       :ann="ann"
       :viewport="viewport"
+      :translate="drag?.mode === 'move' && drag.movers.some((m) => m.id === ann.id) ? dragTransform(drag.offset) : undefined"
       :style="{ pointerEvents: ui.tool === 'select' ? 'auto' : 'none', cursor: ui.tool === 'select' ? 'move' : 'default' }"
       @pointerdown="onAnnPointerDown(ann, $event)"
       @dblclick="onAnnDoubleClick(ann)"

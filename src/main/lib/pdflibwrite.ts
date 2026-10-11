@@ -58,9 +58,12 @@ export interface AnnotWriteContext {
   font: PDFFont
   resolveImage: (imgId: string, refPath: string) => Promise<Buffer | undefined>
   warnings: string[]
+  /** 已嵌入图片(键 = imgId||refPath):同一图片在多页出现时只 embed 一次,
+   * 产物不再随出现次数线性膨胀 */
+  images: Map<string, PDFImage>
 }
 
-function hexToRgb(hex: string): { r: number; g: number; b: number } {
+export function hexToRgb(hex: string): { r: number; g: number; b: number } {
   const value = hex.replace('#', '')
   const int = Number.parseInt(value.length === 3 ? value.replace(/./g, (c) => c + c) : value, 16)
   return {
@@ -91,6 +94,23 @@ export function findCjkFontFile(): string | null {
     }
   }
   return null
+}
+
+export const PDF_SAVE_TIMEOUT_MS = 120_000
+
+/**
+ * doc.save() 的兜底:字体子集化/对象序列化抛在 fontkit 的 nextTick 里时,save 的
+ * promise 既不 resolve 也不 reject(表现为 IPC 永远没有回音),只能靠一个下限远高于
+ * 正常耗时的时限把它转成可读错误。ponytail: 120s 固定时限,超过再按文档大小折算。
+ */
+export async function savePdf(doc: PDFDocument): Promise<Uint8Array> {
+  const pending = doc.save({ useObjectStreams: false })
+  const outcome = await new Promise<Uint8Array | Error>((resolve) => {
+    pending.then((bytes) => resolve(bytes), (err) => resolve(err))
+    setTimeout(() => resolve(new Error('PDF 保存超时(内部异常导致保存流程没有结束)')), PDF_SAVE_TIMEOUT_MS)
+  })
+  if (outcome instanceof Error) throw outcome
+  return outcome
 }
 
 /**
@@ -131,25 +151,39 @@ export function needsCjkFont(annotations: Annotation[]): boolean {
 }
 
 /**
- * 这次保存有没有表单值真的会落到字段上?
+ * 这次保存有没有表单值真的会用中文字体画字?
  * 字段找不到时 applyFormValues 会直接跳过(只留一条 warning),字体一个字形都不会用上 ——
- * 所以「有 formValues」不能作为"需要中文字体"的依据(理由同上:零字形 + CFF 字体必崩)。
+ * 所以「有 formValues」不能作为"需要中文字体"的依据(理由同 needsCjkFont:零字形 + CFF 字体必崩)。
  */
-function willWriteFormValue(doc: PDFDocument, values: Record<string, FormValue>): boolean {
+
+/** 字段解析:applyFormValues 与 willWriteFormValue 共用,避免「判据说要写、实际没写」的漂移 */
+function resolveFormField(fields: PDFField[], name: string): PDFField | undefined {
+  const exact = fields.find((field) => field.getName() === name)
+  if (exact) return exact
+  const matches = fields.filter((field) => field.getName().endsWith(`.${name}`))
+  return matches.length === 1 ? matches[0] : undefined
+}
+
+// 外观更新会真的用传入字体画字的只有文本域/下拉/列表(复选框/单选组忽略 font 参数,只画矢量)
+const drawsTextWithFont = (field: PDFField): boolean =>
+  field instanceof PDFTextField || field instanceof PDFDropdown || field instanceof PDFOptionList
+
+export function willWriteFormValue(doc: PDFDocument, values: Record<string, FormValue>): boolean {
   const entries = Object.entries(values)
   if (entries.length === 0) return false
-  let names: string[]
+  let fields: PDFField[]
   try {
-    names = doc.getForm().getFields().map((field) => field.getName())
+    fields = doc.getForm().getFields()
   } catch {
     // 表单读不出来时 applyFormValues 同样会跳过(只记 warning)
     return false
   }
-  if (names.length === 0) return false
-  // 只有字符串值会真的画出文字(布尔是复选框,外观由 pdf-lib 自己的字形画)
-  return entries.some(
-    ([name, value]) => typeof value === 'string' && value !== '' && names.some((n) => n === name || n.endsWith(`.${name}`))
-  )
+  if (fields.length === 0) return false
+  return entries.some(([name, value]) => {
+    if (typeof value !== 'string' || value === '') return false
+    const field = resolveFormField(fields, name)
+    return field !== undefined && drawsTextWithFont(field)
+  })
 }
 
 async function embedCjkFont(doc: PDFDocument, warnings: string[]): Promise<PDFFont | null> {
@@ -159,7 +193,12 @@ async function embedCjkFont(doc: PDFDocument, warnings: string[]): Promise<PDFFo
     return null
   }
   try {
-    return await doc.embedFont(bytes, { subset: true })
+    const font = await doc.embedFont(bytes, { subset: true })
+    // 一个字形都不用的 CFF 子集会让 fontkit 在 nextTick 里抛 RangeError(见 needsCjkFont 注释),
+    // 异常逃出 save() 的 promise → 保存永远没有回音。主动包含一个空格字形后,即使判据漏判,
+    // 子集也至少有一个真字形:正确性不再依赖「谁会写字」的判据,判据只决定性能(是否读 9.75MB 字体)。
+    await font.encodeText(' ')
+    return font
   } catch (err) {
     warnings.push(`中文字体嵌入失败:${(err as Error).message}`)
     return null
@@ -176,7 +215,7 @@ export async function createAnnotContext(
   doc.registerFontkit(fontkit)
   const cjkFont = options.skipCjkFont ? null : await embedCjkFont(doc, warnings)
   const font = cjkFont ?? (await doc.embedFont(StandardFonts.Helvetica))
-  return { ctx: { font, resolveImage, warnings }, cjkFont }
+  return { ctx: { font, resolveImage, warnings, images: new Map() }, cjkFont }
 }
 
 /**
@@ -191,7 +230,7 @@ class MissingCjkFontError extends Error {}
  * (换行测量、fitFontSize)同样先做编码,所以守卫包住整段绘制。
  * 非编码异常原样抛出,不掩盖其他问题;纯 ASCII 内容不触发,行为与从前一致。
  */
-function withCjkFont<T>(draw: () => T): T {
+export function withCjkFont<T>(draw: () => T): T {
   try {
     return draw()
   } catch (err) {
@@ -386,6 +425,13 @@ async function drawAnnotation(
       return
     }
     case 'image': {
+      // 同一张图(键 imgId||refPath)只 embed 一次:重复嵌入会让产物随出现次数线性膨胀
+      const cacheKey = ann.imgId || ann.refPath
+      const embedded = ctx.images.get(cacheKey)
+      if (embedded) {
+        page.drawImage(embedded, { x: box.x, y: box.y, width: box.w, height: box.h, opacity: ann.opacity })
+        return
+      }
       const buffer = await ctx.resolveImage(ann.imgId, ann.refPath)
       if (!buffer) {
         ctx.warnings.push(`图片注释丢失(找不到文件:${ann.refPath})`)
@@ -398,13 +444,8 @@ async function drawAnnotation(
         ctx.warnings.push(`不支持的图片格式:${ann.refPath}`)
         return
       }
-      page.drawImage(image, {
-        x: box.x,
-        y: box.y,
-        width: box.w,
-        height: box.h,
-        opacity: ann.opacity
-      })
+      ctx.images.set(cacheKey, image)
+      page.drawImage(image, { x: box.x, y: box.y, width: box.w, height: box.h, opacity: ann.opacity })
       return
     }
     case 'stamp':
@@ -734,12 +775,7 @@ function applyFormValues(
   if (fields.length === 0) return
 
   for (const [name, value] of entries) {
-    let field = fields.find((f) => f.getName() === name)
-    if (!field) {
-      // 层级字段名兜底:后缀唯一匹配
-      const matches = fields.filter((f) => f.getName().endsWith(`.${name}`))
-      if (matches.length === 1) field = matches[0]
-    }
+    const field = resolveFormField(fields, name)
     if (!field) {
       warnings.push(`表单字段未找到:${name}`)
       continue
@@ -768,6 +804,6 @@ export async function writeAnnotations(buffer: Buffer, options: WriteOptions): P
   await replaceOwnAnnotations(doc, options.annotations, (page) => page, ctx)
   applyFormValues(doc, options.formValues, cjkFont, warnings)
 
-  const bytes = await doc.save({ useObjectStreams: false })
+  const bytes = await savePdf(doc)
   return { bytes: Buffer.from(bytes), warnings }
 }

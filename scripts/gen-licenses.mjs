@@ -1,7 +1,8 @@
 // 生成随包第三方许可清单:Vite 打进 bundle 的运行时依赖 + electron 运行时 + 内置字体/CMaps
 // 注:所有包都在 devDependencies(依赖全部由 electron-vite 打进 out/,asar 不含 node_modules,
 // 见 README「10. 构建」),因此按「是否打进产物」界定,不再看 dependencies/dev 标记。
-import { readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -148,7 +149,13 @@ const unique = entries
 
 const missing = unique.filter((entry) => !entry.text)
 const outPath = join(root, 'src', 'renderer', 'public', 'third-party-notices.json')
-writeFileSync(outPath, `${JSON.stringify({ entries: unique }, null, 2)}\n`, 'utf8')
-console.log(
-  `[licenses] 已生成 ${outPath}(${unique.length} 条${missing.length ? `;无许可文本:${missing.map((e) => e.name).join(', ')}` : ''})`
-)
+const content = `${JSON.stringify({ entries: unique }, null, 2)}\n`
+// 内容没变就不写盘:这文件被 git 跟踪,内容稳定让 CI 与本地 diff 保持干净
+if (existsSync(outPath) && readFileSync(outPath, 'utf8') === content) {
+  console.log(`[licenses] 已是最新,跳过(${unique.length} 条)`)
+} else {
+  writeFileSync(outPath, content, 'utf8')
+  console.log(
+    `[licenses] 已生成 ${outPath}(${unique.length} 条${missing.length ? `;无许可文本:${missing.map((e) => e.name).join(', ')}` : ''})`
+  )
+}

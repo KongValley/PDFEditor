@@ -2,6 +2,14 @@
 const t = window.__pdfEditorTest
 if (!t) throw new Error('测试 API 未安装')
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+const until = async (cond, timeout = 15000) => {
+  const t0 = Date.now()
+  while (Date.now() - t0 < timeout) {
+    if (cond()) return true
+    await sleep(50)
+  }
+  return false
+}
 const check = (name, cond, extra) => {
   if (!cond) throw new Error(`断言失败: ${name} ${extra === undefined ? '' : JSON.stringify(extra)}`)
 }
@@ -18,11 +26,12 @@ const visible = () => [...document.querySelectorAll('.page-wrap')].filter((el) =
 const btn = (label) => [...document.querySelectorAll('.status-bar button')].find((b) => b.textContent.trim() === label)
 
 await t.openPath(`${__smokeRoot}/samples/sample-zh.pdf`)
-await sleep(2500)
+if (!(await until(() => !!document.querySelector('[data-page="1"] .ann-layer')))) throw new Error('首页未渲染')
 
 /* ---------- 1. 正常切双页:可见页全部有内容 ---------- */
 btn('双页').click()
-await sleep(4000)
+if (!(await until(() => t.docState.viewMode === 'two' && visible().length >= 2 && visible().every((el) => ink(el) > 0))))
+  throw new Error('双页可见页未渲染: ' + JSON.stringify(visible().map((el) => `${el.dataset.page}:${ink(el)}`)))
 check('双页模式生效', t.docState.viewMode === 'two', t.docState.viewMode)
 check('双页渲染出两行(1-2 / 3)', document.querySelectorAll('.spread-row').length === 2)
 const vis1 = visible()
@@ -38,16 +47,27 @@ check(
 // 用 stallNext 精确制造"某一页渲染停摆",而不是把 timeoutMs 压到 1ms ——
 // 后者会让同屏每一页都必然超时,断言结果随机器负载漂移(step17 已覆盖通用重试链路)
 btn('连续').click()
-await sleep(2500)
+if (!(await until(() => t.docState.viewMode === 'continuous'))) throw new Error('未切回连续模式')
 // 本步的等待预算按 8s 看门狗 + 400/800/1200ms 退避算;慢机自适应放宽会超出该预算,
 // 用 overrideMs 固定成默认值,让断言只测"超时→重试→自愈"这条链路本身
 t.renderWatchdog.overrideMs = 8000
+const beforeTimeouts = t.renderWatchdog.timeouts
 t.renderWatchdog.stallNext = true // 下一次渲染模拟停摆:真实结果忽略,靠看门狗超时后重试自愈
 btn('双页').click()
-await sleep(14000) // 等 8s 看门狗超时 + 400/800/1200ms 退避重试链跑完
+// 双页切换会同时重排多页,可能有多路渲染竞争 stallNext;只认「看门狗确实抓到一次超时」,
+// 而不是「stallNext 被消费」(后者可能被没有可见页面的渲染吃掉)
+if (
+  !(
+    await until(
+      () => t.renderWatchdog.timeouts > beforeTimeouts && visible().length > 0 && visible().every((el) => ink(el) > 0),
+      30000
+    )
+  )
+)
+  throw new Error('停摆后可见页未自愈: ' + JSON.stringify(visible().map((el) => `${el.dataset.page}:${ink(el)}`)))
 t.renderWatchdog.overrideMs = 0
 const vis2 = visible()
-check('超时计数已记录', t.renderWatchdog.timeouts > 0, t.renderWatchdog.timeouts)
+check('超时计数已记录', t.renderWatchdog.timeouts > beforeTimeouts, t.renderWatchdog.timeouts)
 check(
   '瞬态超时后可见页最终有内容(不再永久白页)',
   vis2.length > 0 && vis2.every((el) => ink(el) > 0),
@@ -56,7 +76,7 @@ check(
 
 /* ---------- 3. 双页下滚动:可见页始终有内容 ---------- */
 t.scrollToPage(3)
-await sleep(3500)
+if (!(await until(() => visible().length > 0 && visible().every((el) => ink(el) > 0))) ) throw new Error('滚动后可见页未渲染')
 const vis3 = visible()
 check(
   '双页滚动后可见页有内容',

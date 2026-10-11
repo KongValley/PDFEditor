@@ -3,6 +3,15 @@ const t = window.__pdfEditorTest
 if (!t) throw new Error('测试 API 未安装')
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+/** 有界轮询:等"下一步断言要用的值"就绪,而不是赌一个固定等待(固定 sleep 是慢机被强杀的主因) */
+const until = async (cond, timeout = 6000) => {
+  const t0 = Date.now()
+  while (Date.now() - t0 < timeout) {
+    if (cond()) return true
+    await sleep(50)
+  }
+  return false
+}
 const check = (name, cond, extra) => {
   if (!cond) throw new Error(`断言失败: ${name} ${extra === undefined ? '' : JSON.stringify(extra)}`)
 }
@@ -22,11 +31,11 @@ check('maxPages 输出 2 个文件', maxRes[0].outputs.length === 2, maxRes[0].o
 check('首轮首块名', maxRes[0].outputs[0].endsWith('sample-rotated-1.pdf'), maxRes[0].outputs)
 
 await t.openPath(maxRes[0].outputs[0])
-await sleep(1200)
+if (!(await until(() => t.docState.pageCount > 0, 8000))) throw new Error('openPath 未就绪: '+(maxRes[0].outputs[0]))
 check('第 1 块 1 页', t.docState.pageCount === 1, t.docState.pageCount)
 
 await t.openPath(maxRes[0].outputs[1])
-await sleep(1200)
+if (!(await until(() => t.docState.pageCount > 0, 8000))) throw new Error('openPath 未就绪: '+(maxRes[0].outputs[1]))
 check('第 2 块 1 页', t.docState.pageCount === 1, t.docState.pageCount)
 const rotatedBox = t.docState.pageBoxes[0]
 check('第 2 块为旋转页', Math.round(rotatedBox.w) === 842 && Math.round(rotatedBox.h) === 595, rotatedBox)
@@ -41,7 +50,7 @@ check(
 check('重名自动改名 · 次块', againRes[0].outputs[1].endsWith('sample-rotated-2-1.pdf'), againRes[0].outputs)
 check('两轮路径不同', againRes[0].outputs[0] !== maxRes[0].outputs[0])
 await t.openPath(againRes[0].outputs[0])
-await sleep(1200)
+if (!(await until(() => t.docState.pageCount > 0, 8000))) throw new Error('openPath 未就绪: '+(againRes[0].outputs[0]))
 check('改名产物 1 页', t.docState.pageCount === 1, t.docState.pageCount)
 
 /* ---------- 2. pdf:splitTasks · ranges ---------- */
@@ -59,16 +68,16 @@ const rangesOne = await window.pdfAPI.invoke('pdf:splitTasks', {
 check('ranges 一段 → 1 文件', rangesOne[0].ok === true && rangesOne[0].outputs.length === 1, rangesOne[0])
 
 await t.openPath(rangesOne[0].outputs[0])
-await sleep(1200)
+if (!(await until(() => t.docState.pageCount > 0, 8000))) throw new Error('openPath 未就绪: '+(rangesOne[0].outputs[0]))
 check('ranges 产物 2 页', t.docState.pageCount === 2, t.docState.pageCount)
 
 /* ---------- 3. docId 内存态分支 ---------- */
 
 await t.openPath(`${__smokeRoot}/samples/sample-zh.pdf`)
-await sleep(1500)
+if (!(await until(() => t.docState.pageCount > 0, 8000))) throw new Error('openPath 未就绪: '+(`${__smokeRoot}/samples/sample-zh.pdf`))
 check('初始 3 页', t.docState.pageCount === 3, t.docState.pageCount)
 await t.deletePages([0])
-await sleep(700)
+if (!(await until(() => t.docState.pageCount === 2, 8000))) throw new Error('删除后页数未变: ' + t.docState.pageCount)
 check('删除后 2 页', t.docState.pageCount === 2, t.docState.pageCount)
 
 const memRes = await window.pdfAPI.invoke('pdf:splitTasks', {
@@ -87,7 +96,7 @@ const memRes = await window.pdfAPI.invoke('pdf:splitTasks', {
 check('内存态拆分成功', memRes[0].ok === true, memRes[0])
 
 await t.openPath(memRes[0].outputs[0])
-await sleep(1200)
+if (!(await until(() => t.docState.pageCount > 0, 8000))) throw new Error('openPath 未就绪: '+(memRes[0].outputs[0]))
 check('内存态产物 2 页(非磁盘 3 页)', t.docState.pageCount === 2, t.docState.pageCount)
 
 /* ---------- 4. 合并对话框 E2E + 重名自动改名 ---------- */
@@ -96,11 +105,11 @@ const mergeDir = `${__smokeRoot}/tmp`
 const mergeName = `smoke-merge-${stamp}`
 
 await t.openPath(`${__smokeRoot}/samples/sample-zh.pdf`)
-await sleep(1500)
+if (!(await until(() => t.docState.pageCount > 0, 8000))) throw new Error('openPath 未就绪: '+(`${__smokeRoot}/samples/sample-zh.pdf`))
 check('合并前 3 页', t.docState.pageCount === 3, t.docState.pageCount)
 
 const first = t.mergePdfs()
-await sleep(400)
+await until(() => !!document.querySelector('.dialog'))
 check('合并对话框打开', !!document.querySelector('.dialog'))
 t.mergeDialogState.rows.push({
   kind: 'file',
@@ -118,19 +127,18 @@ const mergePrimary = document.querySelector('.dialog button.primary')
 check('开始合并可用', !!mergePrimary && mergePrimary.disabled === false)
 mergePrimary.click()
 await first
-await sleep(1200)
 check('合并后 4 页', t.docState.pageCount === 4, t.docState.pageCount)
 check('切到合并结果', (t.docState.filePath ?? '').endsWith(`${mergeName}.pdf`), t.docState.filePath)
 
 await t.openPath(`${mergeDir}/${mergeName}.pdf`)
-await sleep(1300)
+if (!(await until(() => t.docState.pageCount > 0, 8000))) throw new Error('openPath 未就绪: '+(`${mergeDir}/${mergeName}.pdf`))
 check('合并产物 4 页', t.docState.pageCount === 4, t.docState.pageCount)
 
 // 同名再合并一次 → -1 后缀
 await t.openPath(`${__smokeRoot}/samples/sample-zh.pdf`)
-await sleep(1500)
+if (!(await until(() => t.docState.pageCount > 0, 8000))) throw new Error('openPath 未就绪: '+(`${__smokeRoot}/samples/sample-zh.pdf`))
 const second = t.mergePdfs()
-await sleep(400)
+await new Promise((r) => setTimeout(r, 0))
 t.mergeDialogState.rows.push({
   kind: 'file',
   path: rotated,
@@ -147,19 +155,18 @@ const mergePrimary2 = document.querySelector('.dialog button.primary')
 check('第二次开始合并可用', !!mergePrimary2 && mergePrimary2.disabled === false)
 mergePrimary2.click()
 await second
-await sleep(1200)
 check('重名自动改名 · 合并', (t.docState.filePath ?? '').endsWith(`${mergeName}-1.pdf`), t.docState.filePath)
 await t.openPath(`${mergeDir}/${mergeName}-1.pdf`)
-await sleep(1300)
+if (!(await until(() => t.docState.pageCount > 0, 8000))) throw new Error('openPath 未就绪: '+(`${mergeDir}/${mergeName}-1.pdf`))
 check('改名合并产物 4 页', t.docState.pageCount === 4, t.docState.pageCount)
 
 /* ---------- 5. 输出目录不存在 → 自动创建 ---------- */
 
 await t.openPath(`${__smokeRoot}/samples/sample-zh.pdf`)
-await sleep(1500)
+if (!(await until(() => t.docState.pageCount > 0, 8000))) throw new Error('openPath 未就绪: '+(`${__smokeRoot}/samples/sample-zh.pdf`))
 const newDir = `${__smokeRoot}/tmp/merge-newdir-${stamp}`
 const third = t.mergePdfs()
-await sleep(400)
+await new Promise((r) => setTimeout(r, 0))
 t.mergeDialogState.rows.push({
   kind: 'file',
   path: rotated,
@@ -176,31 +183,30 @@ const mergePrimary3 = document.querySelector('.dialog button.primary')
 check('新建目录:开始合并可用', !!mergePrimary3 && mergePrimary3.disabled === false)
 mergePrimary3.click()
 await third
-await sleep(1200)
 check(
   '新建目录:合并成功',
   (t.docState.filePath ?? '').endsWith(`smoke-newdir-${stamp}.pdf`),
   t.docState.filePath
 )
 await t.openPath(`${newDir}/smoke-newdir-${stamp}.pdf`)
-await sleep(1300)
+if (!(await until(() => t.docState.pageCount > 0, 8000))) throw new Error('openPath 未就绪: '+(`${newDir}/smoke-newdir-${stamp}.pdf`))
 check('新建目录:产物可重开 4 页', t.docState.pageCount === 4, t.docState.pageCount)
 
 // 导出到不存在的目录(docops export 分支 mkdir)
 const exportDir = `${__smokeRoot}/tmp/export-newdir-${stamp}`
 await t.exportPages([0], `${exportDir}/x.pdf`)
-await sleep(400)
+await new Promise((r) => setTimeout(r, 0))
 await t.openPath(`${exportDir}/x.pdf`)
-await sleep(1200)
+if (!(await until(() => t.docState.pageCount > 0, 8000))) throw new Error('openPath 未就绪: '+(`${exportDir}/x.pdf`))
 check('导出新建目录产物 1 页', t.docState.pageCount === 1, t.docState.pageCount)
 
 /* ---------- 6. 拆分对话框 E2E + uniquePath 探针 ---------- */
 
 await t.openPath(`${__smokeRoot}/samples/sample-zh.pdf`)
-await sleep(1500)
+if (!(await until(() => t.docState.pageCount > 0, 8000))) throw new Error('openPath 未就绪: '+(`${__smokeRoot}/samples/sample-zh.pdf`))
 const splitGuiDir = `${__smokeRoot}/tmp/split-gui-${stamp}`
 const splitPending = t.splitPdfs()
-await sleep(400)
+await until(() => !!document.querySelector('.dialog'))
 check('拆分对话框打开', !!document.querySelector('.dialog'))
 
 t.splitDialogState.rows.push({
@@ -221,10 +227,9 @@ const splitPrimary = document.querySelector('.dialog button.primary')
 check('开始拆分可用', !!splitPrimary && splitPrimary.disabled === false)
 splitPrimary.click()
 await splitPending
-await sleep(1200)
 
 await t.openPath(`${splitGuiDir}/sample-rotated-1.pdf`)
-await sleep(1200)
+if (!(await until(() => t.docState.pageCount > 0, 8000))) throw new Error('openPath 未就绪: '+(`${splitGuiDir}/sample-rotated-1.pdf`))
 check('拆分产物 1 页', t.docState.pageCount === 1, t.docState.pageCount)
 
 const probe = await window.pdfAPI.invoke('app:uniquePath', { dir: splitGuiDir, name: 'sample-rotated-1.pdf' })
@@ -233,9 +238,9 @@ check('uniquePath 探针 -1 后缀', probe.path.endsWith('sample-rotated-1-1.pdf
 /* ---------- 7. 拆分失败提示带文件名 ---------- */
 
 await t.openPath(`${__smokeRoot}/samples/sample-zh.pdf`)
-await sleep(1500)
+if (!(await until(() => t.docState.pageCount > 0, 8000))) throw new Error('openPath 未就绪: '+(`${__smokeRoot}/samples/sample-zh.pdf`))
 const failPending = t.splitPdfs()
-await sleep(400)
+await new Promise((r) => setTimeout(r, 0))
 t.splitDialogState.rows.push({
   kind: 'file',
   path: `${__smokeRoot}/tmp/nodir-${stamp}/no-such.pdf`,
@@ -254,7 +259,6 @@ const failPrimary = document.querySelector('.dialog button.primary')
 check('失败场景开始拆分可用', !!failPrimary && failPrimary.disabled === false)
 failPrimary.click()
 await failPending
-await sleep(600)
 check(
   '失败提示带文件名',
   t.ui.toast?.kind === 'error' && (t.ui.toast?.text ?? '').includes('no-such.pdf'),
@@ -269,14 +273,13 @@ check('openFolder 失败返回 ok:false', openFail.ok === false, openFail)
 /* ---------- 9. 取消不生效 ---------- */
 
 await t.openPath(`${__smokeRoot}/samples/sample-zh.pdf`)
-await sleep(1500)
+if (!(await until(() => t.docState.pageCount > 0, 8000))) throw new Error('openPath 未就绪: '+(`${__smokeRoot}/samples/sample-zh.pdf`))
 const cancelPending = t.mergePdfs()
-await sleep(400)
+await new Promise((r) => setTimeout(r, 0))
 const cancelButton = document.querySelector('.dialog .actions button')
 check('对话框存在可取消', !!cancelButton)
 cancelButton.click()
 await cancelPending
-await sleep(200)
 check('取消后对话框关闭', !document.querySelector('.dialog'))
 check('取消后页数不变', t.docState.pageCount === 3, t.docState.pageCount)
 

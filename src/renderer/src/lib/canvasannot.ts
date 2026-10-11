@@ -8,7 +8,9 @@ import type { Annotation } from '@shared/types'
 import { pdfPointToScreen, pdfRectToScreen } from './geo'
 import { fitFontSize, pointsToMm, wrapText } from '@shared/text'
 
-/** dataUrl → 已解码图片(未加载完成时先跳过,下次导出即命中) */
+/** dataUrl → 已解码图片(未加载完成时先跳过,下次导出即命中)。
+ * 上限 24 条:解码位图一张可达数十 MB,无界缓存会在长会话里把内存吃穿 */
+const IMAGE_CACHE_MAX = 24
 const imageCache = new Map<string, HTMLImageElement>()
 
 function getImage(dataUrl: string): HTMLImageElement | null {
@@ -17,8 +19,18 @@ function getImage(dataUrl: string): HTMLImageElement | null {
     image = new Image()
     image.src = dataUrl
     imageCache.set(dataUrl, image)
+    while (imageCache.size > IMAGE_CACHE_MAX) {
+      const oldest = imageCache.keys().next().value
+      if (oldest === undefined) break
+      imageCache.delete(oldest)
+    }
   }
   return image.complete && image.naturalWidth > 0 ? image : null
+}
+
+/** 换文档/关闭文档时清空解码缓存与 base64 常驻,避免跨文档累积 */
+export function clearImageCache(): void {
+  imageCache.clear()
 }
 
 function hexToRgba(hex: string, alpha: number): string {

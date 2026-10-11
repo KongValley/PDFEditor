@@ -6,7 +6,7 @@ import { pdfPointToScreen, pdfRectToScreen } from '../lib/geo'
 import { annotState } from '../store/annotations'
 import { fitFontSize, pointsToMm, wrapText } from '@shared/text'
 
-const props = defineProps<{ ann: Annotation; viewport: PageViewport }>()
+const props = defineProps<{ ann: Annotation; viewport: PageViewport; translate?: string }>()
 
 const vp = computed(() => props.viewport)
 const scale = computed(() => props.viewport.scale)
@@ -94,7 +94,7 @@ const imageHref = computed(() => (props.ann.kind === 'image' ? annotState.imageU
 </script>
 
 <template>
-  <g class="shape">
+  <g class="shape" :transform="translate">
     <template v-if="ann.kind === 'highlight'">
       <rect :x="box.x" :y="box.y" :width="box.w" :height="box.h" :fill="ann.color" :fill-opacity="ann.opacity" />
     </template>

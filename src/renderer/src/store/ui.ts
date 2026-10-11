@@ -40,12 +40,41 @@ interface UiState {
   toast: ToastMessage | null
   /** 正在执行的长操作标签(如「拆分中 3/400」);非 null 时相关入口禁用 */
   busy: string | null
+  /** 批注拖拽进行中(move 未提交):快捷键与保存入口据此早退,避免漏掉最后一帧位移 */
+  dragging: boolean
   selectedAnnotationIds: string[]
   /** 缩略图栏显示状态(Ctrl+B 切换) */
   showThumbnails: boolean
   /** 右侧面板显示状态(Ctrl+Shift+B 切换) */
   showRightPanel: boolean
   pageMenu: PageMenuState
+  problems: ProblemEntry[]
+  problemsOpen: boolean
+  pageNumberDialog: { open: boolean }
+  watermarkDialog: { open: boolean }
+}
+
+/** 供「问题」面板展示的失败/警告记录(离线打包后没有控制台,这里就是唯一的明细入口) */
+export interface ProblemEntry {
+  id: string
+  at: number
+  title: string
+  detail?: string
+  retry?: () => Promise<void>
+}
+
+/** 记录一条问题;超上限丢弃最旧(保留最近 20 条) */
+export function pushProblem(entry: Omit<ProblemEntry, 'id' | 'at'>): void {
+  ui.problems.push({
+    id: `${Date.now()}-${Math.floor(Math.random() * 1e6)}`,
+    at: Date.now(),
+    ...entry
+  })
+  while (ui.problems.length > 20) ui.problems.shift()
+}
+
+export function clearProblems(): void {
+  ui.problems = []
 }
 
 export const ui = reactive<UiState>({
@@ -56,10 +85,15 @@ export const ui = reactive<UiState>({
   sideTab: 'annotations',
   toast: null,
   busy: null,
+  dragging: false,
   selectedAnnotationIds: [],
   showThumbnails: true,
   showRightPanel: true,
-  pageMenu: { open: false, page: 1, x: 0, y: 0 }
+  pageMenu: { open: false, page: 1, x: 0, y: 0 },
+  problems: [],
+  problemsOpen: false,
+  pageNumberDialog: { open: false },
+  watermarkDialog: { open: false }
 })
 
 let toastTimer: number | undefined
@@ -70,6 +104,25 @@ export function showToast(text: string, kind: 'info' | 'error' = 'info'): void {
   toastTimer = window.setTimeout(() => {
     ui.toast = null
   }, 3600)
+}
+
+/**
+ * 长操作统一闸门:标签期间任何同类操作直接拒绝(返回 null),避免两批任务并发写同一目标。
+ * 返回 null 表示“因已有操作在跑而未执行”。
+ * 放在这里(而非 actions.ts)的原因:actions 与 pagexport 互相引用,闸门若在 actions,
+ * pagexport 只能反向 import actions 形成循环,ESM 下初始化顺序会漏挂函数。
+ */
+export async function runBusy<T>(label: string, fn: () => Promise<T>): Promise<T | null> {
+  if (ui.busy) {
+    showToast('上一操作尚未完成,请稍候', 'error')
+    return null
+  }
+  ui.busy = label
+  try {
+    return await fn()
+  } finally {
+    ui.busy = null
+  }
 }
 
 export function setTool(tool: Tool): void {

@@ -7,6 +7,7 @@ import { basename } from 'node:path'
 import { nativeImage } from 'electron'
 import { PDFDocument } from 'pdf-lib'
 import { mimeOf } from './images'
+import { savePdf } from './pdflibwrite'
 
 /** 页面尺寸模式:'image' = 按图像像素 96 DPI 换算;'a4' = A4(方向随图像长宽) */
 export type ImagePageMode = 'image' | 'a4'
@@ -95,6 +96,6 @@ export async function imagesToPdf(
   }
   const pages = doc.getPageCount()
   if (pages === 0) return { pages, errors, bytes: null }
-  const bytes = await doc.save({ useObjectStreams: false })
+  const bytes = await savePdf(doc)
   return { pages, errors, bytes }
 }

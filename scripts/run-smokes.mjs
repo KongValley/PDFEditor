@@ -1,6 +1,6 @@
 // 依次运行全部冒烟脚本(每个脚本使用独立 user-data-dir,避免多实例缓存争用导致抖动)
 import { spawnSync } from 'node:child_process'
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -129,8 +129,10 @@ const STEP_ENV = {
 }
 
 let failed = 0
+const stepTimings = {}
 for (const script of scripts) {
   const name = script.replace(/\.js$/, '')
+  const stepStartedAt = Date.now()
   const outFile = join(tmpDir, `smoke-${name}.json`)
   // 该步 Electron 的完整 stdout/stderr(PASS/FAIL 之外的全部线索:渲染层 console 转发、
   // [stepNN] 阶段标记、主进程 warn/error)。失败时打尾部,本地与 CI 都能直接看到失败现场。
@@ -177,7 +179,9 @@ for (const script of scripts) {
     }
   }
   if (!report.ok) failed++
-  console.log(`${report.ok ? 'PASS' : 'FAIL'} ${name}${report.ok ? '' : ` - ${report.error}`}`)
+  const stepMs = Date.now() - stepStartedAt
+  stepTimings[name] = stepMs
+  console.log(`${report.ok ? 'PASS' : 'FAIL'} ${name} (${stepMs}ms)${report.ok ? '' : ` - ${report.error}`}`)
   if (!report.ok) {
     for (const line of readFileSync(logFile, 'utf8').split('\n').filter(Boolean).slice(-15)) {
       console.log(`    | ${line}`)
@@ -192,5 +196,11 @@ for (const script of scripts) {
   }
 }
 
+writeFileSync(join(tmpDir, 'smoke-timings.json'), `${JSON.stringify(stepTimings, null, 2)}\n`, 'utf8')
+const slowest = Object.entries(stepTimings)
+  .sort((a, b) => b[1] - a[1])
+  .slice(0, 3)
+  .map(([name, ms]) => `${name}=${ms}ms`)
+console.log(`耗时最长:${slowest.join('、')}(全部见 tmp/smoke-timings.json)`)
 console.log(failed === 0 ? `\n全部 ${scripts.length} 项冒烟通过` : `\n${failed}/${scripts.length} 项失败`)
 process.exit(failed === 0 ? 0 : 1)

@@ -68,14 +68,14 @@ function pick(dir, re) {
 }
 
 const nodeFiles = ['main/index.js', 'preload/index.js'].map((p) => join(outDir, p))
-const chromeFiles = [...pick('renderer/assets', /^index-.*\.js$/), ...pick('renderer/assets', /^pdf\.worker\.min-.*\.js$/)]
-const cssFiles = pick('renderer/assets', /^index-.*\.css$/)
+// 对话框已改 defineAsyncComponent 按需分包:扫描面必须是 assets 下全部 js/css,
+// 写死 index-*.js 会静默漏掉新 chunk(兼容门禁等于失效)
+const assetFiles = pick('renderer/assets', /\.(js|css)$/)
+const chromeFiles = assetFiles.filter((f) => f.endsWith('.js'))
+const cssFiles = assetFiles.filter((f) => f.endsWith('.css'))
 
-const missing = [
-  ...nodeFiles.filter((f) => !existsSync(f)),
-  ...(chromeFiles.length === 0 ? [join(outDir, 'renderer/assets/index-*.js')] : []),
-  ...(cssFiles.length === 0 ? [join(outDir, 'renderer/assets/index-*.css')] : [])
-]
+const missing = [...nodeFiles.filter((f) => !existsSync(f))]
+if (assetFiles.length === 0) missing.push(join(outDir, 'renderer/assets/*'))
 if (missing.length > 0) {
   console.error(`缺少构建产物(${missing.map((f) => relative(root, f)).join('、')}),请先运行 npm run build`)
   process.exit(1)

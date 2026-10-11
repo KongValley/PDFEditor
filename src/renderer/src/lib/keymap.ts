@@ -34,6 +34,8 @@ export function useGlobalKeymap(): void {
       return
     }
     if (ctrl && key === 's') {
+      // 拖拽未提交时保存会漏掉最后一帧位移(move 模式松手才写模型)
+      if (ui.dragging) return
       event.preventDefault()
       void (event.shiftKey ? saveDocumentAs() : saveDocument())
       return
@@ -112,6 +114,7 @@ export function useGlobalKeymap(): void {
 
     // 编辑类快捷键:文本框/下拉框聚焦时的让位守卫已上移到 Ctrl+S / F11 之后
     if (ctrl && key === 'z') {
+      if (ui.dragging) return
       event.preventDefault()
       void (event.shiftKey ? redo() : undo())
       return
@@ -124,12 +127,14 @@ export function useGlobalKeymap(): void {
 
     // 页面旋转:当前页(裸 [ / ],与输入框守卫同级,避免输入方括号时误转)
     if (!ctrl && !event.altKey && (event.key === '[' || event.key === ']')) {
+      if (ui.busy !== null) return
       event.preventDefault()
       void rotatePages([docState.currentPage - 1], event.key === '[' ? -90 : 90)
       return
     }
     // 页面操作
     if (ctrl && event.shiftKey && key === 'n') {
+      if (ui.busy !== null) return
       event.preventDefault()
       void insertBlankPage(docState.currentPage - 1)
       return

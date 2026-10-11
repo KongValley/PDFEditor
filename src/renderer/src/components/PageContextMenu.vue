@@ -9,10 +9,11 @@ function close(): void {
   ui.pageMenu.open = false
 }
 
-/** 取当前菜单页(1-based)并关闭菜单,再执行动作 */
+/** 取当前菜单页(1-based)并关闭菜单,再执行动作;长操作进行中不响应(与工具栏按钮一致) */
 function act(fn: (page: number) => void): void {
   const page = ui.pageMenu.page
   close()
+  if (ui.busy !== null) return
   fn(page)
 }
 

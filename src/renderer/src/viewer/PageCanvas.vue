@@ -215,9 +215,11 @@ async function renderPage(attempt = 0): Promise<void> {
       if (mySeq !== seq) return
       viewport.value = vp
       rendered.value = true
+      // 签名必须记本次渲染实际用的 vp:若记完成时刻的全局值,渲染中被改缩放会
+      // 让位图永远停在旧比例(watch 又判它“仍有效”),页面尺寸与位图/覆盖层持续错位
       renderedSig = {
-        scale: docState.scale,
-        rotation: docState.rotationView,
+        scale: vp.scale,
+        rotation: vp.rotation,
         geometry: docState.geometryVersion,
         docId: docState.docId
       }

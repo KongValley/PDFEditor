@@ -6,8 +6,12 @@ import { resolve } from 'node:path'
 export default defineConfig({
   main: {
     build: {
-      target: 'node16'
+      target: 'node16',
+      minify: 'esbuild'
     },
+    // 主进程 uncaughtException 用 err.stack 的首帧名定位 fontkit/pdf-lib 异常
+    // (src/main/index.ts),压缩不能抹掉函数名
+    esbuild: { keepNames: true },
     resolve: {
       alias: {
         '@shared': resolve(__dirname, 'src/shared')
@@ -16,7 +20,8 @@ export default defineConfig({
   },
   preload: {
     build: {
-      target: 'node16'
+      target: 'node16',
+      minify: 'esbuild'
     },
     resolve: {
       alias: {
@@ -27,7 +32,8 @@ export default defineConfig({
   renderer: {
     plugins: [vue()],
     build: {
-      target: 'chrome108'
+      target: 'chrome108',
+      minify: 'esbuild'
     },
     resolve: {
       alias: {
