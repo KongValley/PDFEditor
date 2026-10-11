@@ -10,6 +10,7 @@ const MergeDialog = defineAsyncComponent(() => import('./components/MergeDialog.
 const SplitDialog = defineAsyncComponent(() => import('./components/SplitDialog.vue'))
 const AboutDialog = defineAsyncComponent(() => import('./components/AboutDialog.vue'))
 const PagesRangeDialog = defineAsyncComponent(() => import('./components/PagesRangeDialog.vue'))
+const OrientationDialog = defineAsyncComponent(() => import('./components/OrientationDialog.vue'))
 const ImageToPdfDialog = defineAsyncComponent(() => import('./components/ImageToPdfDialog.vue'))
 const ProblemsDialog = defineAsyncComponent(() => import('./components/ProblemsDialog.vue'))
 const PageNumberDialog = defineAsyncComponent(() => import('./components/PageNumberDialog.vue'))
