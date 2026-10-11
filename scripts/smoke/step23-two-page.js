@@ -54,8 +54,13 @@ t.renderWatchdog.overrideMs = 8000
 const beforeTimeouts = t.renderWatchdog.timeouts
 t.renderWatchdog.stallNext = true // 下一次渲染模拟停摆:真实结果忽略,靠看门狗超时后重试自愈
 btn('双页').click()
-// 双页切换会同时重排多页,可能有多路渲染竞争 stallNext;只认「看门狗确实抓到一次超时」,
-// 而不是「stallNext 被消费」(后者可能被没有可见页面的渲染吃掉)
+// 先等双页切换的 watch 落定(位图按旧 scale 复用),
+// 再改 scale:两者同批调度时 watch 只跑一次,位图仍被判为可用,stallNext 永远等不到消费者
+await sleep(500)
+// A2 修好后位图按内容正确复用:切模式可能命中缓存、根本没有新渲染。
+// 用缩放变更强制可见页真实重渲染,让停摆必然发生
+const stallScale = t.docState.scale
+t.docState.scale = stallScale * 1.01
 if (
   !(
     await until(
@@ -65,6 +70,7 @@ if (
   )
 )
   throw new Error('停摆后可见页未自愈: ' + JSON.stringify(visible().map((el) => `${el.dataset.page}:${ink(el)}`)))
+t.docState.scale = stallScale
 t.renderWatchdog.overrideMs = 0
 const vis2 = visible()
 check('超时计数已记录', t.renderWatchdog.timeouts > beforeTimeouts, t.renderWatchdog.timeouts)

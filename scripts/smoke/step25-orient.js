@@ -114,8 +114,13 @@ check('第 4 页位图已按新方向重绘', !!canvas4 && canvas4.width > 0 && 
   w: canvas4?.width,
   h: canvas4?.height
 })
-const thumb4 = document.querySelector('[data-thumb="4"] canvas')
-check('第 4 页缩略图已重绘', !!thumb4 && thumb4.width > 0, { w: thumb4?.width })
+// 缩略图走最低优先级渲染槽、排在主画布之后:有界轮询等它落定。
+// 只管 w>0 会被「未重绘的旧朝向位图」蒙混过关,必须按新方向(纵向)断言
+const thumb4Now = () => document.querySelector('[data-thumb="4"] canvas')
+if (!(await until(() => { const c = thumb4Now(); return !!c && c.width > 0 && c.height > c.width })))
+  throw new Error('第 4 页缩略图未按新方向重绘: ' + JSON.stringify({ w: thumb4Now()?.width, h: thumb4Now()?.height }))
+const thumb4 = thumb4Now()
+check('第 4 页缩略图已重绘', !!thumb4 && thumb4.height > thumb4.width, { w: thumb4?.width, h: thumb4?.height })
 
 /* ---------- 8. 没有文字层的扫描件:靠全篇行墨迹剖面的共识 ---------- */
 // 夹具(scripts/make-image-orient-sample.mjs):p1-3 图像页正立 | p4 图像页内容转 180°

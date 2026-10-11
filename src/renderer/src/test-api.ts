@@ -57,7 +57,7 @@ import {
   updateAnnotation
 } from './store/annotations'
 import { prefetchDepth, renderGate, renderWatchdog, scrollToPage, thumbWatch, zoomBy } from './store/viewer'
-import { goBack, goForward, readingState, setRestoreLastPage } from './store/reading'
+import { goBack, goForward, readingState, readingWatch, setRestoreLastPage } from './store/reading'
 import { TOOL_DEFAULTS, newId, withIdentity } from './lib/annots'
 import { pdfjs } from './lib/pdfjs'
 import { paintAnnotations } from './lib/canvasannot'
@@ -154,6 +154,7 @@ export function installTestApi(): void {
     goBack,
     goForward,
     readingState,
+    readingWatch,
     setRestoreLastPage,
     cachedPageCount,
     pinnedPageCounts,

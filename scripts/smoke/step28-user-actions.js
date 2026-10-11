@@ -60,9 +60,11 @@ t.ui.searchOpen = false
 await new Promise((r) => setTimeout(r, 0))
 
 /* ---------- 3. 前进历史(直接调用 goForward,step19 只从快捷键走) ---------- */
+// canBack 需要栈 ≥2 条:页 1 的条目必须先真正入栈(700ms 去抖)再滚走,
+// 否则本次滚动会把没落账的它合并掉——之后栈里只剩 3,等多久都不会变 true
+if (!(await until(() => t.readingWatch.pushes > 0, 5000))) throw new Error('页 1 历史条目未入栈')
 t.scrollToPage(3)
-// canBack 要等 700ms 阅读位置去抖落账;默认 10s 预算足够
-if (!(await until(() => t.docState.currentPage === 3 && t.readingState.canBack === true, 10000))) throw new Error('未定位第 3 页')
+if (!(await until(() => t.docState.currentPage === 3 && t.readingState.canBack === true, 4000))) throw new Error('未定位第 3 页')
 check('已定位到第 3 页', t.docState.currentPage === 3, t.docState.currentPage)
 check('可后退', t.readingState.canBack === true, t.readingState)
 t.goBack()

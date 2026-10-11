@@ -9,6 +9,9 @@ const SETTLE_MS = 700
 
 export const readingState = reactive({ canBack: false, canForward: false })
 
+/** 冒烟断言用:历史入栈计数(不参与运行逻辑,与 releasedDocIds 同例) */
+export const readingWatch = { pushes: 0 }
+
 let stack: number[] = []
 let index = -1
 let settleTimer: number | undefined
@@ -32,6 +35,7 @@ function pushEntry(page: number): void {
   stack.push(page)
   if (stack.length > MAX_ENTRIES) stack = stack.slice(stack.length - MAX_ENTRIES)
   index = stack.length - 1
+  readingWatch.pushes++
   syncFlags()
 }
 
