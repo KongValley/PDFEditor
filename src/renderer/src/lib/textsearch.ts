@@ -17,6 +17,8 @@ interface TextItemRef {
 
 interface PageTextIndex {
   text: string
+  /** 预先小写化:搜索逐页重算 toLowerCase() 在长文档上是白付的 */
+  textLower: string
   items: TextItemRef[]
 }
 
@@ -53,7 +55,7 @@ async function getPageIndex(pageNumber: number): Promise<PageTextIndex> {
       height: item.height
     })
   }
-  const index: PageTextIndex = { text, items }
+  const index: PageTextIndex = { text, textLower: text.toLowerCase(), items }
   indexCache.set(pageNumber, index)
   while (indexCache.size > INDEX_CACHE_MAX) {
     // Map 迭代顺序 = 插入顺序:第一个键就是最久未使用的
@@ -110,7 +112,7 @@ export async function searchDocument(
     // 每 16 页让出主线程,避免大文档搜索时界面卡死
     if (pageNumber % 16 === 0) await new Promise((resolve) => setTimeout(resolve, 0))
     const index = await getPageIndex(pageNumber)
-    const haystack = index.text.toLowerCase()
+    const haystack = index.textLower
     let from = 0
     for (;;) {
       const at = haystack.indexOf(needle, from)
