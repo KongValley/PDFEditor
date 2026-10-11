@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import PageCanvas from './PageCanvas.vue'
 import { docReady, docState, pageDisplaySize, pinViewerPages } from '../store/document'
 import {
@@ -25,7 +25,17 @@ import {
 import { isTypingTarget } from '../lib/keymap'
 
 const containerEl = ref<HTMLElement | null>(null)
-const visiblePages = reactive(new Set<number>())
+// shallowRef + 整集替换,而不是 reactive(Set):后者会让模板里每一次 has() 都挂响应式依赖,
+// 页数多时一次可见性变化要在重算里为成千上万次 has() 记账(离线实测:add(1) → has() 1000 次)
+const visiblePages = shallowRef<Set<number>>(new Set())
+
+/** 唯一变更入口:复制后修改再整体替换(模板经 unwrap 读取,替换即触发一次重渲染),并同步 pin */
+function updateVisiblePages(mutate: (next: Set<number>) => void): void {
+  const next = new Set(visiblePages.value)
+  mutate(next)
+  visiblePages.value = next
+  pinViewerPages(next)
+}
 /** 双页模式的行:[[1,2],[3,4],…],最后一行可为单页 */
 const spreadRows = computed(() =>
   Array.from({ length: rowCount() }, (_, row) => rowPages(row).map((index) => index + 1))
@@ -130,13 +140,14 @@ function setupObserver(): void {
   const buffer = docState.viewMode === 'two' ? 60 : Math.max(200, depth * rowHeight(Math.floor((docState.currentPage - 1) / 2)))
   observer = new IntersectionObserver(
     (entries) => {
-      for (const entry of entries) {
-        const pageNumber = Number((entry.target as HTMLElement).dataset.page)
-        if (!pageNumber) continue
-        if (entry.isIntersecting) visiblePages.add(pageNumber)
-        else visiblePages.delete(pageNumber)
-      }
-      pinViewerPages(visiblePages)
+      updateVisiblePages((next) => {
+        for (const entry of entries) {
+          const pageNumber = Number((entry.target as HTMLElement).dataset.page)
+          if (!pageNumber) continue
+          if (entry.isIntersecting) next.add(pageNumber)
+          else next.delete(pageNumber)
+        }
+      })
     },
     // 双页模式一屏就是 2 页,200px 缓冲会把 6 页拉进可见集合 → 渲染队列堆积;
     // 60px 只保留一点预读余量,模式切换时 refreshVisiblePages → setupObserver 会重建。
@@ -165,8 +176,7 @@ function seedVisiblePages(): void {
   }
   seedRetries = 0
   if (docState.viewMode === 'single') {
-    visiblePages.add(docState.currentPage)
-    pinViewerPages(visiblePages)
+    updateVisiblePages((next) => next.add(docState.currentPage))
     return
   }
   rebuildLayoutCache()
@@ -174,20 +184,20 @@ function seedVisiblePages(): void {
   const top = root.scrollTop - 200
   const bottom = root.scrollTop + root.clientHeight + 200
   const stride = docState.viewMode === 'two' ? 2 : 1
-  for (let s = floorIndex(tops, top); s < tops.length; s++) {
-    if (tops[s] > bottom) break
-    for (let i = 0; i < stride; i++) {
-      const index = s * stride + i
-      if (index < docState.pageCount) visiblePages.add(index + 1)
+  updateVisiblePages((next) => {
+    for (let s = floorIndex(tops, top); s < tops.length; s++) {
+      if (tops[s] > bottom) break
+      for (let i = 0; i < stride; i++) {
+        const index = s * stride + i
+        if (index < docState.pageCount) next.add(index + 1)
+      }
     }
-  }
-  pinViewerPages(visiblePages)
+  })
 }
 
 /** 清空可见页集后重建观察器并播种(尺寸/模式/文档变化后调用) */
 function refreshVisiblePages(): void {
-  visiblePages.clear()
-  pinViewerPages(visiblePages)
+  updateVisiblePages((next) => next.clear())
   seedRetries = 0
   setupObserver()
   seedVisiblePages()
@@ -241,8 +251,7 @@ watch(
   () => [docState.docId, docState.pageBoxes.length] as const,
   async ([docId, pageCount], [prevDocId, prevPageCount]) => {
     resetFirstPaint()
-    visiblePages.clear()
-    pinViewerPages(visiblePages)
+    updateVisiblePages((next) => next.clear())
     // 仅当文档身份或页数变化(真换文档 / 增删页)才归零:
     // 页面移动等"原地重建"不再把视图甩回顶部(这是"闪几下"的直接来源)
     const identityChanged = docId !== prevDocId || pageCount !== prevPageCount
@@ -280,9 +289,10 @@ watch(
   () => docState.currentPage,
   () => {
     if (docState.viewMode !== 'single') return
-    visiblePages.clear()
-    visiblePages.add(docState.currentPage)
-    pinViewerPages(visiblePages)
+    updateVisiblePages((next) => {
+      next.clear()
+      next.add(docState.currentPage)
+    })
   }
 )
 </script>
