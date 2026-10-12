@@ -11,6 +11,7 @@ import type {
 } from '@shared/types'
 import { logEvent } from './log'
 import {
+  currentOpenToken,
   docState,
   editVersion,
   getPage,
@@ -87,6 +88,14 @@ async function restoreSidecar(): Promise<void> {
 
 /** 打开文件(含密码流程:pdf.js 需要密码时弹框输入) */
 export async function openPath(path: string): Promise<void> {
+  // 入口闸门:打开流程在大文档上要数秒(共享盘更久),期间再来一次打开会让两个
+  // openByPath 并发写 docState(最坏是把 A 的批注写进 B 的文件)。这里直接挡掉第二次。
+  if (docState.loading) {
+    showToast('文档正在加载,请稍候', 'info')
+    return
+  }
+  // 身份令牌必须在 openByPath **返回之后**取:openByPath 内部会 ++openSeq,
+  // 调用前取到的旧令牌与返回值必然不等,会把下面的恢复步骤全部误判为"已被取代"。
   const ok = await openByPath(path, {
     onPassword: (updatePassword, reason) => {
       const message = reason === 2 ? '密码错误,请重新输入' : '此 PDF 已加密,请输入密码'
@@ -102,7 +111,11 @@ export async function openPath(path: string): Promise<void> {
     }
     return
   }
+  // 从此刻起若又来了新打开请求,下面的 restoreSidecar/maybeRestoreLastPage
+  // 都在 await 之后写全局状态,必须确认「我还是当前文档」再往下走。
+  const token = currentOpenToken()
   await restoreSidecar()
+  if (token !== currentOpenToken()) return
   await maybeRestoreLastPage(docState.filePath ?? path)
 }
 
@@ -145,6 +158,13 @@ async function saveTo(targetPath: string | undefined): Promise<void> {
       annotations: exportAnnotations(),
       formValues: { ...docState.formValues }
     })) as SaveResult
+    // 身份校验:runBusy 只挡同类长操作,不挡「打开文件」;保存大文档期间 Ctrl+O
+    // 会让新文档就位。此时若继续把 filePath/dirty 写到全局,新文档会顶着旧文档的
+    // 路径,随后一次 Ctrl+S 就覆盖错文件。
+    if (docId !== docState.docId) {
+      showToast('保存已完成,但期间切换了文档,未更新当前文件的保存路径', 'info')
+      return
+    }
     if (result.canceled) return
     if (!result.ok) {
       showToast(result.error ?? '保存失败', 'error')

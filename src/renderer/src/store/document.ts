@@ -160,7 +160,11 @@ function evictPages(): void {
     if (pageCache.size <= PAGE_CACHE_LIMIT) return
     if (pageNumber >= keepFrom && pageNumber <= keepTo) continue
     if (viewerPinned.has(pageNumber) || thumbPinned.has(pageNumber)) continue
-    page.cleanup()
+    // cleanup() 在该页正在光栅化时返回 false(pdf.js 3.x 契约)。
+    // 原实现丢弃返回值仍把它从缓存删掉 → 该页渲染被中途打断,而 PageCanvas 的
+    // renderedSig 未作废、看门狗也不认为超时,页面停在半渲染/空白且不会自动重渲染。
+    // 回收失败就留在缓存里,等下一轮再试。
+    if (!page.cleanup()) continue
     pageCache.delete(pageNumber)
   }
 }
@@ -254,17 +258,43 @@ function releaseDocEntry(docId: string): void {
   void window.pdfAPI.invoke('doc:release', docId)
 }
 
+/**
+ * 打开请求的单调序号:两次 openByPath 并发时,只有最后一次仍然"当前",
+ * 先发后至的旧请求必须在每个 await 之后自行让位,否则它会在新文档就位后
+ * 继续写 docState —— 最坏结果是 A 的 pageBoxes / 批注配到 B 的 pdfDoc 上,
+ * 用户一按 Ctrl+S 就把 A 的批注写进 B 的文件。
+ */
+let openSeq = 0
+
+/** 当前打开请求的令牌:调用方在 await 前后比对,以确认「我还是这次打开」 */
+export function currentOpenToken(): number {
+  return openSeq
+}
+
+/** 旧请求让位时清理它自己占用的资源(主进程字节 + 已解析的 pdf.js 文档) */
+async function abandonStaleOpen(docId: string | undefined, pdfDoc: PDFDocumentProxy | null): Promise<void> {
+  if (pdfDoc) await destroyPdfDocument(pdfDoc)
+  if (docId) releaseDocEntry(docId)
+}
+
 export async function openByPath(path: string, options: OpenOptions = {}): Promise<boolean> {
+  const mySeq = ++openSeq
   docState.loading = true
   docState.loadError = null
   // 大文件在内网共享盘上读取要几秒到几十秒:订阅主进程的分块进度,并在标题区提供「取消」
   const offProgress = window.pdfAPI.on('doc:openProgress', (raw) => {
+    if (mySeq !== openSeq) return
     const info = raw as { read?: number; total?: number }
     const total = info?.total ?? 0
     if (total > 0) docState.loadProgress = `正在读取文件 ${Math.round(((info?.read ?? 0) / total) * 100)}%`
   })
   try {
     const result = (await window.pdfAPI.invoke('doc:open', path)) as OpenResult
+    // 已被更新的打开请求取代:释放本次在主进程占到的条目,不再往下走
+    if (mySeq !== openSeq) {
+      if (result.docId) releaseDocEntry(result.docId)
+      return false
+    }
     if (result.error === 'canceled') return false
     if (!result.ok || !result.docId || !result.pageCount || (!result.buffer && result.stream !== 'range')) {
       docState.loadError = result.errorMessage ?? '打开文件失败'
@@ -299,8 +329,14 @@ export async function openByPath(path: string, options: OpenOptions = {}): Promi
       }
     } catch (err) {
       // 加载失败/用户取消:释放主进程条目,避免打开失败占满缓存把已打开的文档挤掉
+      if (mySeq !== openSeq) return false
       docState.loadError = err instanceof Error ? err.message : String(err)
       void window.pdfAPI.invoke('doc:release', result.docId)
+      return false
+    }
+    // 解析期间可能已来了新的打开请求:销毁本次刚建好的文档,不碰 docState
+    if (mySeq !== openSeq) {
+      await abandonStaleOpen(result.docId, pdfDoc)
       return false
     }
 
@@ -328,30 +364,52 @@ export async function openByPath(path: string, options: OpenOptions = {}): Promi
     docState.loadError = null
 
     const boxes = await fillPageBoxes(pdfDoc, (done, total) => {
+      if (mySeq !== openSeq) return
       docState.loadProgress = `正在读取页面信息 ${done}/${total}`
     })
+    // fillPageBoxes 是整个打开流程里最慢的一段(大文档数秒),也是并发打开最容易撞上的窗口:
+    // 若此刻已被更新的请求取代,释放本次资源并放弃,绝不把 boxes 写进当前文档的 state
+    if (mySeq !== openSeq) {
+      await abandonStaleOpen(result.docId, pdfDoc)
+      return false
+    }
     docState.pageBoxes = boxes
     docState.geometryVersion++
 
     // 表单字段:sidecar 值优先,其次用文档中的现有值作为初始值
-    docState.formFields = await discoverFormFields(pdfDoc)
+    const formFields = await discoverFormFields(pdfDoc)
+    if (mySeq !== openSeq) {
+      await abandonStaleOpen(result.docId, pdfDoc)
+      return false
+    }
+    docState.formFields = formFields
     const values: Record<string, FormValue> = {}
-    for (const field of docState.formFields) {
+    for (const field of formFields) {
       if (field.value !== undefined) values[field.fullName] = field.value
     }
     docState.formValues = { ...values, ...(result.sidecar?.formValues ?? {}) }
     docState.dirty = false
     docState.pdfAnnotations = result.annotations ?? []
 
-    docState.outline = await loadOutline(pdfDoc)
+    const outline = await loadOutline(pdfDoc)
+    if (mySeq !== openSeq) {
+      await abandonStaleOpen(result.docId, pdfDoc)
+      return false
+    }
+    docState.outline = outline
     return true
   } catch (err) {
-    docState.loadError = err instanceof Error ? err.message : String(err)
+    // 过期请求的异常不该覆盖当前文档的错误提示
+    if (mySeq === openSeq) docState.loadError = err instanceof Error ? err.message : String(err)
     return false
   } finally {
     offProgress()
-    docState.loading = false
-    docState.loadProgress = null
+    // 只有仍"当前"的请求才能复位 loading —— 否则旧请求提前把新请求的加载态清掉,
+    // 「正在读取…」提示会提前消失
+    if (mySeq === openSeq) {
+      docState.loading = false
+      docState.loadProgress = null
+    }
   }
 }
 

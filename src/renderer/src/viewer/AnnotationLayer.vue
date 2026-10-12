@@ -87,8 +87,17 @@ function onLayerPointerDown(event: PointerEvent): void {
   event.preventDefault()
   const local = localPoint(event)
   draw.value = { tool: ui.tool, startScreen: local, currentScreen: local, inkScreen: [local] }
+  // 与移动/缩放路径对齐:捕获指针 + 监听 pointercancel。
+  // 只靠 window 监听覆盖不到「拖到窗口外松开」和「触摸手势被系统接管」,
+  // 那两种情况 draw.value 会永不清空,预览橡皮筋停在半空覆盖页面。
+  try {
+    svgEl.value?.setPointerCapture(event.pointerId)
+  } catch {
+    // 合成事件/指针已失效:由 window 监听兜底
+  }
   window.addEventListener('pointermove', onLayerPointerMove)
   window.addEventListener('pointerup', onLayerPointerUp)
+  window.addEventListener('pointercancel', onLayerPointerUp)
 }
 
 function onLayerPointerMove(event: PointerEvent): void {
@@ -106,8 +115,17 @@ async function onLayerPointerUp(event: PointerEvent): Promise<void> {
   const state = draw.value
   window.removeEventListener('pointermove', onLayerPointerMove)
   window.removeEventListener('pointerup', onLayerPointerUp)
+  window.removeEventListener('pointercancel', onLayerPointerUp)
   draw.value = null
+  // 指针捕获是本次按下建立的:无论正常抬起还是 pointercancel,都在这里交还
+  try {
+    if (event.pointerId !== undefined) svgEl.value?.releasePointerCapture(event.pointerId)
+  } catch {
+    // 指针已释放:忽略
+  }
   if (!state || !props.viewport) return
+  // pointercancel 表示手势被系统接管(滚动手势/系统返回),不生成批注
+  if (event.type === 'pointercancel') return
   const local = localPoint(event)
   const startPdf = toPdf(state.startScreen)
   const endPdf = toPdf(local)
@@ -564,10 +582,34 @@ const endpointHandles = computed(() => {
 })
 
 onBeforeUnmount(() => {
+  // 卸载前若正在拖拽:必须走一遍与 onDragEnd 相同的收尾(冲刷最后一帧 + 落 move 位移),
+  // 否则最后一帧位移会被静默丢弃;更关键的是 ui.dragging 永远停在 true,
+  // keymap 的 Ctrl+S / Ctrl+Z 会从此全部失灵(用户按了没反应,以为已保存)。
+  // 该路径可达:clearPage() 把 viewport 置 null → AnnotationLayer 被 v-if 卸载。
+  if (drag.value) {
+    const state = drag.value
+    try {
+      svgEl.value?.releasePointerCapture(state.pointerId)
+    } catch {
+      // 指针已释放:忽略
+    }
+    if (state.mode === 'move' && (state.offset.dx !== 0 || state.offset.dy !== 0)) {
+      for (const mover of state.movers) {
+        patchAnnotation(mover.id, shiftAnnotation(mover, state.offset.dx, state.offset.dy))
+      }
+    }
+    commitAnnotations(state.movers)
+    drag.value = null
+    ui.dragging = false
+  }
+  ui.dragging = false
   if (dragFrame !== 0) cancelAnimationFrame(dragFrame)
   pendingDragEvent = null
+  // 绘制态收尾:清掉可能停在半空的橡皮筋(否则预览会留到下一次绘制才被覆盖)
+  draw.value = null
   window.removeEventListener('pointermove', onLayerPointerMove)
   window.removeEventListener('pointerup', onLayerPointerUp)
+  window.removeEventListener('pointercancel', onLayerPointerUp)
   window.removeEventListener('pointermove', onDragMove)
   window.removeEventListener('pointerup', onDragEnd)
   window.removeEventListener('pointercancel', onDragEnd)
