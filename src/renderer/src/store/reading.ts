@@ -88,6 +88,19 @@ export function goForward(): void {
   syncFlags()
 }
 
+/**
+ * 清空前进/后退历史(关闭文档时用)。
+ * 换文档时由 docId 的 watcher 顺带清理,但「关闭文档」目前零调用点,
+ * 将来接上调用方时需要一条显式的复位入口 —— 否则关掉再打开同一份文档,
+ * `goBack` 会把上一份文档的页码带过来。
+ */
+export function resetReadingHistory(): void {
+  clearTimeout(settleTimer)
+  stack = []
+  index = -1
+  syncFlags()
+}
+
 export function useReading(): void {
   watch(
     () => docState.docId,

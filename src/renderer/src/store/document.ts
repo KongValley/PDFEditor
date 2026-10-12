@@ -2,7 +2,10 @@ import { computed, markRaw, reactive } from 'vue'
 import { destroyPdfDocument, loadPdfDocument, loadPdfDocumentByRange, type PDFDocumentProxy, type PDFPageProxy } from '../lib/pdfjs'
 import { loadOutline } from '../lib/outline'
 import { discoverFormFields } from '../lib/forms'
-import { resetImageUrls } from './annotations'
+import { resetAnnotations } from './annotations'
+import { invalidateSearch } from './search'
+import { resetReadingHistory } from './reading'
+import { ui } from './ui'
 import type {
   Annotation,
   FormFieldInfo,
@@ -477,11 +480,20 @@ export async function reloadDocument(
   if (previous) void destroyPdfDocument(previous)
 }
 
+/**
+ * 关闭文档:释放 pdf.js 文档与主进程字节,并把**全部**跨文档状态归零。
+ *
+ * 这条路径原先漏清搜索结果、撤销栈、阅读历史与选中集 —— 目前是零调用点的死代码,
+ * 但一旦接上「关闭文件」菜单就会立刻变成真 bug:关掉再打开同一份文档时,
+ * `Ctrl+Z` 会把上一份文档的批注命令撤销进新文档,搜索栏与高亮也会跨文档残留。
+ * 补齐后它就是一条正确的路径。
+ */
 export function closeDocument(): void {
   const doc = docState.pdfDoc
   if (doc) void destroyPdfDocument(doc)
   if (docState.docId) releaseDocEntry(docState.docId)
   pageCache = new Map()
+  clearViewerPins()
   docState.docId = null
   docState.filePath = null
   docState.pdfDoc = null
@@ -493,9 +505,14 @@ export function closeDocument(): void {
   docState.sidecar = null
   docState.formValues = {}
   docState.formFields = []
-  resetImageUrls()
   docState.outline = []
   docState.loadError = null
   docState.dirty = false
   docState.pdfAnnotations = []
+  // 跨文档状态:搜索命中、批注与历史栈、阅读前进/后退历史、选中集
+  invalidateSearch()
+  resetAnnotations()
+  resetReadingHistory()
+  ui.selectedAnnotationIds = []
+  ui.pageMenu.open = false
 }
