@@ -1,10 +1,28 @@
 import { existsSync, createReadStream, readFileSync } from 'node:fs'
-import { readFile, stat } from 'node:fs/promises'
+import { readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { PDFDocument } from 'pdf-lib'
 import type { Annotation, OpenResult, SidecarData } from '@shared/types'
 import { extractEditorAnnotations } from './pdflibwrite'
+
+/**
+ * 原子写:先写同目录临时文件再 rename 覆盖。
+ *
+ * 直接 `writeFile(target, data)` 以 'w' 打开,**先截断再写** —— 磁盘满 / 进程被杀 /
+ * 杀软锁文件时会在目标位置留下 0 字节或半截文件,原内容不可恢复地损坏。
+ * Windows 下 rename 覆盖已存在的文件,所以临时文件与目标同目录即可。
+ */
+export async function atomicWrite(target: string, data: Uint8Array | string): Promise<void> {
+  const tmp = `${target}.tmp-${Date.now()}-${randomUUID().slice(0, 8)}`
+  try {
+    await writeFile(tmp, typeof data === 'string' ? data : Buffer.from(data.buffer, data.byteOffset, data.byteLength))
+    await rename(tmp, target)
+  } catch (err) {
+    await rm(tmp, { force: true }).catch(() => undefined)
+    throw err
+  }
+}
 
 export interface DocEntry {
   path: string

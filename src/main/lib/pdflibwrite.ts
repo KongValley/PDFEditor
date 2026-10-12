@@ -61,6 +61,9 @@ export interface AnnotWriteContext {
   /** 已嵌入图片(键 = imgId||refPath):同一图片在多页出现时只 embed 一次,
    * 产物不再随出现次数线性膨胀 */
   images: Map<string, PDFImage>
+  /** 已确认取不到的图片(同键):避免为同一条丢失的图片反复建空外观页,
+   * 那会让 pdf-lib 在 save() 抛 "Can't embed page with missing Contents" */
+  missingImages: Set<string>
 }
 
 export function hexToRgb(hex: string): { r: number; g: number; b: number } {
@@ -215,7 +218,7 @@ export async function createAnnotContext(
   doc.registerFontkit(fontkit)
   const cjkFont = options.skipCjkFont ? null : await embedCjkFont(doc, warnings)
   const font = cjkFont ?? (await doc.embedFont(StandardFonts.Helvetica))
-  return { ctx: { font, resolveImage, warnings, images: new Map() }, cjkFont }
+  return { ctx: { font, resolveImage, warnings, images: new Map(), missingImages: new Set() }, cjkFont }
 }
 
 /**
@@ -434,6 +437,7 @@ async function drawAnnotation(
       }
       const buffer = await ctx.resolveImage(ann.imgId, ann.refPath)
       if (!buffer) {
+        ctx.missingImages.add(cacheKey)
         ctx.warnings.push(`图片注释丢失(找不到文件:${ann.refPath})`)
         return
       }
@@ -479,12 +483,21 @@ function shiftForScratch(ann: Annotation, dx: number, dy: number): Annotation {
  * 该注释画得出外观吗?空文本注释一个字形都画不出来 —— 临时页没有 Contents,
  * pdf-lib 的 embedPage 会抛 "Can't embed page with missing Contents"(在 save() 里),
  * 让整次保存失败。这类注释不写 /AP 即可(本来也没有可显示的内容)。
+ *
+ * 图片批注同理:原图取不到(文件被移走/未授权)时 drawImage 会直接 return,
+ * 画出来的同样是一个空页。所以这里对图片一并判定,避免整次保存被一条丢失的
+ * 图片批注拖垮 —— 批注本身仍会写入产物,只是没有外观,并在 warnings 里提示。
  */
-function hasDrawableAppearance(ann: Annotation): boolean {
-  return ann.kind !== 'text' || ann.text.trim() !== ''
+function hasDrawableAppearance(ann: Annotation, ctx?: AnnotWriteContext): boolean {
+  if (ann.kind === 'text' && ann.text.trim() === '') return false
+  if (ann.kind === 'image' && ctx) {
+    const cacheKey = ann.imgId || ann.refPath
+    if (!ctx.images.has(cacheKey) && !ctx.missingImages.has(cacheKey)) return false
+  }
+  return true
 }
 
-/** 把注释画到临时页并嵌入为 Form XObject 作为 /AP /N;返回其引用 */
+/** 把注释画到临时页并嵌入为 Form XObject 作为 /AP /N;返回其引用(无可画内容时返回 null) */
 async function buildAppearance(
   doc: PDFDocument,
   ann: Annotation,
@@ -494,6 +507,15 @@ async function buildAppearance(
   const h = Math.max(ann.bbox.h, 1) + ANNOT_PAD * 2
   const scratch = doc.addPage([w, h])
   await drawAnnotation(doc, scratch, shiftForScratch(ann, ANNOT_PAD - ann.bbox.x, ANNOT_PAD - ann.bbox.y), ctx)
+  // 兜底:有些情况(如图片刚被标记为取不到、字形全部缺失)会在上面一条都没画上,
+  // 此时 scratch 页没有 Contents,embedPage 会在 save() 里抛
+  // "Can't embed page with missing Contents" 让**整次保存**失败。
+  // 与其让一条有问题的批注炸掉整个保存,不如放弃它的外观:批注对象仍会写入产物,
+  // 其它阅读器照样能画出该类型的默认外观。
+  if (scratch.node.Contents() === undefined) {
+    doc.removePage(doc.getPageCount() - 1)
+    return null
+  }
   // embedPage 拷贝内容/资源为独立对象,scratch 页删除后引用仍有效(pdf-lib 保存时清理残留)
   const embedded = await doc.embedPage(scratch, { left: 0, bottom: 0, right: w, top: h })
   doc.removePage(doc.getPageCount() - 1)
@@ -617,7 +639,7 @@ export async function replaceOwnAnnotations(
       continue
     }
     try {
-      const apRef = hasDrawableAppearance(ann) ? await buildAppearance(doc, ann, ctx) : null
+      const apRef = hasDrawableAppearance(ann, ctx) ? await buildAppearance(doc, ann, ctx) : null
       const dict = buildAnnotDict(doc, ann, ctx, apRef)
       let annots = page.node.Annots()
       if (!annots) {
@@ -713,6 +735,73 @@ export function mergeAcroForm(target: PDFDocument, source: PDFDocument | null): 
   target.catalog.set(PDFName.of('AcroForm'), target.context.register(fresh))
 }
 
+/** /PdEditorData 里允许出现的批注类型:PDF 是不可信输入,未知 kind 不得进入下游 switch */
+const VALID_KINDS = new Set([
+  'highlight',
+  'rect',
+  'ellipse',
+  'ink',
+  'arrow',
+  'measure',
+  'text',
+  'note',
+  'image',
+  'stamp'
+])
+const MAX_TEXT_LEN = 100_000
+const MAX_PATH_LEN = 4096
+
+/**
+ * 结构化校验从 PDF 里解析出的批注。
+ * `/PdEditorData` 由文件作者完全控制(可能是恶意构造的),原实现只查 id/kind 是字符串,
+ * 于是任意 kind、任意数值(NaN/Infinity)、任意长度文本都会流进渲染与写盘逻辑。
+ */
+function isSaneAnnotation(input: unknown): input is Annotation {
+  if (!input || typeof input !== 'object') return false
+  const a = input as Record<string, unknown>
+  if (typeof a.id !== 'string' || a.id.length === 0 || a.id.length > 128) return false
+  if (typeof a.kind !== 'string' || !VALID_KINDS.has(a.kind)) return false
+
+  // 通用数值:NaN / Infinity 会污染视口计算并让 canvas 尺寸变成 NaN
+  for (const key of ['opacity', 'thickness', 'fontSize', 'rotate']) {
+    const v = a[key]
+    if (v !== undefined && (typeof v !== 'number' || !Number.isFinite(v))) return false
+  }
+
+  const bbox = a.bbox as Record<string, unknown> | undefined
+  if (!bbox || typeof bbox !== 'object') return false
+  for (const k of ['x', 'y', 'w', 'h']) {
+    const v = bbox[k]
+    if (typeof v !== 'number' || !Number.isFinite(v)) return false
+  }
+
+  // 自由文本:限制长度,避免超大字符串进 wrapText/measureText 把渲染线程拖死
+  for (const key of ['text', 'label']) {
+    const v = a[key]
+    if (v !== undefined && (typeof v !== 'string' || v.length > MAX_TEXT_LEN)) return false
+  }
+  // 路径:refPath 来自不可信文件,限制长度(实际能否读盘另由 images.ts 的授权集合把关)
+  if (a.refPath !== undefined && (typeof a.refPath !== 'string' || a.refPath.length > MAX_PATH_LEN)) {
+    return false
+  }
+
+  // 集合类字段(ink.points 等):元素必须是有限数值
+  const points = a.points
+  if (points !== undefined) {
+    if (!Array.isArray(points)) return false
+    if (points.length > 100_000) return false
+    for (const p of points as unknown[]) {
+      if (!p || typeof p !== 'object') return false
+      const pt = p as Record<string, unknown>
+      for (const k of ['x', 'y']) {
+        const v = pt[k]
+        if (typeof v !== 'number' || !Number.isFinite(v)) return false
+      }
+    }
+  }
+  return true
+}
+
 /** 从 PDF 提取本应用写入的批注(按 /PdEditorData 解析;page 以所在页覆盖) */
 export function extractEditorAnnotations(doc: PDFDocument): Annotation[] {
   const out: Annotation[] = []
@@ -728,8 +817,8 @@ export function extractEditorAnnotations(doc: PDFDocument): Annotation[] {
       const raw = doc.context.lookup(dataObj)
       if (!(raw instanceof PDFHexString)) continue
       try {
-        const parsed = JSON.parse(Buffer.from(raw.asString(), 'hex').toString('utf8')) as Annotation
-        if (typeof parsed.id !== 'string' || typeof parsed.kind !== 'string') continue
+        const parsed: unknown = JSON.parse(Buffer.from(raw.asString(), 'hex').toString('utf8'))
+        if (!isSaneAnnotation(parsed)) continue
         parsed.page = index
         out.push(parsed)
       } catch {

@@ -1,7 +1,8 @@
 import { readFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
-import { nativeImage } from 'electron'
-import { statSync } from 'node:fs'
+import { nativeImage, app } from 'electron'
+import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
 import type { ImageInfo } from '@shared/types'
 
 const images = new Map<string, Buffer>()
@@ -37,6 +38,103 @@ export function mimeOf(buffer: Buffer): string | null {
   if (buffer.length > 8 && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e) return 'image/png'
   if (buffer.length > 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return 'image/jpeg'
   return null
+}
+
+/**
+ * 「用户确实导入过」的图片路径(规范化后的绝对路径)。
+ *
+ * 为什么需要:PDF 里的 /PdEditorData 是**不可信输入** —— 他人制作的文件可以塞一条
+ * `kind:'image'` 且 `refPath` 指向本机任意绝对路径。若直接照它读盘,打开文档就会把
+ * 那个文件读出来回传渲染层,保存时还会嵌进用户导出的 PDF。
+ * 因此读盘授权只来自用户自己走 img:choose 导入过的路径,落盘 PDF 里的路径不作数。
+ *
+ * 授权必须**跨会话持久化**:图片批注的 refPath 会写进 PDF/sidecar,下次打开仍要能显示,
+ * 只放内存会让「重开文档 → 图片批注变空白」——那正是引入本检查时最容易造成的功能回归。
+ * 落盘形式沿用 recent.json:用户数据目录下的一个 JSON 白名单,只增不删、上限 500 条。
+ */
+const AUTHORIZED_STORE = 'image-paths.json'
+const AUTHORIZED_MAX = 500
+let authorizedPaths: Set<string> | null = null
+
+/** 规范化路径用于授权比对(Windows 大小写不敏感;异常时原样返回) */
+function normalizeForAuth(p: string): string {
+  try {
+    return resolve(p).toLowerCase()
+  } catch {
+    return p
+  }
+}
+
+function authorizedStorePath(): string {
+  return join(app.getPath('userData'), AUTHORIZED_STORE)
+}
+
+/** 懒加载授权集合(进程内只读一次) */
+function loadAuthorized(): Set<string> {
+  if (authorizedPaths) return authorizedPaths
+  authorizedPaths = new Set<string>()
+  try {
+    const raw = readFileSync(authorizedStorePath(), 'utf8')
+    const parsed: unknown = JSON.parse(raw)
+    if (Array.isArray(parsed)) {
+      for (const p of parsed) if (typeof p === 'string') authorizedPaths.add(p)
+    }
+  } catch {
+    // 首次运行/文件损坏:按空白名单处理(不影响导入,只影响旧批注的图片显示)
+  }
+  return authorizedPaths
+}
+
+/** 登记一条授权并落盘(读-改-写,与 recent 同样的串行化思路) */
+function authorizePath(refPath: string): void {
+  const set = loadAuthorized()
+  const key = normalizeForAuth(refPath)
+  if (set.has(key)) return
+  set.add(key)
+  const kept = [...set].slice(-AUTHORIZED_MAX)
+  authorizedPaths = new Set(kept)
+  try {
+    mkdirSync(dirname(authorizedStorePath()), { recursive: true })
+    writeFileSync(authorizedStorePath(), JSON.stringify(kept, null, 2), 'utf8')
+  } catch (err) {
+    // 授权落盘失败只影响下次启动后的图片恢复,不影响本次会话
+    console.warn('[images] 图片路径授权写入失败:', err)
+  }
+}
+
+/** 是否是用户导入过的图片 */
+export function isAuthorizedImagePath(refPath: string): boolean {
+  return loadAuthorized().has(normalizeForAuth(refPath))
+}
+
+/**
+ * 登记"用户刚刚在系统对话框里选中"的路径为可读盘授权。
+ * 用户主动选择本身就构成授权凭据(与 PDF 里自带的 refPath 性质完全不同),
+ * 所有走原生选择框的入口(单选 img:choose、多选 img:chooseMany)都应调用它。
+ */
+export function authorizeUserPickedPath(refPath: string): void {
+  authorizePath(refPath)
+}
+
+/**
+ * 读图片信息(调用方已自行确认该路径可信时使用)。
+ * 仅供「冒烟脚本按项目内固定路径取图」这类受控场景;外部 PDF 提供的 refPath
+ * 一律走 readImageInfo 的授权检查。
+ */
+export async function readImageInfoAuthorized(refPath: string): Promise<ImageImport> {
+  const loaded = await loadImage(refPath)
+  return 'error' in loaded ? loaded : loaded.info
+}
+
+/** 是否位于应用目录内(冒烟取图的安全边界:只允许读应用自己打包/开发目录里的文件) */
+export function isInsideAppPath(refPath: string): boolean {
+  try {
+    const root = resolve(app.getAppPath()).toLowerCase()
+    const target = resolve(refPath).toLowerCase()
+    return target.startsWith(root)
+  } catch {
+    return false
+  }
 }
 
 /** 读盘 + 解码 + 编码(两条导出共用) */
@@ -83,12 +181,16 @@ async function loadImage(
  * 写进缓存只会留下一份没人引用的重复 Buffer。
  */
 export async function readImageInfo(refPath: string): Promise<ImageImport> {
+  // 该路径可能来自 PDF 里的 /PdEditorData(不可信),未授权则不碰磁盘
+  if (!isAuthorizedImagePath(refPath)) return { error: '未授权的图片路径' }
   const loaded = await loadImage(refPath)
   return 'error' in loaded ? loaded : loaded.info
 }
 
 /** 读取并登记到内存缓存(用户新插入图片时用:保存阶段按 imgId 取 Buffer) */
 export async function importImage(refPath: string): Promise<ImageImport> {
+  // 只有走到这里的路径才是"用户主动导入",登记为可读盘授权(并落盘,供下次会话恢复图片批注)
+  authorizePath(refPath)
   const loaded = await loadImage(refPath)
   if ('error' in loaded) return loaded
   const imgId = randomUUID()
@@ -102,6 +204,8 @@ export function getImageBuffer(imgId: string): Buffer | undefined {
 }
 
 export async function readImageBuffer(refPath: string): Promise<Buffer | undefined> {
+  // 保存/导出阶段同样只认用户导入过的路径,否则 PDF 里的路径就能借这里读任意本地文件
+  if (!isAuthorizedImagePath(refPath)) return undefined
   let key: string
   try {
     const st = statSync(refPath)

@@ -1,8 +1,8 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { stemOf } from '@shared/paths'
 import { PDFDocument, degrees, rgb } from 'pdf-lib'
-import { getDocEntry, pruneBufferStack, pushBufferSnapshot, setDocBuffer, toArrayBuffer, uniqueFilePath } from './pdfio'
+import { atomicWrite, getDocEntry, pruneBufferStack, pushBufferSnapshot, setDocBuffer, toArrayBuffer, uniqueFilePath } from './pdfio'
 import { getImageBuffer, readImageBuffer } from './images'
 import {
   createAnnotContext,
@@ -183,7 +183,7 @@ export async function applyPageOp(docId: string, op: PageOp): Promise<PageOpResu
         }
       }
       await mkdir(dirname(op.targetPath), { recursive: true })
-      await writeFile(op.targetPath, await savePdf(out))
+      await atomicWrite(op.targetPath, await savePdf(out))
       return { ok: true, savedPath: op.targetPath }
     }
   }
@@ -321,7 +321,7 @@ export async function splitPdfTasks(
           for (const warning of warnings) console.warn('[split]', warning)
         }
         const target = uniqueFilePath(destDir, `${stem}-${i + 1}.pdf`)
-        await writeFile(target, await savePdf(out))
+        await atomicWrite(target, await savePdf(out))
         written.push(target)
         outputs++
         hooks.onProgress?.({ processed: processed + 1, total: tasks.length, outputs })

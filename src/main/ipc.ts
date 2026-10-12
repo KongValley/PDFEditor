@@ -14,11 +14,13 @@ import { fileURLToPath } from 'node:url'
 import { arch, release, totalmem } from 'node:os'
 import { PDFDocument } from 'pdf-lib'
 import {
+  atomicWrite,
   openDocument,
   getDocEntry,
   pushBufferSnapshot,
   readDocRange,
   readPdfPageCount,
+  readSidecar,
   releaseDocument,
   setDocBuffer,
   sidecarPathFor,
@@ -29,7 +31,16 @@ import { savePdf } from './lib/pdflibwrite'
 import { stemOf } from '@shared/paths'
 import { applyPageOp, redoPageOp, splitPdfTasks, undoPageOp } from './lib/docops'
 import { applyOutlineEdit, type OutlineEdit } from './lib/outlineedit'
-import { getImageBuffer, importImage, readImageBuffer, readImageInfo, type ImageImport } from './lib/images'
+import {
+  authorizeUserPickedPath,
+  getImageBuffer,
+  importImage,
+  isInsideAppPath,
+  readImageBuffer,
+  readImageInfo,
+  readImageInfoAuthorized,
+  type ImageImport
+} from './lib/images'
 import { imagesToPdf, type ImagePageMode } from './lib/imagetopdf'
 import { abortPrintJob, addPrintPage, commitPrintJob, preparePrintJob } from './lib/print'
 import { getRecentPage, listRecentFiles, setRecentPage } from './lib/recent'
@@ -404,6 +415,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
         }
         const writeSidecar = payload.writeSidecar !== false
         const sidecarPath = sidecarPathFor(targetPath)
+        // 加密分支要用它判断本次是"原地保存"还是"另存为"(entry.path 在分支内会被改写)
+        const prevPath = entry.path
         const tmpPath = `${targetPath}.tmp-${Date.now()}`
         const tmpSidecar = `${sidecarPath}.tmp-${Date.now()}`
         const cleanupTmp = async (): Promise<void> => {
@@ -414,12 +427,47 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
         try {
           // 先写临时文件再原子替换:任一步失败时原文件保持完好
           if (entry.encrypted) {
+            // 加密文档只能把批注写进 sidecar(PDF 本体没法在不重加密的情况下改写)。
+            // 由此带来两个必须处理的问题:
+            //  1) 目标路径旁已存在**另一份文档的批注**时,直接写会把它整体覆盖,
+            //     而保存对话框的「是否覆盖」问的是 PDF,用户看不到这个提示 —— 静默丢数据;
+            //  2) 本分支根本不生成 PDF,若把 savedPath 指向 targetPath,渲染层会把
+            //     docState.filePath 指到一个不存在的文件,并清掉未保存标记。
+            //
+            // 拦截条件必须同时满足两个,否则会误伤正常操作:
+            //  - 目标路径上**确实有一份 PDF**(只有孤零零的 sidecar 不对应任何文档,覆盖它不伤数据,
+            //    而且加密另存为本来就不会生成 PDF,用户重复保存到同一路径是正常操作);
+            //  - 该 PDF 旁的 sidecar 里**确实有批注**(空骨架覆盖无害)。
+            if (targetPath !== prevPath && writeSidecar && existsSync(targetPath)) {
+              const existing = readSidecar(targetPath)
+              const existingCount = existing?.annotations?.length ?? 0
+              if (existingCount > 0) {
+                return {
+                  ok: false,
+                  error: `${basename(targetPath)} 旁已有 ${existingCount} 条批注(${basename(sidecarPath)}),加密文档的批注会覆盖它们。请换一个文件名另存。`
+                }
+              }
+            }
             if (writeSidecar) {
               await writeFile(tmpSidecar, JSON.stringify(sidecar, null, 2), 'utf8')
               await rename(tmpSidecar, sidecarPath)
             }
-            entry.path = targetPath
-            return { ok: true, mode: 'sidecar', savedPath: targetPath }
+            // 原地保存(targetPath 仍是当前文件):文档确实已落盘,回传 savedPath 让渲染层清脏标记。
+            // 另存为:本次没有生成任何 PDF,绝不能回传 savedPath —— 渲染层会据此把
+            // docState.filePath 指到一个不存在的文件并清掉未保存标记(用户以为存好了,实际只多了一个孤立 sidecar)。
+            // 此时也不能改 entry.path:渲染层的 filePath 仍指向原 PDF,主进程跟着改会让下次保存写到错的文件上。
+            const inPlace = targetPath === prevPath
+            if (inPlace) entry.path = targetPath
+            return {
+              ok: true,
+              mode: 'sidecar',
+              ...(inPlace ? { savedPath: targetPath } : {}),
+              warnings: inPlace
+                ? ['加密文档:批注与表单值仅保存到 sidecar 文件(.pdfanno.json),PDF 未重写']
+                : [
+                    `加密文档无法另存为新的 PDF:批注已写入 ${basename(sidecarPath)},未生成 PDF。当前文档仍关联原文件,批注未标记为已保存。`
+                  ]
+            }
           }
 
           const { bytes, warnings } = await writeAnnotations(entry.buffer, {
@@ -575,6 +623,14 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   })
 
   ipcMain.handle('img:getByPath', async (_e, refPath: string): Promise<ImageImport> => {
+    // 冒烟脚本用项目自带资源直接走这条通路(不经选择框,故没有授权记录)
+    if (isSmokeMode() && isInsideAppPath(refPath)) {
+      // 读到即授权:图片既然已经成功显示过一次,保存阶段就该能用同一个 refPath 取回它。
+      // 否则图片批注保存时 resolveImage 取不到 buffer → 外观页画不出东西 →
+      // pdf-lib 在 save() 里抛 "Can't embed page with missing Contents",整次保存失败。
+      authorizeUserPickedPath(refPath)
+      return readImageInfoAuthorized(refPath)
+    }
     return readImageInfo(refPath)
   })
 
@@ -587,6 +643,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     }
     const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
     if (result.canceled || result.filePaths.length === 0) return { canceled: true }
+    // 用户主动选中的文件即授权凭据:后续渲染层按 refPath 取图(info)与合成(img:toPdf)都靠它
+    for (const p of result.filePaths) authorizeUserPickedPath(p)
     return { canceled: false, files: result.filePaths }
   })
 
@@ -634,7 +692,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
         if (result.canceled || !result.filePath) return { ok: false, canceled: true }
         savedPath = result.filePath
       }
-      await writeFile(savedPath, Buffer.from(bytes))
+      await atomicWrite(savedPath, Buffer.from(bytes))
       logEvent(converted.errors.length > 0 ? 'warn' : 'info', 'img2pdf', '完成', {
         count: converted.pages,
         failed: converted.errors.length,
@@ -654,7 +712,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
         const dir = join(app.getAppPath(), 'tmp')
         await mkdir(dir, { recursive: true })
         const target = join(dir, payload.defaultName)
-        await writeFile(target, Buffer.from(base64, 'base64'))
+        await atomicWrite(target, Buffer.from(base64, 'base64'))
         return { ok: true, savedPath: target }
       }
       const win = getWindow()
@@ -665,7 +723,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       }
       const result = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options)
       if (result.canceled || !result.filePath) return { ok: false, canceled: true }
-      await writeFile(result.filePath, Buffer.from(base64, 'base64'))
+      await atomicWrite(result.filePath, Buffer.from(base64, 'base64'))
       return { ok: true, savedPath: result.filePath }
     }
   )
@@ -683,15 +741,19 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       const dir = result.filePaths[0]
       return guard<SaveResult>(async () => {
         for (const [i, name] of payload.names.entries()) {
+          // name 由渲染层传入(源自 PDF 文件名 stem),仍按不可信输入处理:
+          // 只需 basename —— 带 ../ 或绝对路径的片段会越出用户刚选定的目录
+          const safeName = basename(name)
+          if (!safeName || safeName === '.' || safeName === '..') continue
           // 重名不覆盖:stem 后依次追加 -1/-2…
-          const dot = name.lastIndexOf('.')
-          const stem = dot < 0 ? name : name.slice(0, dot)
-          const ext = dot < 0 ? '' : name.slice(dot)
-          let target = join(dir, name)
+          const dot = safeName.lastIndexOf('.')
+          const stem = dot < 0 ? safeName : safeName.slice(0, dot)
+          const ext = dot < 0 ? '' : safeName.slice(dot)
+          let target = join(dir, safeName)
           let n = 1
           while (existsSync(target)) target = join(dir, `${stem}-${n++}${ext}`)
           const base64 = (payload.dataUrls[i] ?? '').split(',')[1] ?? ''
-          await writeFile(target, Buffer.from(base64, 'base64'))
+          await atomicWrite(target, Buffer.from(base64, 'base64'))
         }
         return { ok: true, savedPath: dir }
       })
