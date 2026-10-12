@@ -45,6 +45,8 @@ let resizeObserver: ResizeObserver | null = null
 let rafPending = false
 /** seedVisiblePages 的布局未就绪重试计数(避免持续重排时无限 rAF) */
 let seedRetries = 0
+/** setupObserver 的布局未就绪重试计数 —— 同样必须有上限,否则单页模式下会常驻自旋 */
+let observerRetries = 0
 
 /* --------------------------- 空格/中键拖拽平移 --------------------------- */
 
@@ -123,16 +125,36 @@ function handleWheel(event: WheelEvent): void {
   scrollToPage(target)
 }
 
+/**
+ * 挑一个「真正可见」的元素做布局就绪探测。
+ *
+ * 不能用 `querySelector('[data-page]')`:它永远返回**第一个**匹配元素(第 1 页),
+ * 而单页模式下非当前页是 `v-show` 的 `display:none`(不是 v-if 卸载)→ 第 1 页高度恒为 0,
+ * 于是就绪判定永远不成立。
+ */
+function firstVisiblePageEl(root: HTMLElement): HTMLElement | null {
+  const all = root.querySelectorAll<HTMLElement>('[data-page]')
+  for (const el of all) {
+    if (el.getBoundingClientRect().height > 0) return el
+  }
+  return null
+}
+
 function setupObserver(): void {
   observer?.disconnect()
   const root = containerEl.value
   if (!root) return
-  const sample = root.querySelector<HTMLElement>('[data-page]')
-  // 首次布局尚未生效时页面高度为 0,会被整批判为可见;等下一帧再建观察器
-  if (sample && sample.getBoundingClientRect().height === 0) {
-    requestAnimationFrame(() => setupObserver())
+  // 首次布局尚未生效时页面高度为 0,会被整批判为可见;等下一帧再建观察器。
+  // 重试必须有上限:没有上限时,单页模式下第 1 页永远不可见 → 每帧无条件重排一个 rAF,
+  // 形成 60fps 常驻自旋(老机器上 CPU 占用明显),且新 observer 永远建不起来、预读缓冲彻底失效。
+  if (!firstVisiblePageEl(root)) {
+    if (observerRetries < 5) {
+      observerRetries++
+      requestAnimationFrame(() => setupObserver())
+    }
     return
   }
+  observerRetries = 0
   // 预读余量:按实测渲染耗时决定提前铺几页(见 viewer.ts prefetchDepth)。
   // 连续/单页模式下余量取整页高 ⇒ 当前页上下各多渲染 1–2 页,滚动时直接复用已有位图;
   // 双页模式一屏 2 页,再铺 2 行会一次拉进 6 页把 worker 排满,所以维持原有的小余量。
@@ -166,8 +188,7 @@ function seedVisiblePages(): void {
   if (!root || docState.pageBoxes.length !== docState.pageCount || docState.pageCount === 0) return
   // 布局未就绪(页高为 0)时几何播种会漏标页 → 该页 data-visible=0 → PageCanvas 走 clearPage
   // → 白页。与 setupObserver 同策略:下一帧重试,最多 5 次(避免持续重排时无限 rAF 循环)。
-  const sample = root.querySelector<HTMLElement>('[data-page]')
-  if (sample && sample.getBoundingClientRect().height === 0) {
+  if (!firstVisiblePageEl(root)) {
     if (seedRetries < 5) {
       seedRetries++
       requestAnimationFrame(() => seedVisiblePages())
@@ -199,6 +220,7 @@ function seedVisiblePages(): void {
 function refreshVisiblePages(): void {
   updateVisiblePages((next) => next.clear())
   seedRetries = 0
+  observerRetries = 0
   setupObserver()
   seedVisiblePages()
 }
