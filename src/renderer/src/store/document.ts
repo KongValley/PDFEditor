@@ -358,6 +358,11 @@ export async function openByPath(path: string, options: OpenOptions = {}): Promi
     docState.pdfDoc = markRaw(pdfDoc)
     // 旧文档的可见/pin 页号残留会让新文档的同号页被豁免回收,换文档时一并清空
     clearViewerPins()
+    // 先把上一份文档的批注清掉再铺新文档的几何:docReady 由 pageBoxes 推导,
+    // 它在下面 fillPageBoxes 结束时就变 true → PdfViewer 挂载。若批注还留在模型里,
+    // 那一帧渲染出的就是「新文档 + 上一个文档的批注」,到 openPath 里 restoreSidecar
+    // 执行之前才被换掉 —— 中间会闪一帧(慢机上更明显)。
+    resetAnnotations()
     docState.pageCount = pdfDoc.numPages
     docState.currentPage = 1
     docState.rotationView = 0

@@ -22,6 +22,11 @@ let searchSeq = 0
 async function runSearch(): Promise<void> {
   const query = searchState.query.trim()
   const seq = ++searchSeq
+  // seq 只防「更新的查询词」,**不防换文档**:大文档搜索要好几秒(每 16 页让出一次主线程),
+  // 期间用 Ctrl+O / 拖放打开另一份文件,在飞的 searchDocument 返回后 seq 未变,
+  // 会把旧文档(乃至两份文档混合)的命中写进新文档的 searchState ——
+  // 表现为高亮框画在无关文字上、跳转跳到不含关键词的页。
+  const docId = docState.docId
   searchState.results = []
   searchState.current = -1
   searchState.truncated = false
@@ -32,7 +37,7 @@ async function runSearch(): Promise<void> {
   searchState.searching = true
   try {
     const { matches, truncated } = await searchDocument(query)
-    if (seq !== searchSeq) return
+    if (seq !== searchSeq || docId !== docState.docId) return
     searchState.results = matches
     searchState.truncated = truncated
     if (matches.length > 0) void searchGoTo(0)

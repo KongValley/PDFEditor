@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { onBeforeUnmount, ref, watch } from 'vue'
 import type { RenderTask } from 'pdfjs-dist'
 import { docReady, docState, getPage } from '../store/document'
 import { getPageViewport, pdfjs } from '../lib/pdfjs'
@@ -46,13 +46,16 @@ async function renderThumb(): Promise<void> {
     const base = getPageViewport(page, 1, docState.rotationView).viewport
     const scale = props.thumbWidth / Math.max(base.width, 1)
     const { viewport } = getPageViewport(page, scale, docState.rotationView)
+    // 先取消上一轮再改尺寸:pdf.js 3.x 是主线程增量绘制,先改 canvas 尺寸(赋值即清空)
+    // 会让旧任务剩余的绘制指令落到已清空的画布上(与 PageCanvas 同一问题)
+    task?.cancel()
+    task = null
     canvas.width = Math.floor(viewport.width)
     canvas.height = Math.floor(viewport.height)
     canvas.style.width = `${Math.floor(viewport.width)}px`
     canvas.style.height = `${Math.floor(viewport.height)}px`
     const ctx = canvas.getContext('2d')
     if (!ctx) return
-    task?.cancel()
     task = page.render({
       canvasContext: ctx,
       viewport,
@@ -87,6 +90,17 @@ watch(
   },
   { immediate: true }
 )
+
+/**
+ * 卸载时必须走一遍 clearThumb:它只在 `visible` 变 false 时被调用,
+ * 卸载(Ctrl+B 隐藏缩略图栏 / 关闭文档使 ThumbnailsPanel 卸载)不会触发 ——
+ * 于是 seq 不递增,排队中的渲染项无法撤销,已经排到槽位的还会真的去渲染
+ * 一张已经脱离文档的全页位图,白占满本就不宽裕的 2 个渲染槽(低内存机 max=1),
+ * 拖慢主视图首屏。
+ */
+onBeforeUnmount(() => {
+  clearThumb()
+})
 </script>
 
 <template>

@@ -37,19 +37,36 @@ const canvasEl = ref<HTMLCanvasElement | null>(null)
 const textLayerEl = ref<HTMLDivElement | null>(null)
 const rendered = ref(false)
 /**
- * 当前位图对应的状态:缩放、视图旋转、几何版本(旋转/增删/移动)、文档身份。
- * 四者都一样才认为位图还有效(预读或刚离开视口的页直接复用,省一次整页光栅化)。
+ * 当前位图对应的状态:缩放、视图旋转、页面自身旋转、几何版本(旋转/增删/移动)、文档身份。
+ * 五者都一样才认为位图还有效(预读或刚离开视口的页直接复用,省一次整页光栅化)。
  * geometryVersion 必须算进来:180° 旋转不换宽高、缩放也不变,只看缩放会留下旧朝向的位图。
+ *
+ * rotation 必须存 `docState.rotationView`(视图旋转)**而不是** `vp.rotation`(合成角):
+ * pdfjs 的 viewport.rotation = (page.rotate + rotationView) % 360,拿它去和
+ * `docState.rotationView` 比,只要页面自身 /Rotate ≠ 0 就**永远不相等** ——
+ * 位图复用快路径对扫描件这类最需要复用的页完全失效,滚走再滚回每次都整页重光栅。
+ * 页面自身旋转可能变化(如「统一页面方向」改写 /Rotate),故单列一维。
  */
-let renderedSig: { scale: number; rotation: number; geometry: number; docId: string | null } | null = null
+let renderedSig: {
+  scale: number
+  rotation: number
+  pageRotation: number
+  geometry: number
+  docId: string | null
+} | null = null
 
-function bitmapCurrent(): boolean {
+/**
+ * 页面自身旋转变化(如「统一页面方向」改写 /Rotate)一定伴随 geometryVersion 递增,
+ * 因此不传 pageRotation 时页面旋转这一维由 geometry 覆盖,比较依然安全。
+ */
+function bitmapCurrent(pageRotation?: number): boolean {
   const sig = renderedSig
   return (
     rendered.value &&
     sig !== null &&
     sig.scale === docState.scale &&
     sig.rotation === docState.rotationView &&
+    (pageRotation === undefined || sig.pageRotation === pageRotation) &&
     sig.geometry === docState.geometryVersion &&
     sig.docId === docState.docId
   )
@@ -166,22 +183,32 @@ async function renderPage(attempt = 0): Promise<void> {
 
   const info = getPageViewport(page, docState.scale, docState.rotationView)
   const vp = info.viewport
+  const pageRotation = info.pageRotation
   const ctx = canvas.getContext('2d')
   if (!ctx) return
   const dpr = 1 // 低内存优先:统一按 1 倍位图渲染(内网机多为普通 DPI 屏)
-  canvas.width = Math.floor(vp.width * dpr)
-  canvas.height = Math.floor(vp.height * dpr)
-  canvas.style.width = `${vp.width}px`
-  canvas.style.height = `${vp.height}px`
 
   const startedAt = performance.now()
+  // 先取消上一轮渲染再去排队。pdf.js 3.x 的 canvas 渲染是**主线程增量绘制**
+  // (operator list 分批下发,cancel 只在批次之间检查标志位),若先改 canvas 尺寸
+  // (赋值即清空 backing store)再取消,旧任务剩余的绘制指令会落到新尺寸/已清空的
+  // 画布上 —— 表现为快速连续缩放时页面出现被截断拉伸的半成品旧渲染,
+  // 且要一直等到排队结束(看门狗预算最多 8s)。
+  renderTask?.cancel()
+  renderTask = null
+
   await acquireRenderSlot(props.pageNumber === docState.currentPage ? 'current' : 'page')
   let timedOut = false
   try {
     // 排队期间可能已滚出视口或被新的渲染请求取代:直接释放槽,不做无用渲染
     if (!props.visible || mySeq !== seq) return
 
-    renderTask?.cancel()
+    // 尺寸改到拿到槽之后:排队期间旧任务已被取消,不会再往这块画布上画
+    canvas.width = Math.floor(vp.width * dpr)
+    canvas.height = Math.floor(vp.height * dpr)
+    canvas.style.width = `${vp.width}px`
+    canvas.style.height = `${vp.height}px`
+
     renderTask = page.render({
       canvasContext: ctx,
       viewport: vp,
@@ -219,7 +246,8 @@ async function renderPage(attempt = 0): Promise<void> {
       // 让位图永远停在旧比例(watch 又判它“仍有效”),页面尺寸与位图/覆盖层持续错位
       renderedSig = {
         scale: vp.scale,
-        rotation: vp.rotation,
+        rotation: docState.rotationView,
+        pageRotation,
         geometry: docState.geometryVersion,
         docId: docState.docId
       }

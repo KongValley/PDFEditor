@@ -1,6 +1,18 @@
 import { onBeforeUnmount, onMounted } from 'vue'
 import { docState } from '../store/document'
-import { cancelImagePdf, cancelOrientationPlan, imagePdfDialogState, orientationDialogState, pagesDialogState, setTool, submitPagesRange, ui } from '../store/ui'
+import {
+  cancelImagePdf,
+  cancelOrientationPlan,
+  imagePdfDialogState,
+  mergeDialogState,
+  orientationDialogState,
+  pagesDialogState,
+  passwordState,
+  setTool,
+  splitDialogState,
+  submitPagesRange,
+  ui
+} from '../store/ui'
 import { copySelection, duplicateSelection, pasteClipboard, removeSelected, redo, undo } from '../store/annotations'
 import { searchStep } from '../store/search'
 import { fitWidth, scrollToPage, setViewMode, stepPage, zoomBy } from '../store/viewer'
@@ -51,6 +63,22 @@ export function useGlobalKeymap(): void {
     // Ctrl+E/P/F/1/2/3 等会弹模态或重排视图,把半句输入打断;Ctrl+C/V 若不 return
     // 还会与原生复制粘贴同时生效(既粘文本又粘批注)。
     if (isTypingTarget(event.target)) return
+
+    // 模态守卫:对话框打开时,除上面的「不打断录入」快捷键外,其余文档级快捷键一律让位。
+    // 遮罩挡住了鼠标却挡不住键盘 —— 少了这道闸,用户在「图片转 PDF」对话框里按
+    // `[`/`]`/Delete/方向键,会在看不见的背景上删除注释、旋转页面、切换视图模式。
+    // 该对话框聚焦的是 <button>(其余对话框都聚焦 <input>,被 isTypingTarget 命中),
+    // 正好从上面的缝隙漏过来,故在此统一兜住全部模态。
+    if (
+      pagesDialogState.open ||
+      orientationDialogState.open ||
+      imagePdfDialogState.open ||
+      mergeDialogState.open ||
+      splitDialogState.open ||
+      passwordState.open
+    ) {
+      return
+    }
 
     if (ctrl && key === 'e') {
       event.preventDefault()
@@ -177,6 +205,13 @@ export function useGlobalKeymap(): void {
       // 图片转 PDF 转换中不响应 Esc:避免留下半开的进度界面
       if (imagePdfDialogState.open && !imagePdfDialogState.running) {
         cancelImagePdf()
+        return
+      }
+      // 页面右键菜单:菜单本身不可聚焦,它的 @keydown.esc 收不到键盘事件,
+      // 只有点外部/滚动能关。Esc 收不到这里就一直挂着,而且下面的 setTool('select')
+      // 还会把当前工具悄悄改掉 —— 用户想撤销的只是「关菜单」。
+      if (ui.pageMenu.open) {
+        ui.pageMenu.open = false
         return
       }
       ui.searchOpen = false
