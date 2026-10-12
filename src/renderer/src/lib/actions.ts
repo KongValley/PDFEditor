@@ -54,7 +54,7 @@ import { planPageOrientation, type OrientationPlanItem } from './orientation'
 import { cancelOrientationPlan, requestOrientationPlan, submitOrientationPlan } from '../store/ui'
 import { imagePdfDialogState, requestImagePdf, type ImagePdfItem } from '../store/ui'
 import { invalidateSearch } from '../store/search'
-import { maybeRestoreLastPage } from '../store/reading'
+import { beginOpen, endOpen, maybeRestoreLastPage } from '../store/reading'
 import { orientationFlipped, refitAfterOrientationChange, scrollToPage } from '../store/viewer'
 import { getPageViewport, pdfjs } from './pdfjs'
 import { paintAnnotations } from './canvasannot'
@@ -94,29 +94,35 @@ export async function openPath(path: string): Promise<void> {
     showToast('文档正在加载,请稍候', 'info')
     return
   }
-  // 身份令牌必须在 openByPath **返回之后**取:openByPath 内部会 ++openSeq,
-  // 调用前取到的旧令牌与返回值必然不等,会把下面的恢复步骤全部误判为"已被取代"。
-  const ok = await openByPath(path, {
-    onPassword: (updatePassword, reason) => {
-      const message = reason === 2 ? '密码错误,请重新输入' : '此 PDF 已加密,请输入密码'
-      void requestPassword(message).then((password) => {
-        updatePassword(password === null ? new Error('用户取消') : password)
-      })
+  // 打开期间禁止把"暂定的第 1 页"当成真实阅读位置落盘(见 store/reading.ts 的 opening 注释)
+  beginOpen()
+  try {
+    // 身份令牌必须在 openByPath **返回之后**取:openByPath 内部会 ++openSeq,
+    // 调用前取到的旧令牌与返回值必然不等,会把下面的恢复步骤全部误判为"已被取代"。
+    const ok = await openByPath(path, {
+      onPassword: (updatePassword, reason) => {
+        const message = reason === 2 ? '密码错误,请重新输入' : '此 PDF 已加密,请输入密码'
+        void requestPassword(message).then((password) => {
+          updatePassword(password === null ? new Error('用户取消') : password)
+        })
+      }
+    })
+    if (!ok) {
+      // 打开失败保留现场:旧文档与注释不动,仅提示错误
+      if (docState.loadError && !docState.loadError.includes('用户取消')) {
+        showToast(docState.loadError, 'error')
+      }
+      return
     }
-  })
-  if (!ok) {
-    // 打开失败保留现场:旧文档与注释不动,仅提示错误
-    if (docState.loadError && !docState.loadError.includes('用户取消')) {
-      showToast(docState.loadError, 'error')
-    }
-    return
+    // 从此刻起若又来了新打开请求,下面的 restoreSidecar/maybeRestoreLastPage
+    // 都在 await 之后写全局状态,必须确认「我还是当前文档」再往下走。
+    const token = currentOpenToken()
+    await restoreSidecar()
+    if (token !== currentOpenToken()) return
+    await maybeRestoreLastPage(docState.filePath ?? path)
+  } finally {
+    endOpen()
   }
-  // 从此刻起若又来了新打开请求,下面的 restoreSidecar/maybeRestoreLastPage
-  // 都在 await 之后写全局状态,必须确认「我还是当前文档」再往下走。
-  const token = currentOpenToken()
-  await restoreSidecar()
-  if (token !== currentOpenToken()) return
-  await maybeRestoreLastPage(docState.filePath ?? path)
 }
 
 /** 有未保存更改时确认放弃(false = 用户取消) */
@@ -323,6 +329,11 @@ export async function convertImagesToPdf(items: ImagePdfItem[]): Promise<void> {
       await openPath(result.savedPath as string)
       showToast(`已生成 PDF(${result.pages} 页):${result.savedPath ?? ''}`)
     })
+  } catch (err) {
+    // 主进程已把「数量超限/未选择」转成 {ok:false,error} 正常返回(见 ipc 的 validateImageCount),
+    // 走到这里说明是真正的意外。不能让它变成未处理 rejection ——
+    // 对话框会直接退回待开始列表且零提示,用户表现为「点了没反应」。
+    showToast(`图片转 PDF 失败:${err instanceof Error ? err.message : String(err)}`, 'error')
   } finally {
     off()
     imagePdfDialogState.running = false

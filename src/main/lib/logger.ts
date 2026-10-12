@@ -95,22 +95,33 @@ function filePathFor(date: string, index: number): string {
   return index === 0 ? join(logDir, `app-${date}.log`) : join(logDir, `app-${date}.${index}.log`)
 }
 
-/** 超过上限就把当前文件后移一位,腾出新的当前文件;最旧的直接删掉 */
+/**
+ * 超过上限就把当前文件后移一位,腾出新的当前文件;最旧的直接删掉。
+ *
+ * 注意**不要**让轮转失败冒泡到调用方:logEvent 的 catch 会把任何异常当成「写入不可用」
+ * 并置 ioFailed,那会让本会话此后连 error 级日志也不再落盘 —— 而轮转失败(文件被杀软占用等)
+ * 本可以降级为继续追加。何况一次 EBUSY 恰好发生在最需要日志的排障时刻。
+ */
 function rotateIfNeeded(path: string, date: string): void {
   try {
     if (!existsSync(path) || statSync(path).size < maxBytes) return
   } catch {
     return
   }
-  rmSync(filePathFor(date, keepCount - 1), { force: true })
-  for (let index = keepCount - 2; index >= 0; index--) {
-    const from = filePathFor(date, index)
-    if (!existsSync(from)) continue
-    try {
-      renameSync(from, filePathFor(date, index + 1))
-    } catch {
-      return
+  try {
+    rmSync(filePathFor(date, keepCount - 1), { force: true })
+    for (let index = keepCount - 2; index >= 0; index--) {
+      const from = filePathFor(date, index)
+      if (!existsSync(from)) continue
+      try {
+        renameSync(from, filePathFor(date, index + 1))
+      } catch {
+        return
+      }
     }
+  } catch (err) {
+    // 轮转失败不影响追加:文件继续写在当前文件上,只是不会滚动
+    console.warn('[logger] 日志轮转失败,继续写入当前文件:', err)
   }
 }
 

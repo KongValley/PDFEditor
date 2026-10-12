@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, protocol, shell } from 'electron'
 import { totalmem } from 'node:os'
-import { join, normalize } from 'node:path'
+import { join, normalize, sep } from 'node:path'
 import { isRendererDirty, registerIpc, setRendererDirty } from './ipc'
 import { cleanupPrintJobs } from './lib/print'
 import { initLogger, logEvent } from './lib/logger'
@@ -56,11 +56,17 @@ protocol.registerSchemesAsPrivileged([
 
 function registerAppProtocol(): void {
   const rendererRoot = normalize(join(app.getAppPath(), 'out/renderer'))
+  const rootPrefix = rendererRoot.endsWith(sep) ? rendererRoot : rendererRoot + sep
   protocol.registerFileProtocol('app', (request, callback) => {
     const url = new URL(request.url)
     const filePath = normalize(join(rendererRoot, decodeURIComponent(url.pathname)))
-    // 路径穿越防护:越界时返回不存在的路径(Chromium 按 404 处理)
-    const safePath = filePath.startsWith(rendererRoot) ? filePath : join(rendererRoot, '__forbidden__')
+    // 路径穿越防护:越界时返回不存在的路径(Chromium 按 404 处理)。
+    // 必须带分隔符比较:单纯 startsWith(rendererRoot) 会把 **兄弟目录**
+    // `out/renderer-secrets/…`(前缀恰好是 out/renderer)当成合法路径放行。
+    const safePath =
+      filePath === rendererRoot || filePath.startsWith(rootPrefix)
+        ? filePath
+        : join(rendererRoot, '__forbidden__')
     callback({ path: safePath })
   })
 }

@@ -5,8 +5,14 @@ import { cancelImagePdf, imagePdfDialogState } from '../store/ui'
 
 const dialogEl = ref<HTMLElement | null>(null)
 
+/** 单次上限,与主进程 imagetopdf.MAX_IMAGES 保持一致 */
+const MAX_IMAGES = 200
+const count = computed(() => imagePdfDialogState.items.length)
+const overLimit = computed(() => count.value > MAX_IMAGES)
+// 超限时直接禁用「开始转换」:原先能点下去,主进程 throw → 渲染层未处理 rejection →
+// 对话框退回待开始列表且零提示,用户表现为「点了没反应」。
 const canStart = computed(
-  () => imagePdfDialogState.items.length > 0 && !imagePdfDialogState.running && !imagePdfDialogState.result
+  () => count.value > 0 && !overLimit.value && !imagePdfDialogState.running && !imagePdfDialogState.result
 )
 const percent = computed(() =>
   imagePdfDialogState.total > 0
@@ -70,8 +76,11 @@ function start(): void {
       <!-- 待开始:文件列表 + 页尺寸 -->
       <template v-else>
         <div class="message">把 PNG / JPEG 图片合并成一份 PDF,每张图一页。</div>
+        <div v-if="overLimit" class="message error">
+          已选 {{ count }} 张,超过单次上限 {{ MAX_IMAGES }} 张,请分批处理(可先移除部分图片)。
+        </div>
         <div class="list">
-          <div v-if="imagePdfDialogState.items.length === 0" class="empty">尚未添加图片</div>
+          <div v-if="count === 0" class="empty">尚未添加图片</div>
           <div v-for="(item, index) in imagePdfDialogState.items" :key="item.path" class="row">
             <span class="name" :title="item.path">{{ item.name }}</span>
             <span class="size">{{ item.width }}×{{ item.height }}</span>

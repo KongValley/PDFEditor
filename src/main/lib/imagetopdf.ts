@@ -38,14 +38,27 @@ export interface ImageToPdfResult {
   bytes: Uint8Array | null
 }
 
+/**
+ * 数量校验(上限与 imagesToPdf 内部一致):通过则返回 null,否则返回可展示给用户的原因。
+ *
+ * 单列一个函数是为了让 IPC 层能在调用 imagesToPdf **之前**先拒掉:
+ * 原本只有 imagesToPdf 内部 throw,异常会穿透 IPC 变成渲染层的未处理 rejection,
+ * 对话框不给任何提示。两侧共用同一个上限,避免日后只改一边。
+ */
+export function validateImageCount(count: number): string | null {
+  if (count === 0) return '未选择图片'
+  if (count > MAX_IMAGES) return `一次最多转换 ${MAX_IMAGES} 张图片,请分批处理`
+  return null
+}
+
 /** 逐张嵌入为页;每张完成后回调进度。返回页数与失败明细 */
 export async function imagesToPdf(
   paths: string[],
   pageMode: ImagePageMode,
   hooks: { onProgress?: (p: ConvertProgress) => void } = {}
 ): Promise<ImageToPdfResult> {
-  if (paths.length === 0) throw new Error('未选择图片')
-  if (paths.length > MAX_IMAGES) throw new Error(`一次最多转换 ${MAX_IMAGES} 张图片,请分批处理`)
+  const invalid = validateImageCount(paths.length)
+  if (invalid) throw new Error(invalid)
   const doc = await PDFDocument.create()
   const errors: Array<{ path: string; error: string }> = []
   let done = 0

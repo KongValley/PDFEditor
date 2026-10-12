@@ -41,7 +41,12 @@ import {
   readImageInfoAuthorized,
   type ImageImport
 } from './lib/images'
-import { imagesToPdf, type ImagePageMode } from './lib/imagetopdf'
+import {
+  imagesToPdf,
+  validateImageCount,
+  type ImagePageMode,
+  type ImageToPdfResult
+} from './lib/imagetopdf'
 import { abortPrintJob, addPrintPage, commitPrintJob, preparePrintJob } from './lib/print'
 import { getRecentPage, listRecentFiles, setRecentPage } from './lib/recent'
 import { isSmokeMode } from './smoke'
@@ -663,9 +668,33 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     }> => {
       const win = getWindow()
       const started = Date.now()
-      const converted = await imagesToPdf(payload.paths, payload.pageMode, {
-        onProgress: (info) => win?.webContents.send('img:toPdfProgress', { jobId: payload.jobId, ...info })
-      })
+      // 数量校验(0 张 / 超过上限)必须自己转成返回值:imagesToPdf 对这两种情况是 throw,
+      // 异常穿透到渲染层会变成未处理的 promise rejection —— 对话框直接退回待开始列表,
+      // **一句提示都没有**,用户反复点反复像没反应。guard 只兜底真正的意外。
+      const validation = validateImageCount(payload.paths.length)
+      if (validation) {
+        logEvent('warn', 'img2pdf', '拒绝转换', { count: payload.paths.length, error: validation })
+        return { ok: false, error: validation }
+      }
+      // 这里不用 guard:它的兜底会返回 {ok:false,error},而本函数的失败产物需要
+      // imagesToPdf 自己的 errors 明细。改为就地 try/catch,失败也走统一的结果结构。
+      let converted: ImageToPdfResult
+      try {
+        converted = await imagesToPdf(payload.paths, payload.pageMode, {
+          onProgress: (info) => win?.webContents.send('img:toPdfProgress', { jobId: payload.jobId, ...info })
+        })
+      } catch (err) {
+        // 走到这里说明是真正的意外(数量校验已在上方拦掉):不能变成未处理 rejection,
+        // 否则对话框退回待开始列表且零提示,用户表现为「点了没反应」
+        const message = err instanceof Error ? err.message : String(err)
+        logEvent('error', 'img2pdf', '转换异常', {
+          count: payload.paths.length,
+          ms: Date.now() - started,
+          ok: false,
+          error: message
+        })
+        return { ok: false, error: message }
+      }
       const bytes = converted.bytes
       if (converted.pages === 0 || !bytes) {
         logEvent('error', 'img2pdf', '转换失败', {
