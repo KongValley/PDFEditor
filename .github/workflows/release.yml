@@ -42,10 +42,10 @@ jobs:
           # 打包中间目录,里面 resources/elevate.exe 之类的内部文件不是分发物
           $assets = @(
             Get-ChildItem -Path 'release/Win7-32位','release/Win7-64位','release/Win10-32位','release/Win10-64位' -File |
-              Where-Object { $_.Extension -in '.exe', '.zip' } |
+              Where-Object { $_.Extension -eq '.zip' } |
               ForEach-Object { $_.FullName }
           )
-          if ($assets.Count -eq 0) { Write-Error '未找到任何安装包/绿色版产物'; exit 1 }
+          if ($assets.Count -eq 0) { Write-Error '未找到任何绿色版 zip 产物'; exit 1 }
           gh release create $env:GITHUB_REF_NAME --title $env:GITHUB_REF_NAME --generate-notes @assets
           if ($LASTEXITCODE -ne 0) {
             # tag 已存在 Release(重复触发/重跑):改为增量上传

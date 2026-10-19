@@ -1,6 +1,6 @@
 {
   "name": "pdf-editor",
-  "version": "1.16.0",
+  "version": "1.17.0",
   "description": "PDF 编辑器 - 基于 Electron 的完整标注编辑器",
   "main": "out/main/index.js",
   "author": "",
@@ -68,15 +68,9 @@
     ],
     "win": {
       "target": [
-        "nsis",
         "zip"
       ],
       "icon": "resources/icon.png"
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true
     }
   }
 }

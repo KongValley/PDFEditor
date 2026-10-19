@@ -1,12 +1,12 @@
 // 单架构打包:node scripts/package-win.mjs <win7-ia32|win10-x64|win10-ia32|win7-x64>
-// 各组合 → release/<中文目录>/,含安装包(NSIS)与绿色版(zip,解压即用),文件名自明。
+// 各组合 → release/<中文目录>/,只产出绿色版 zip(解压即用),文件名自明。
 import { spawn } from 'node:child_process'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 // 随 Win7 分发目录附带的补丁安装说明(写入 前置补丁/安装说明.txt)
-const PATCH_README = `Windows 7 前置补丁(适用于本目录中的安装包与绿色版 zip)
+const PATCH_README = `Windows 7 前置补丁(适用于本目录中的绿色版 zip)
 
 前提:Windows 7 SP1。
 安装顺序:先装 KB4490628,再装 KB4474419;KB2533623、KB2670838 顺序不限。双击 .msu 逐个安装,提示重启就重启。
@@ -67,7 +67,7 @@ const env = {
 
 const child = spawn(
   process.execPath,
-  [path.join(root, 'node_modules/electron-builder/cli.js'), '--win', 'nsis', 'zip', `--${arch}`, '--publish', 'never'],
+  [path.join(root, 'node_modules/electron-builder/cli.js'), '--win', 'zip', `--${arch}`, '--publish', 'never'],
   { cwd: root, env }
 )
 let log = ''
@@ -85,32 +85,25 @@ if (code !== 0) {
   process.exit(code ?? 1)
 }
 
-// 从构建日志确定产物路径;解析不到时回退到 release 根目录扫描(Setup 字样 = NSIS)
-const artifacts = { nsis: null, zip: null }
-for (const m of log.matchAll(/building\s+target=(nsis|zip)\s+file=(.+)/g)) {
-  artifacts[m[1]] = path.resolve(root, m[2].trim().replace(/\s+archs?=.*$/, ''))
+// 从构建日志确定产物路径;解析不到时回退到 release 根目录扫描
+let zipArtifact = null
+for (const m of log.matchAll(/building\s+target=zip\s+file=(.+)/g)) {
+  zipArtifact = path.resolve(root, m[1].trim().replace(/\s+archs?=.*$/, ''))
 }
-if (!artifacts.nsis || !artifacts.zip) {
-  const files = readdirSync(releaseDir)
-    .filter((f) => f.endsWith('.exe') || f.endsWith('.zip'))
-    .map((f) => path.join(releaseDir, f))
-  artifacts.nsis ||= files.find((f) => /setup/i.test(path.basename(f))) ?? null
-  artifacts.zip ||= files.find((f) => f.endsWith('.zip')) ?? null
+if (!zipArtifact) {
+  const f = readdirSync(releaseDir).find((f) => f.endsWith('.zip'))
+  zipArtifact = f ? path.join(releaseDir, f) : null
 }
-if (!artifacts.nsis || !artifacts.zip || !existsSync(artifacts.nsis) || !existsSync(artifacts.zip)) {
+if (!zipArtifact || !existsSync(zipArtifact)) {
   console.error('无法确定构建产物路径,release 根目录内容:', readdirSync(releaseDir))
   process.exit(1)
 }
 
 // 产物文件名用 ASCII:GitHub Release 资产名不接受中文
-const nsisName = `pdf-editor-setup-${pkg.version}-${archLabel}.exe`
-// 绿色版:解压即用(win-unpacked 内容的 zip),不再产出单文件 portable exe
+// 绿色版:解压即用(win-unpacked 内容的 zip);不再产出安装包与单文件 portable exe
 const zipName = `pdf-editor-green-${pkg.version}-${archLabel}.zip`
 mkdirSync(outDir, { recursive: true })
-renameSync(artifacts.nsis, path.join(outDir, nsisName))
-renameSync(artifacts.zip, path.join(outDir, zipName))
-const blockmap = `${artifacts.nsis}.blockmap`
-if (existsSync(blockmap)) renameSync(blockmap, path.join(outDir, `${nsisName}.blockmap`))
+renameSync(zipArtifact, path.join(outDir, zipName))
 
 // Win7 前置补丁:从 win7-patches/ 复制本架构 .msu 到分发目录;无补丁源时只提示不失败(CI 无此目录)
 if (os === 'Win7') {
