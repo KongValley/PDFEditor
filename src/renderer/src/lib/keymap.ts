@@ -70,12 +70,17 @@ export function useGlobalKeymap(): void {
     // 该对话框聚焦的是 <button>(其余对话框都聚焦 <input>,被 isTypingTarget 命中),
     // 正好从上面的缝隙漏过来,故在此统一兜住全部模态。
     if (
-      pagesDialogState.open ||
-      orientationDialogState.open ||
-      imagePdfDialogState.open ||
-      mergeDialogState.open ||
-      splitDialogState.open ||
-      passwordState.open
+      event.key !== 'Escape' &&
+      (pagesDialogState.open ||
+        orientationDialogState.open ||
+        imagePdfDialogState.open ||
+        mergeDialogState.open ||
+        splitDialogState.open ||
+        passwordState.open ||
+        ui.watermarkDialog.open ||
+        ui.pageNumberDialog.open ||
+        ui.aboutOpen ||
+        ui.problemsOpen)
     ) {
       return
     }
@@ -212,6 +217,20 @@ export function useGlobalKeymap(): void {
       // 还会把当前工具悄悄改掉 —— 用户想撤销的只是「关菜单」。
       if (ui.pageMenu.open) {
         ui.pageMenu.open = false
+        return
+      }
+      // 水印/页码对话框的遮罩挡鼠标不挡键盘:焦点离开输入框后 Esc 收不到,
+      // 只有这里全局兜底(与上面的模态守卫配合:Escape 已被放行到此分支)
+      if (ui.watermarkDialog.open) {
+        ui.watermarkDialog.open = false
+        return
+      }
+      if (ui.pageNumberDialog.open) {
+        ui.pageNumberDialog.open = false
+        return
+      }
+      if (ui.problemsOpen) {
+        ui.problemsOpen = false
         return
       }
       ui.searchOpen = false

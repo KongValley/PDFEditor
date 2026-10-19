@@ -5,7 +5,7 @@ import type { Annotation } from '@shared/types'
 import { measureCjkText } from '../lib/canvasannot'
 import { pdfPointToScreen, pdfRectToScreen } from '../lib/geo'
 import { annotState } from '../store/annotations'
-import { fitFontSize, pointsToMm, wrapText } from '@shared/text'
+import { fitFontSize, pointsToMm, textBlockFrame, textLocalToPdf, wrapText } from '@shared/text'
 
 const props = defineProps<{ ann: Annotation; viewport: PageViewport; translate?: string }>()
 
@@ -17,13 +17,11 @@ const box = computed(() => pdfRectToScreen(vp.value, props.ann.bbox))
 const textLines = computed(() => {
   const ann = props.ann
   if (ann.kind !== 'text') return []
-  const lines = wrapText(ann.text, Math.max(ann.bbox.w, 8), (s) => measureCjkText(s, ann.fontSize))
+  const frame = textBlockFrame(ann.bbox, ann.rotate)
+  const lines = wrapText(ann.text, Math.max(frame.run, 8), (s) => measureCjkText(s, ann.fontSize))
   const screenAngle = ((vp.value.rotation - ann.rotate) % 360 + 360) % 360
   return lines.map((line, index) => {
-    const baselinePdf = {
-      x: ann.bbox.x,
-      y: ann.bbox.y + ann.bbox.h - ann.fontSize - index * ann.fontSize * 1.2
-    }
+    const baselinePdf = textLocalToPdf(ann.bbox, ann.rotate, 0, ann.fontSize + index * ann.fontSize * 1.2)
     const point = pdfPointToScreen(vp.value, baselinePdf)
     return { line, x: point.x, y: point.y, angle: screenAngle }
   })
@@ -69,7 +67,8 @@ const measureGeom = computed(() => {
 const stampGeom = computed(() => {
   const ann = props.ann
   if (ann.kind !== 'stamp') return null
-  const fontSize = fitFontSize(ann.label, ann.bbox, (s, size) => measureCjkText(s, size))
+  const frame = textBlockFrame(ann.bbox, ann.rotate)
+  const fontSize = fitFontSize(ann.label, { w: frame.run, h: frame.stack }, (s, size) => measureCjkText(s, size))
   const center = pdfPointToScreen(vp.value, {
     x: ann.bbox.x + ann.bbox.w / 2,
     y: ann.bbox.y + ann.bbox.h / 2

@@ -19,6 +19,17 @@ function toggle(node: OutlineNode, path: string): void {
   else collapsed.add(path)
 }
 
+/**
+ * 聚焦行内输入框。inputEl 出现在 v-for 内部:同名 ref 会被 Vue 收集成数组,
+ * 直接 inputEl.value?.focus() 会抛 "focus is not a function"(实测)并静默失去焦点。
+ */
+function focusEditInput(): void {
+  const raw = inputEl.value as unknown as HTMLInputElement | HTMLInputElement[] | null
+  const target = Array.isArray(raw) ? raw[0] : raw
+  target?.focus()
+  target?.select()
+}
+
 function goTo(node: OutlineNode): void {
   if (node.page === null) return
   scrollToPage(node.page + 1)
@@ -30,26 +41,19 @@ async function startRename(node: OutlineNode): Promise<void> {
   editingPath.value = node.path
   editingValue.value = node.title
   await nextTick()
-  inputEl.value?.focus()
-  inputEl.value?.select()
+  focusEditInput()
 }
 
 function startAddChild(parent: OutlineNode): void {
   addingParent.value = parent.path
   editingValue.value = `第 ${docState.currentPage} 页`
-  void nextTick().then(() => {
-    inputEl.value?.focus()
-    inputEl.value?.select()
-  })
+  void nextTick().then(() => focusEditInput())
 }
 
 function startAddTop(): void {
   addingParent.value = []
   editingValue.value = `第 ${docState.currentPage} 页`
-  void nextTick().then(() => {
-    inputEl.value?.focus()
-    inputEl.value?.select()
-  })
+  void nextTick().then(() => focusEditInput())
 }
 
 function cancelEditing(): void {
@@ -143,40 +147,46 @@ function onInputKeydown(event: KeyboardEvent): void {
           </span>
         </template>
       </div>
+      <div v-if="addingParent !== null && addingParent.join() === node.path.join()" class="node-row child">
+        <span class="toggle placeholder"></span>
+        <input
+          ref="inputEl"
+          v-model="editingValue"
+          class="edit-input"
+          @keydown="onInputKeydown"
+          @blur="commitAdd"
+        />
+      </div>
       <template v-if="node.children.length > 0 && !collapsed.has(String(index))">
-        <div
-          v-for="(child, childIndex) in node.children"
-          :key="`${index}-${childIndex}`"
-          class="node-row child"
-        >
-          <span class="toggle placeholder"></span>
-          <template v-if="editingPath !== null && editingPath.join() === child.path.join()">
-            <input
-              ref="inputEl"
-              v-model="editingValue"
-              class="edit-input"
-              @keydown="onInputKeydown"
-              @blur="commitRename"
-            />
-          </template>
-          <template v-else>
-            <span
-              class="title"
-              :class="{ disabled: child.page === null }"
-              :title="child.page === null ? '目标页面无法解析' : `跳转到第 ${child.page + 1} 页`"
-              @click="goTo(child)"
-            >
-              {{ child.title }}
-            </span>
-            <span class="row-actions">
-              <button class="mini" title="添加子书签(指向当前页)" :disabled="busy()" @click.stop="startAddChild(child)">+</button>
-              <button class="mini" title="重命名" :disabled="busy()" @click.stop="startRename(child)">改</button>
-              <button class="mini" title="删除(含子书签)" :disabled="busy()" @click.stop="removeNode(child)">删</button>
-            </span>
-          </template>
-        </div>
-        <template v-if="addingParent !== null && addingParent.join() === node.path.join()">
+        <template v-for="(child, childIndex) in node.children" :key="`${index}-${childIndex}`">
           <div class="node-row child">
+            <span class="toggle placeholder"></span>
+            <template v-if="editingPath !== null && editingPath.join() === child.path.join()">
+              <input
+                ref="inputEl"
+                v-model="editingValue"
+                class="edit-input"
+                @keydown="onInputKeydown"
+                @blur="commitRename"
+              />
+            </template>
+            <template v-else>
+              <span
+                class="title"
+                :class="{ disabled: child.page === null }"
+                :title="child.page === null ? '目标页面无法解析' : `跳转到第 ${child.page + 1} 页`"
+                @click="goTo(child)"
+              >
+                {{ child.title }}
+              </span>
+              <span class="row-actions">
+                <button class="mini" title="添加子书签(指向当前页)" :disabled="busy()" @click.stop="startAddChild(child)">+</button>
+                <button class="mini" title="重命名" :disabled="busy()" @click.stop="startRename(child)">改</button>
+                <button class="mini" title="删除(含子书签)" :disabled="busy()" @click.stop="removeNode(child)">删</button>
+              </span>
+            </template>
+          </div>
+          <div v-if="addingParent !== null && addingParent.join() === child.path.join()" class="node-row child">
             <span class="toggle placeholder"></span>
             <input
               ref="inputEl"

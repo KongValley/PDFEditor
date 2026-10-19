@@ -16,7 +16,7 @@ import {
   splitPdfs
 } from '../lib/actions'
 import { requestPagesRange, showToast, ui, type PagesAction } from '../store/ui'
-import { parsePageRange } from '@shared/text'
+import { formatPageRange, parsePageRange } from '@shared/text'
 
 const THUMB_WIDTH = 84
 
@@ -107,6 +107,19 @@ function setupObserver(): void {
     { root, rootMargin: '150px 0px' }
   )
   for (const el of root.querySelectorAll<HTMLElement>('[data-thumb]')) observer.observe(el)
+}
+
+/** 打开页码/水印对话框:勾选过页面就预填范围(与其它操作「勾选优先」的语义一致) */
+function presetRangeText(): string {
+  return selectedList.value.length > 0 ? formatPageRange(selectedList.value.map((page) => page - 1)) : ''
+}
+
+function openPageNumber(): void {
+  ui.pageNumberDialog = { open: true, preset: presetRangeText() }
+}
+
+function openWatermark(): void {
+  ui.watermarkDialog = { open: true, preset: presetRangeText() }
 }
 
 async function onRangeAction(action: PagesAction): Promise<void> {
@@ -306,8 +319,8 @@ watch(
         统一方向
       </button>
       <button :disabled="busy" title="在当前页之后插入空白页" @click="onInsertBlank">空白页</button>
-      <button :disabled="busy" title="给选中页或全部页添加页码" @click="ui.pageNumberDialog.open = true">页码</button>
-      <button :disabled="busy" title="给选中页或全部页添加文字水印" @click="ui.watermarkDialog.open = true">水印</button>
+      <button :disabled="busy" title="给选中页或全部页添加页码" @click="openPageNumber">页码</button>
+      <button :disabled="busy" title="给选中页或全部页添加文字水印" @click="openWatermark">水印</button>
       <button :disabled="busy" title="合并其他 PDF(可指定页码,另存为新文件)" @click="onMerge">合并</button>
     </div>
     <div ref="containerEl" class="thumbs-scroll">

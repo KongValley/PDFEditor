@@ -19,7 +19,7 @@ watch(
   () =>ui.pageNumberDialog.open,
   async (open) => {
     if (!open) return
-    value.value = ''
+    value.value = ui.pageNumberDialog.preset
     format.value = '第 1 页 / 共 N 页'
     start.value = 1
     position.value = 'bottom-center'
@@ -37,9 +37,9 @@ const sample = computed(() =>
 )
 
 async function confirm(): Promise<void> {
-  if (!parsed.value) return
+  if (invalid.value) return
   ui.pageNumberDialog.open = false
-  const pages = value.value.trim() ? parsed.value.map((p) => p - 1) : []
+  const pages = parsed.value ?? []
   await addPageNumbers({
     pages,
     format: format.value,

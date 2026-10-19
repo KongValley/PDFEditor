@@ -6,7 +6,7 @@
 import type { PageViewport } from './pdfjs'
 import type { Annotation } from '@shared/types'
 import { pdfPointToScreen, pdfRectToScreen } from './geo'
-import { fitFontSize, pointsToMm, wrapText } from '@shared/text'
+import { fitFontSize, pointsToMm, textBlockFrame, textLocalToPdf, wrapText } from '@shared/text'
 
 /** dataUrl → 已解码图片(未加载完成时先跳过,下次导出即命中)。
  * 上限 24 条:解码位图一张可达数十 MB,无界缓存会在长会话里把内存吃穿 */
@@ -157,13 +157,14 @@ export function paintAnnotations(
         ctx.globalAlpha = ann.opacity
         ctx.fillStyle = ann.color
         ctx.font = `${ann.fontSize * scale}px ${FONT_FAMILY}`
-        const lines = wrapText(ann.text, Math.max(ann.bbox.w, 8), (s) => measureCjkText(s, ann.fontSize))
+        const frame = textBlockFrame(ann.bbox, ann.rotate)
+        const lines = wrapText(ann.text, Math.max(frame.run, 8), (s) => measureCjkText(s, ann.fontSize))
         const angle = (((viewport.rotation - ann.rotate) % 360) + 360) % 360
         lines.forEach((line, index) => {
-          const baseline = pdfPointToScreen(viewport, {
-            x: ann.bbox.x,
-            y: ann.bbox.y + ann.bbox.h - ann.fontSize - index * ann.fontSize * 1.2
-          })
+          const baseline = pdfPointToScreen(
+            viewport,
+            textLocalToPdf(ann.bbox, ann.rotate, 0, ann.fontSize + index * ann.fontSize * 1.2)
+          )
           ctx.save()
           ctx.translate(baseline.x, baseline.y)
           ctx.rotate((angle * Math.PI) / 180)
@@ -202,7 +203,8 @@ export function paintAnnotations(
         break
       }
       case 'stamp': {
-        const fontSize = fitFontSize(ann.label, ann.bbox, (s, size) => measureCjkText(s, size)) * scale
+        const frame = textBlockFrame(ann.bbox, ann.rotate)
+        const fontSize = fitFontSize(ann.label, { w: frame.run, h: frame.stack }, (s, size) => measureCjkText(s, size)) * scale
         ctx.fillStyle = hexToRgba(ann.color, 0.08)
         ctx.strokeStyle = ann.color
         ctx.lineWidth = 2 * Math.min(scale, 2)

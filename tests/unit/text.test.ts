@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { fitFontSize, isCjk, parsePageRange, pointsToMm, splitPageSegments, wrapText } from '../../src/shared/text'
+import { fitFontSize, formatPageRange, isCjk, parsePageRange, pointsToMm, splitPageSegments, textBlockFrame, textLocalToPdf, wrapText } from '../../src/shared/text'
 
 /** 定宽度量:每字符 10pt,便于按字符数推导断行结果 */
 const measure = (s: string): number => s.length * 10
@@ -103,5 +103,53 @@ describe('splitPageSegments', () => {
       [2, 3],
       [1]
     ])
+  })
+})
+
+describe('textBlockFrame / textLocalToPdf', () => {
+  // 旋转页上的 220×40 文本块:PDF 轴上是 40×220
+  const rect = { x: 100, y: 200, w: 40, h: 220 }
+
+  it('0° 与旧实现等价:原点在左上,行沿 -y 叠放', () => {
+    expect(textBlockFrame(rect, 0)).toEqual({
+      origin: { x: 100, y: 420 },
+      u: { x: 1, y: 0 },
+      v: { x: 0, y: -1 },
+      run: 40,
+      stack: 220
+    })
+    expect(textLocalToPdf(rect, 0, 0, 12)).toEqual({ x: 100, y: 408 })
+  })
+
+  it('90°:run 沿 +y,叠放沿 +x', () => {
+    const frame = textBlockFrame(rect, 90)
+    expect(frame.origin).toEqual({ x: 100, y: 200 })
+    expect([frame.run, frame.stack]).toEqual([220, 40])
+    expect(textLocalToPdf(rect, 90, 0, 12)).toEqual({ x: 112, y: 200 })
+  })
+
+  it('180°:run 沿 -x,叠放沿 +y', () => {
+    expect(textBlockFrame(rect, 180).origin).toEqual({ x: 140, y: 200 })
+    expect(textLocalToPdf(rect, 180, 0, 12)).toEqual({ x: 140, y: 212 })
+  })
+
+  it('270°:run 沿 -y,叠放沿 -x', () => {
+    expect(textBlockFrame(rect, 270).origin).toEqual({ x: 140, y: 420 })
+    expect(textLocalToPdf(rect, 270, 0, 12)).toEqual({ x: 128, y: 420 })
+  })
+
+  it('负角/非整象限角归一化', () => {
+    expect(textBlockFrame(rect, -90).run).toBe(220)
+    expect(textBlockFrame(rect, 95).run).toBe(220)
+  })
+})
+
+describe('formatPageRange', () => {
+  it('连续段并成区间,断档用逗号', () => {
+    expect(formatPageRange([0, 1, 2, 4])).toBe('1-3,5')
+  })
+
+  it('空输入返回空串', () => {
+    expect(formatPageRange([])).toBe('')
   })
 })

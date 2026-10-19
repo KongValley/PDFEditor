@@ -211,7 +211,9 @@ export function rebuildLayoutCache(): void {
 let cacheSignature = ''
 
 function currentSignature(): string {
-  return `${docState.docId ?? ''}|${docState.pageBoxes.length}|${docState.scale}|${docState.rotationView}|${docState.viewMode}`
+  // geometryVersion:rotate/move 等操作页数不变但页面尺寸/顺序变了,
+  // 没有它前缀和会停留在旧几何,scrollToPage/翻页/当前页读数全部错位
+  return `${docState.docId ?? ''}|${docState.pageBoxes.length}|${docState.scale}|${docState.rotationView}|${docState.viewMode}|${docState.geometryVersion}`
 }
 
 /** 数组失效兜底:签名不符(文档/页数/缩放/旋转/模式变化)时重建一次 */

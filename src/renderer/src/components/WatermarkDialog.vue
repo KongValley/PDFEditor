@@ -18,7 +18,7 @@ watch(
   () => ui.watermarkDialog.open,
   async (open) => {
     if (!open) return
-    value.value = ''
+    value.value = ui.watermarkDialog.preset
     text.value = '机密'
     fontSize.value = 48
     opacity.value = 0.15
@@ -36,7 +36,7 @@ const invalid = computed(() => value.value.trim().length > 0 && parsed.value ===
 async function confirm(): Promise<void> {
   if (invalid.value) return
   ui.watermarkDialog.open = false
-  const pages = value.value.trim() ? (parsed.value ?? []).map((p) => p - 1) : []
+  const pages = parsed.value ?? []
   await addWatermark({
     pages,
     text: text.value,

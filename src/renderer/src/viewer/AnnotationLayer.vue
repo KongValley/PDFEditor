@@ -81,6 +81,9 @@ const defaultStyle = computed(() => TOOL_DEFAULTS[ui.tool] ?? TOOL_DEFAULTS.rect
 /* ------------------------------ 绘制 ------------------------------ */
 
 function onLayerPointerDown(event: PointerEvent): void {
+  // 右键/中键既不绘制也不清选:右键要留给页面上下文菜单,且 text/note/stamp/image
+  // 不受 3px 阈值保护,右键会直接落一条批注
+  if (event.button !== 0) return
   // 注:select 工具的空白点击清选在 PageCanvas 的 page-wrap 上处理——
   // 该模式下本 svg 为 pointer-events:none,收不到空白点击
   if (!interactive.value || !props.viewport) return
@@ -194,7 +197,8 @@ async function onLayerPointerUp(event: PointerEvent): Promise<void> {
     const isText = state.tool === 'text'
     const width = isText ? 220 : 26
     const height = isText ? 40 : 26
-    const bbox = { x: startPdf.x, y: startPdf.y - height, w: width, h: height }
+    // 旋转页面/旋转视图下 PDF 轴与屏幕轴互换:必须按屏幕矩形反算,否则文本框实际横躺
+    const bbox = screenToPdfRect(state.startScreen.x, state.startScreen.y, width, height)
     const common = {
       page: props.pageNumber - 1,
       bbox,
@@ -218,7 +222,7 @@ async function onLayerPointerUp(event: PointerEvent): Promise<void> {
     const preset = STAMPS[ui.stampKey]
     const width = 140
     const height = 44
-    const bbox = { x: startPdf.x - width / 2, y: startPdf.y - height / 2, w: width, h: height }
+    const bbox = screenToPdfRect(state.startScreen.x - width / 2, state.startScreen.y - height / 2, width, height)
     addAnnotation(
       withIdentity({
         kind: 'stamp',
@@ -268,6 +272,7 @@ function displayRotation(): number {
 /* --------------------------- 选中/拖动/缩放 --------------------------- */
 
 function onAnnPointerDown(ann: Annotation, event: PointerEvent): void {
+  if (event.button !== 0) return
   if (ui.tool !== 'select' || !props.viewport) return
   event.stopPropagation()
   event.preventDefault()
@@ -307,6 +312,7 @@ function onAnnPointerDown(ann: Annotation, event: PointerEvent): void {
 }
 
 function onHandlePointerDown(ann: Annotation, handle: string, event: PointerEvent): void {
+  if (event.button !== 0) return
   if (!props.viewport || ann.locked) return
   event.stopPropagation()
   event.preventDefault()
@@ -733,6 +739,9 @@ onBeforeUnmount(() => {
 }
 
 .handle {
+  /* .ann-layer 在 select 模式是 pointer-events:none,该属性可继承;
+     手柄没有自身覆盖时不可点(冒烟用 dispatchEvent 直发元素,所以没暴露) */
+  pointer-events: all;
   cursor: pointer;
 }
 
