@@ -314,6 +314,68 @@ check('输入框保持焦点', document.activeElement === editor, document.activ
 editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
 await sleep(200)
 
+/* ---------- 对话框外观基座:每个对话框都要挂在固定定位、铺满视口的 .mask 里 ----------
+   背景:WatermarkDialog / PageNumberDialog / ProblemsDialog 抽出组件时漏了样式与遮罩,
+   对话框退化成页面底部的一条流式块 —— 面板类选择器照样能命中,所以必须有这条独立断言。 */
+await t.openPath(`${__smokeRoot}/samples/sample-zh.pdf`)
+await sleep(1200)
+
+const maskEl = () => document.querySelector('.mask')
+const maskUntil = async (cond, timeout = 8000) => {
+  const t0 = Date.now()
+  while (Date.now() - t0 < timeout) {
+    if (cond()) return true
+    await sleep(50)
+  }
+  return false
+}
+const maskButton = (label) => [...document.querySelectorAll('.mask button')].find((b) => b.textContent.trim() === label)
+
+async function assertDialogBase(name, open, close) {
+  await open()
+  if (!(await maskUntil(() => !!maskEl()?.querySelector('.dialog')))) throw new Error(`${name}:对话框未出现`)
+  const el = maskEl()
+  const style = getComputedStyle(el)
+  const rect = el.getBoundingClientRect()
+  check(`${name}:遮罩为 fixed 覆盖层`, style.position === 'fixed', style.position)
+  check(
+    `${name}:遮罩铺满视口`,
+    rect.width >= window.innerWidth - 1 && rect.height >= window.innerHeight - 1,
+    { w: rect.width, h: rect.height }
+  )
+  await close()
+  check(`${name}:可关闭`, await maskUntil(() => !maskEl(), 5000), null)
+}
+
+await assertDialogBase('关于', async () => { t.ui.aboutOpen = true }, async () => { t.ui.aboutOpen = false })
+await assertDialogBase(
+  '问题面板',
+  async () => {
+    t.ui.problems.push({ id: 'probe', at: Date.now(), title: '冒烟探针(断言对话框基座)' })
+    t.ui.problemsOpen = true
+  },
+  async () => {
+    t.ui.problemsOpen = false
+    t.ui.problems.splice(0)
+  }
+)
+await assertDialogBase('页码', async () => { t.ui.pageNumberDialog.open = true }, async () => { maskButton('取消').click() })
+await assertDialogBase('水印', async () => { t.ui.watermarkDialog.open = true }, async () => { maskButton('取消').click() })
+await assertDialogBase('合并', async () => { t.mergeDialogState.open = true }, async () => { t.mergeDialogState.open = false })
+await assertDialogBase('拆分', async () => { t.splitDialogState.open = true }, async () => { t.splitDialogState.open = false })
+await assertDialogBase('统一方向', async () => { t.orientationDialogState.open = true }, async () => { t.orientationDialogState.open = false })
+await assertDialogBase('图片转 PDF', async () => { await t.openImageToPdfDialog() }, async () => { maskButton('取消').click() })
+await assertDialogBase(
+  '打印页码范围',
+  async () => { [...document.querySelectorAll('.toolbar button')].find((b) => (b.title || '').includes('打印')).click() },
+  async () => { maskButton('取消').click() }
+)
+await assertDialogBase(
+  '密码',
+  async () => { t.openPath(`${__smokeRoot}/samples/sample-encrypted-pw.pdf`).catch(() => {}) },
+  async () => { maskButton('取消').click() }
+)
+
 return {
   saveInPlace: 'ok',
   pageUndo: 'ok',
@@ -327,5 +389,6 @@ return {
   setTool: 'ok',
   dragFeedback: 'ok',
   noFlashOnPageOp: 'ok',
-  typingGuardShortcuts: 'ok'
+  typingGuardShortcuts: 'ok',
+  dialogBase: 'ok'
 }

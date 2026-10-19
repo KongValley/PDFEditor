@@ -21,33 +21,65 @@ function onCopy(entry: { title: string; detail?: string }): void {
 </script>
 
 <template>
-  <div v-if="ui.problemsOpen" class="dialog problems-dialog" role="dialog" aria-label="问题详情">
-    <div class="dialog-title">问题详情({{ ui.problems.length }} 条)</div>
-    <div v-if="ui.problems.length === 0" class="empty">暂无记录</div>
-    <div class="problem-list">
-      <div v-for="entry in ui.problems" :key="entry.id" class="problem-row">
-        <div class="problem-head">
-          <span class="time">{{ timeOf(entry.at) }}</span>
-          <span class="title">{{ entry.title }}</span>
-        </div>
-        <pre v-if="entry.detail" class="detail">{{ entry.detail }}</pre>
-        <div class="problem-actions">
-          <button v-if="entry.retry" class="retry" @click="onRetry(entry.id)">重试</button>
-          <button class="copy" @click="onCopy(entry)">复制</button>
+  <div v-if="ui.problemsOpen" class="mask">
+    <div class="dialog problems-dialog" role="dialog" aria-label="问题详情">
+      <div class="dialog-title">问题详情({{ ui.problems.length }} 条)</div>
+      <div v-if="ui.problems.length === 0" class="empty">暂无记录</div>
+      <div class="problem-list">
+        <div v-for="entry in ui.problems" :key="entry.id" class="problem-row">
+          <div class="problem-head">
+            <span class="time">{{ timeOf(entry.at) }}</span>
+            <span class="title">{{ entry.title }}</span>
+          </div>
+          <pre v-if="entry.detail" class="detail">{{ entry.detail }}</pre>
+          <div class="problem-actions">
+            <button v-if="entry.retry" class="retry" @click="onRetry(entry.id)">重试</button>
+            <button class="copy" @click="onCopy(entry)">复制</button>
+          </div>
         </div>
       </div>
-    </div>
-    <div class="actions">
-      <button class="primary" @click="ui.problemsOpen = false">关闭</button>
-      <button @click="clearProblems">清空</button>
+      <div class="actions">
+        <button class="primary" @click="ui.problemsOpen = false">关闭</button>
+        <button @click="clearProblems">清空</button>
+      </div>
     </div>
   </div>
 </template>
 
 <style scoped>
+.mask {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(20, 23, 30, 0.6);
+  z-index: 300;
+}
+
+.dialog {
+  padding: 16px;
+  border-radius: 8px;
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+}
+
 .problems-dialog {
   max-width: 560px;
   width: 90vw;
+}
+
+.dialog-title {
+  font-weight: 600;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .problem-list {

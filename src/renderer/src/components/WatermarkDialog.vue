@@ -96,3 +96,84 @@ function cancel(): void {
     </div>
   </div>
 </template>
+
+<style scoped>
+.mask {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(20, 23, 30, 0.6);
+  z-index: 300;
+}
+
+.dialog {
+  width: 320px;
+  padding: 16px;
+  border-radius: 8px;
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.title {
+  font-weight: 600;
+}
+
+.message {
+  color: var(--toolbar-fg-dim);
+}
+
+/* 实时校验:与拆分/合并对话框同一套红框语义 */
+input.invalid {
+  border-color: #e5534b;
+}
+
+.range-error {
+  color: #ffb4b4;
+  font-size: 12px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.row .label {
+  width: 64px;
+  flex: none;
+  color: var(--toolbar-fg-dim);
+}
+
+.row input:not([type='color']) {
+  flex: 1;
+}
+
+.row input[type='color'] {
+  width: 64px;
+  flex: none;
+}
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--toolbar-fg-dim);
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+button.primary {
+  background: var(--accent);
+  color: #fff;
+}
+</style>
