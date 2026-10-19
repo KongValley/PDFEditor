@@ -541,7 +541,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     return result
   })
 
-  ipcMain.handle('app:printAbort', (_e, jobId: string) => guard(() => abortPrintJob(String(jobId))))
+  // 渲染层传 { jobId } 对象载荷(见 lib/pagexport.ts);直接 String(object) 只会得到 "[object Object]",
+  // abortPrintJob 找不到任务 → 临时目录与 jobs 条目泄漏
+  ipcMain.handle('app:printAbort', (_e, payload: { jobId?: string } | undefined) =>
+    guard(() => abortPrintJob(String(payload?.jobId ?? '')))
+  )
 
   // 渲染层的日志经此落盘(主进程是唯一落盘方,见 lib/logger.ts)
   ipcMain.handle(

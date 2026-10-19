@@ -162,7 +162,7 @@ export async function applyPageOp(docId: string, op: PageOp): Promise<PageOpResu
       } else {
         // 不勾「包含注释」时 Widget 已随 /Annots 剥离,无需重建 AcroForm
         mergeAcroForm(out, doc)
-        if (op.annotations && op.annotations.length > 0) {
+        if (op.annotations) {
           const { ctx } = await createAnnotContext(
             out,
             async (imgId, refPath) => getImageBuffer(imgId) ?? (await readImageBuffer(refPath)),
@@ -301,7 +301,7 @@ export async function splitPdfTasks(
         } else {
           mergeAcroForm(out, src)
         }
-        if (options.includeAnnotations !== false && options.annotations && options.annotations.length > 0 && task.docId) {
+        if (options.includeAnnotations !== false && options.annotations && task.docId) {
           // 当前文档:按模型重建自产批注(页号映射到该 chunk);其它文件保留 copyPages 携带的批注
           const { ctx } = await createAnnotContext(
             out,

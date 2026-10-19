@@ -27,7 +27,7 @@ import {
 } from 'pdf-lib'
 import fontkit from '@pdf-lib/fontkit'
 import type { Annotation, FormValue, Rect } from '@shared/types'
-import { fitFontSize, pointsToMm, wrapText } from '@shared/text'
+import { fitFontSize, pointsToMm, textBlockFrame, textLocalToPdf, wrapText } from '@shared/text'
 
 /**
  * 可嵌入的中文字体。**只列 TTF**:pdf-lib 无法直接嵌入 TTC 集合(Win8+ 的微软雅黑是 msyh.ttc)。
@@ -256,13 +256,15 @@ function drawTextBlock(
   rotate: number
 ): void {
   withCjkFont(() => {
-    const lines = wrapText(text, Math.max(bbox.w, 8), (s) => font.widthOfTextAtSize(s, fontSize))
+    const frame = textBlockFrame(bbox, rotate)
+    const lines = wrapText(text, Math.max(frame.run, 8), (s) => font.widthOfTextAtSize(s, fontSize))
     const lineHeight = fontSize * 1.2
     lines.forEach((line, index) => {
       if (line === '') return
+      const baseline = textLocalToPdf(bbox, rotate, 0, fontSize + index * lineHeight)
       page.drawText(line, {
-        x: bbox.x,
-        y: bbox.y + bbox.h - fontSize - index * lineHeight,
+        x: baseline.x,
+        y: baseline.y,
         size: fontSize,
         font,
         color: rgb(color.r, color.g, color.b),
@@ -289,11 +291,15 @@ function drawStamp(page: PDFPage, ann: Annotation & { kind: 'stamp' }, font: PDF
       opacity: 0.08,
       rotate: degrees(0)
     })
-    const fontSize = fitFontSize(ann.label, box, (s, size) => font.widthOfTextAtSize(s, size))
+    const frame = textBlockFrame(box, ann.rotate)
+    const fontSize = fitFontSize(ann.label, { w: frame.run, h: frame.stack }, (s, size) => font.widthOfTextAtSize(s, size))
     const width = font.widthOfTextAtSize(ann.label, fontSize)
+    // 局部坐标:水平居中、基线下沉约 0.35em(与 SVG 覆盖层的排版约定一致);
+    // rotate=0 时与旧的 (box.x + (w-width)/2, box.y + h/2 - size*0.35) 完全等价
+    const baseline = textLocalToPdf(box, ann.rotate, (frame.run - width) / 2, frame.stack / 2 + fontSize * 0.35)
     page.drawText(ann.label, {
-      x: box.x + (box.w - width) / 2,
-      y: box.y + box.h / 2 - fontSize * 0.35,
+      x: baseline.x,
+      y: baseline.y,
       size: fontSize,
       font,
       color: rgb(color.r, color.g, color.b),
@@ -492,7 +498,9 @@ function hasDrawableAppearance(ann: Annotation, ctx?: AnnotWriteContext): boolea
   if (ann.kind === 'text' && ann.text.trim() === '') return false
   if (ann.kind === 'image' && ctx) {
     const cacheKey = ann.imgId || ann.refPath
-    if (!ctx.images.has(cacheKey) && !ctx.missingImages.has(cacheKey)) return false
+    // 只跳过「已证实取不到」的图片:首次遇到时 images/missingImages 都是空的,
+    // 必须放行让 buildAppearance → drawAnnotation 去解析并嵌入图片
+    if (ctx.missingImages.has(cacheKey)) return false
   }
   return true
 }

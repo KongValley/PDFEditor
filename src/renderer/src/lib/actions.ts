@@ -94,7 +94,9 @@ export async function openPath(path: string): Promise<void> {
     showToast('文档正在加载,请稍候', 'info')
     return
   }
-  // 打开期间禁止把"暂定的第 1 页"当成真实阅读位置落盘(见 store/reading.ts 的 opening 注释)
+  // openByPath 第一行会 ++openSeq:结束后若仍是「我这次」(seq 恰好多 1)才允许复位 opening 闸门。
+  // 被后续打开取代时旧请求不得把新请求的闸门提前打开(否则新文档的暂定第 1 页会被当成真实阅读位置落盘)。
+  const seqBefore = currentOpenToken()
   beginOpen()
   try {
     // 身份令牌必须在 openByPath **返回之后**取:openByPath 内部会 ++openSeq,
@@ -121,7 +123,7 @@ export async function openPath(path: string): Promise<void> {
     if (token !== currentOpenToken()) return
     await maybeRestoreLastPage(docState.filePath ?? path)
   } finally {
-    endOpen()
+    if (currentOpenToken() === seqBefore + 1) endOpen()
   }
 }
 
@@ -174,15 +176,21 @@ async function saveTo(targetPath: string | undefined): Promise<void> {
     if (result.canceled) return
     if (!result.ok) {
       showToast(result.error ?? '保存失败', 'error')
-      pushProblem({ title: result.error ?? '保存失败', retry: () => saveTo(targetPath) })
+      // 重试闭包冻结文档身份:失败后切到别的文档再点「重试」,不能把新文档内容写进旧路径
+      const owner = docId
+      pushProblem({
+        title: result.error ?? '保存失败',
+        retry: () => (docState.docId === owner ? saveTo(targetPath) : Promise.resolve())
+      })
       return
     }
     if (result.savedPath) docState.filePath = result.savedPath
     // 保存期间又有编辑 → 保持脏标记(否则编辑被静默标记为已保存)
-    if (editVersion() === version) docState.dirty = false
-    if (result.mode === 'sidecar') {
+    // savedPath 缺失(加密文档另存为:只写了新路径旁的孤立 sidecar,当前文档并未落盘)→ 不能清脏
+    if (result.savedPath && editVersion() === version) docState.dirty = false
+    if (result.mode === 'sidecar' && result.savedPath) {
       showToast('加密文档:注释与表单值仅保存到 sidecar 文件(.pdfanno.json)')
-    } else {
+    } else if (result.mode !== 'sidecar') {
       showToast(`已保存:${result.savedPath ?? ''}`)
     }
     if (result.warnings && result.warnings.length > 0) {
@@ -396,10 +404,19 @@ async function runPageOp(op: PageOp, options: { recordHistory?: boolean } = {}):
   lastPageOpUndoable = false
   const docId = docState.docId
   if (!docId) return false
+  if (docState.loading) {
+    showToast('文档正在加载,请稍候', 'info')
+    return false
+  }
   const recordHistory = options.recordHistory !== false && op.kind !== 'export'
   const annotationsBefore = recordHistory ? exportAnnotations() : []
   const filePathBefore = docState.filePath
   const result = (await window.pdfAPI.invoke('pageops:apply', { docId, op })) as PageOpResult
+  // runBusy 只挡同类长操作,不挡「打开文件」;结果落回任何全局状态之前必须确认还是同一份文档
+  if (docId !== docState.docId) {
+    showToast('页面操作已完成,但期间切换了文档,结果未应用', 'info')
+    return false
+  }
   if (!result.ok || !result.buffer) {
     if (result.error !== 'canceled') showToast(result.error ?? '页面操作失败', 'error')
     return false
@@ -432,6 +449,7 @@ async function runPageOp(op: PageOp, options: { recordHistory?: boolean } = {}):
     if (result.snapshotted === true) {
       lastPageOpUndoable = true
       pushPageHistory({
+        docId,
         annotations: annotationsBefore,
         filePath: filePathBefore,
         pageMap: result.pageMap ?? [],
@@ -490,13 +508,36 @@ export function addWatermark(options: {
 }
 
 /** 书签编辑(新建/重命名/删除):走 outline:apply,与页面操作共用撤销栈 */
-export async function applyOutlineEdit(edit: {
-  kind: 'add' | 'rename' | 'remove'
-  [key: string]: unknown
-}): Promise<boolean> {
+export async function applyOutlineEdit(
+  edit: {
+    kind: 'add' | 'rename' | 'remove'
+    [key: string]: unknown
+  },
+  options: { recordHistory?: boolean } = {}
+): Promise<boolean> {
   const docId = docState.docId
   if (!docId) return false
-  const result = (await window.pdfAPI.invoke('outline:apply', { docId, edit })) as PageOpResult
+  if (docState.loading) {
+    showToast('文档正在加载,请稍候', 'info')
+    return false
+  }
+  const annotationsBefore = exportAnnotations()
+  const filePathBefore = docState.filePath
+  // edit 常来自 docState.outline(深层响应式代理)或 ref 包裹的数组:
+  // Electron 的结构化克隆无法克隆 Proxy,直接传会抛 "An object could not be cloned"
+  // 并被调用方的 void 吞成静默失败 —— 先做一次 JSON 往返拿纯值
+  const plainEdit = JSON.parse(JSON.stringify(edit)) as typeof edit
+  let result: PageOpResult
+  try {
+    result = (await window.pdfAPI.invoke('outline:apply', { docId, edit: plainEdit })) as PageOpResult
+  } catch (err) {
+    showToast(`书签编辑失败:${err instanceof Error ? err.message : String(err)}`, 'error')
+    return false
+  }
+  if (docId !== docState.docId) {
+    showToast('书签编辑已完成,但期间切换了文档,结果未应用', 'info')
+    return false
+  }
   if (!result.ok || !result.buffer) {
     if (result.error !== 'canceled') showToast(result.error ?? '书签编辑失败', 'error')
     return false
@@ -506,6 +547,21 @@ export async function applyOutlineEdit(edit: {
   const nextDoc = docState.pdfDoc as (typeof docState.pdfDoc & object) | null
   docState.outline = nextDoc ? await loadOutline(nextDoc as never) : []
   markDirty()
+  // 主进程每次都压了快照(除非超大文档),渲染层不配对压条目就会让两侧栈错位:
+  // 下一次 Ctrl+Z 消费别的页面操作条目、弹出的却是本次书签快照
+  if (options.recordHistory !== false) {
+    if (result.snapshotted === true) {
+      pushPageHistory({
+        docId,
+        annotations: annotationsBefore,
+        filePath: filePathBefore,
+        pageMap: result.pageMap ?? [],
+        redo: () => applyOutlineEdit(plainEdit, { recordHistory: false })
+      })
+    } else {
+      showToast('文档较大,该操作不可撤销')
+    }
+  }
   return true
 }
 
@@ -549,6 +605,10 @@ async function importMergedAnnotations(): Promise<void> {
 
 /** 把当前内存 buffer 写入指定路径;成功返回落盘路径,失败返回 null(已 toast) */
 async function writeMergedOutput(docId: string, targetPath: string): Promise<string | null> {
+  if (docId !== docState.docId) {
+    showToast('合并输出已中止:文档已切换', 'info')
+    return null
+  }
   const version = editVersion()
   const result = (await window.pdfAPI.invoke('save:saveAs', {
     docId,
@@ -562,6 +622,11 @@ async function writeMergedOutput(docId: string, targetPath: string): Promise<str
     return null
   }
   const savedPath = result.savedPath ?? targetPath
+  // 保存期间切了文档:输出文件已落盘但绝不能把它设成新文档的保存路径,否则下一次 Ctrl+S 覆盖它
+  if (docId !== docState.docId) {
+    showToast('合并输出已写入,但期间切换了文档,未更新当前文件路径', 'info')
+    return savedPath
+  }
   docState.filePath = savedPath
   if (editVersion() === version) docState.dirty = false
   return savedPath
@@ -597,6 +662,7 @@ export async function mergePdfs(specs?: AppendFileSpec[], targetPath?: string): 
     let savedPath: string | null = null
     // 主进程快照与本条目严格配对:先入栈(保存失败也保留,撤销可用)
     pushPageHistory({
+      docId,
       annotations: annotationsBefore,
       filePath: filePathBefore,
       pageMap: [],
@@ -665,7 +731,11 @@ export async function exportPages(
   if (result.ok) showToast(`已导出:${result.savedPath ?? ''}`)
   else if (result.error !== 'canceled') {
     showToast(result.error ?? '导出失败', 'error')
-    pushProblem({ title: result.error ?? '导出失败', retry: () => exportPages(pages, targetPath, includeAnnotations) })
+    const owner = docId
+    pushProblem({
+      title: result.error ?? '导出失败',
+      retry: () => (docState.docId === owner ? exportPages(pages, targetPath, includeAnnotations) : Promise.resolve())
+    })
   }
 }
 
@@ -684,7 +754,11 @@ export async function extractPages(pages: number[], includeAnnotations = true): 
   if (result.ok) showToast(`已提取 ${pages.length} 页:${result.savedPath ?? ''}`)
   else if (result.error !== 'canceled') {
     showToast(result.error ?? '提取失败', 'error')
-    pushProblem({ title: result.error ?? '提取失败', retry: () => extractPages(pages, includeAnnotations) })
+    const owner = docId
+    pushProblem({
+      title: result.error ?? '提取失败',
+      retry: () => (docState.docId === owner ? extractPages(pages, includeAnnotations) : Promise.resolve())
+    })
   }
 }
 

@@ -4,6 +4,7 @@ import { annotationBounds } from '@shared/types'
 import { docState, markDirty, pageDisplaySize, reloadDocument } from './document'
 import { invalidateSearch } from './search'
 import { newId } from '../lib/annots'
+import { loadOutline } from '../lib/outline'
 import { orientationFlipped, refitAfterOrientationChange, scrollToPage } from './viewer'
 import { showToast, ui } from './ui'
 import { clearImageCache } from '../lib/canvasannot'
@@ -18,6 +19,8 @@ type Command =
 /** 页面操作条目:撤销/重做走主进程 buffer 快照栈,此处保存注释等渲染层现场 */
 interface PageEntry {
   type: 'page'
+  /** 条目所属文档;切文档后该条目必须失效,否则会把旧结果/旧快照错配进新文档 */
+  docId: string
   annotations: Annotation[]
   filePath: string | null
   pageMap: number[]
@@ -260,7 +263,12 @@ export function commitAnnotation(before: Annotation): void {
   commitAnnotations([before])
 }
 
+/** 页面撤销/重做在途标志:命令类撤销是同步的,页面类要 await 主进程快照,
+ *  不加锁时连按两次 Ctrl+Z 会弹出两条条目并发执行,后完成的 restoreItems 会覆盖前者 */
+let historyBusy = false
+
 export async function undo(): Promise<void> {
+  if (historyBusy) return
   const entry = undoStack.pop()
   if (!entry) return
   if (entry.type !== 'page') {
@@ -270,10 +278,20 @@ export async function undo(): Promise<void> {
     pruneImageUrls()
     return
   }
-  await undoSinglePage(entry)
+  if (entry.docId !== docState.docId) {
+    showToast('该撤销记录属于另一份文档,已忽略', 'error')
+    return
+  }
+  historyBusy = true
+  try {
+    await undoSinglePage(entry)
+  } finally {
+    historyBusy = false
+  }
 }
 
 export async function redo(): Promise<void> {
+  if (historyBusy) return
   const entry = redoStack.pop()
   if (!entry) return
   if (entry.type !== 'page') {
@@ -284,7 +302,23 @@ export async function redo(): Promise<void> {
     pruneImageUrls()
     return
   }
-  await redoSinglePage(entry)
+  if (entry.docId !== docState.docId) {
+    showToast('该重做记录属于另一份文档,已忽略', 'error')
+    return
+  }
+  historyBusy = true
+  try {
+    await redoSinglePage(entry)
+  } finally {
+    historyBusy = false
+  }
+}
+
+/** 撤销后从恢复的 buffer 重读大纲(书签编辑的撤销靠它把面板拉回正轨) */
+async function refreshOutline(): Promise<void> {
+  const doc = docState.pdfDoc
+  // markRaw 后的代理类型与 PDFDocumentProxy 不兼容(与 actions.ts 的同一处强转一致)
+  if (doc) docState.outline = await loadOutline(doc as never)
 }
 
 /**
@@ -293,16 +327,12 @@ export async function redo(): Promise<void> {
  * 否则两端栈会错位 —— 下一次 Ctrl+Z 会多回退一步。
  */
 async function undoSinglePage(entry: PageEntry): Promise<void> {
-  const docId = docState.docId
-  if (!docId) {
-    showToast('该页面操作已超出可撤销范围', 'error')
-    return
-  }
+  const docId = entry.docId
   let result: PageOpResult
   try {
     result = (await window.pdfAPI.invoke('pageops:undo', docId)) as PageOpResult
   } catch (err) {
-    undoStack.push(entry)
+    if (docId === docState.docId) undoStack.push(entry)
     showToast(`撤销失败:${err instanceof Error ? err.message : String(err)}`, 'error')
     return
   }
@@ -311,8 +341,13 @@ async function undoSinglePage(entry: PageEntry): Promise<void> {
       showToast('该页面操作已超出可撤销范围', 'error')
       return
     }
-    undoStack.push(entry)
+    if (docId === docState.docId) undoStack.push(entry)
     showToast(`撤销失败:${result.error ?? '撤销失败'}`, 'error')
+    return
+  }
+  // 快照已消费:期间切了文档的话结果对当前文档没有意义,只提示、不回写全局状态
+  if (docId !== docState.docId) {
+    showToast('撤销已完成,但期间切换了文档', 'info')
     return
   }
 
@@ -320,12 +355,18 @@ async function undoSinglePage(entry: PageEntry): Promise<void> {
   try {
     const sizeBefore = pageDisplaySize(docState.currentPage - 1)
     await reloadDocument(result.buffer)
+    if (docId !== docState.docId) {
+      showToast('撤销已完成,但期间切换了文档', 'info')
+      return
+    }
     // 撤销的若是旋转且当前页方向翻转了 → 同样重新适应,否则会停在旋转时的缩放上看不全
     if (orientationFlipped(sizeBefore, pageDisplaySize(docState.currentPage - 1))) {
       refitAfterOrientationChange()
       scrollToPage(docState.currentPage)
     }
     invalidateSearch()
+    // 书签编辑的撤销:大纲挂在文档上,必须跟着恢复后的 buffer 重读
+    await refreshOutline()
     restoreItems(entry.annotations)
     await ensureImageUrls()
     docState.filePath = entry.filePath
@@ -338,7 +379,10 @@ async function undoSinglePage(entry: PageEntry): Promise<void> {
 }
 
 async function redoSinglePage(entry: PageEntry): Promise<void> {
+  if (entry.docId !== docState.docId) return
   const ok = await entry.redo().catch(() => false)
+  // 重做执行器内含多次 await(页面操作 + 保存),期间可能切了文档
+  if (entry.docId !== docState.docId) return
   if (!ok) {
     redoStack.push(entry)
     showToast('重做失败', 'error')
@@ -417,8 +461,12 @@ function remapCommand(cmd: Command, map: number[]): Command | null {
   }
 }
 
-/** 页面变化后映射两侧历史栈的命令页号(目标页消失的命令丢弃);page 条目快照不动 */
+/** 页面变化后映射两侧历史栈的命令页号(目标页消失的命令丢弃);page 条目快照不动。
+ *  空映射按恒等处理:唯一合法来源是「合并(尾部追加)」—— 删除全部页已被主进程拒绝,
+ *  不存在「空映射 = 所有页都被删除」的合法语义。传入空数组时若逐条查 map[page] 会
+ *  把整栈命令判成"目标页消失"全部丢弃,撤销合并后此前的批注编辑就再也撤不回来。 */
 function remapStacks(map: number[]): void {
+  if (map.length === 0) return
   const remap = (stack: HistoryEntry[]): void => {
     const next: HistoryEntry[] = []
     for (const entry of stack) {
@@ -646,6 +694,7 @@ export function exportAnnotations(): Annotation[] {
 
 /** 页面操作入统一历史:撤销走主进程 buffer 快照,此处存渲染层现场与重做执行器 */
 export function pushPageHistory(entry: {
+  docId: string
   annotations: Annotation[]
   filePath: string | null
   pageMap: number[]

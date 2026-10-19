@@ -50,8 +50,8 @@ interface UiState {
   pageMenu: PageMenuState
   problems: ProblemEntry[]
   problemsOpen: boolean
-  pageNumberDialog: { open: boolean }
-  watermarkDialog: { open: boolean }
+  pageNumberDialog: { open: boolean; preset: string }
+  watermarkDialog: { open: boolean; preset: string }
 }
 
 /** 供「问题」面板展示的失败/警告记录(离线打包后没有控制台,这里就是唯一的明细入口) */
@@ -92,8 +92,8 @@ export const ui = reactive<UiState>({
   pageMenu: { open: false, page: 1, x: 0, y: 0 },
   problems: [],
   problemsOpen: false,
-  pageNumberDialog: { open: false },
-  watermarkDialog: { open: false }
+  pageNumberDialog: { open: false, preset: '' },
+  watermarkDialog: { open: false, preset: '' }
 })
 
 let toastTimer: number | undefined
