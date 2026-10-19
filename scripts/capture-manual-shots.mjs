@@ -2,7 +2,7 @@
 // 用法:node scripts/capture-manual-shots.mjs [--only 名称]
 // 输出:docs/images/*.png(README.md 引用,随后 npm run manual 生成 PDF)
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, copyFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -163,7 +163,228 @@ t.ui.selectedAnnotationIds = []
 await sleep(400)
 await t.saveDocument()
 await sleep(150)
-return { shot: 'encrypted', pages: t.docState.pageCount, encrypted: t.docState.encrypted }
+    return { shot: 'encrypted', pages: t.docState.pageCount, encrypted: t.docState.encrypted }
+`
+  },
+  {
+    name: '10-open-progress',
+    caption: '打开进度:大文件读取期间显示百分比与「取消」,读完自动进入阅读界面',
+    settle: 200,
+    prepare: async ({ tmpDir }) => {
+      // 页数多才看得见「正在读取页面信息 x/N」阶段(字节数小、几何枚举慢)
+      const fixture = join(tmpDir, 'many-pages.pdf')
+      if (existsSync(fixture)) return
+      mkdirSync(tmpDir, { recursive: true })
+      const { PDFDocument, StandardFonts } = await import('pdf-lib')
+      const doc = await PDFDocument.create()
+      const font = await doc.embedFont(StandardFonts.Helvetica)
+      for (let i = 0; i < 5000; i++) {
+        doc.addPage([595, 842]).drawText(`page ${i + 1}`, { x: 40, y: 760, size: 12, font })
+      }
+      writeFileSync(fixture, await doc.save())
+    },
+    body: `
+t.openByPath(\`\${__smokeRoot}/tmp/manual-shots/many-pages.pdf\`).catch(() => {})
+await sleep(2500)
+return { shot: 'open-progress', loading: t.docState.loading, progress: t.docState.loadProgress }
+`
+  },
+  {
+    name: '11-password',
+    caption: '加密 PDF:打开时弹出密码框,输错重试,取消不影响已打开的文档',
+    body: `
+// 走正常打开路径(不 await:密码框不提交前打开不会完成)
+const pending = t.openPath(\`\${__smokeRoot}/samples/sample-encrypted-pw.pdf\`)
+pending.catch(() => {})
+await sleep(1500)
+return { shot: 'password', dialog: !!document.querySelector('.mask input[type="password"]') }
+`
+  },
+  {
+    name: '12-empty-recent',
+    caption: '未打开文档时的空状态:打开文件 / 图片转 PDF 入口与「最近打开」列表',
+    prepare: ({ root, uddDir }) => {
+      mkdirSync(uddDir, { recursive: true })
+      const entries = [
+        ['samples/sample-zh.pdf', 3],
+        ['samples/sample-outline.pdf', 2],
+        ['samples/Scan.pdf', 7],
+        ['samples/sample-form.pdf', 1]
+      ]
+      const files = {}
+      entries.forEach(([rel, page], i) => {
+        files[join(root, ...rel.split('/'))] = { page, at: Date.now() - i * 3600_000 }
+      })
+      writeFileSync(join(uddDir, 'recent.json'), JSON.stringify({ files }), 'utf8')
+    },
+    body: `
+return { shot: 'empty-recent', recent: document.querySelectorAll('.recent-item').length }
+`
+  },
+  {
+    name: '13-two-page',
+    caption: '双页阅览:每行两页(1-2 / 3-4),上一页/下一页按整行步进',
+    body: `
+await baseDoc(false)
+;[...document.querySelectorAll('.status-bar button')].find((b) => b.textContent.trim() === '双页').click()
+await sleep(1500)
+return { shot: 'two-page', viewMode: t.docState.viewMode }
+`
+  },
+  {
+    name: '14-page-menu',
+    caption: '右键菜单:主视图页面或缩略图上右键可旋转 / 插入空白页 / 删除 / 提取 / 导出该页',
+    body: `
+await baseDoc()
+t.ui.selectedAnnotationIds = []
+const rect = document.querySelector('.page-wrap').getBoundingClientRect()
+t.ui.pageMenu = {
+  open: true,
+  page: 1,
+  x: Math.round(rect.left + rect.width * 0.55),
+  y: Math.round(rect.top + rect.height * 0.3)
+}
+await sleep(400)
+return { shot: 'page-menu' }
+`
+  },
+  {
+    name: '15-print-dialog',
+    caption: '打印:先设页码范围与清晰度(标准 / 高清),再进系统打印对话框',
+    body: `
+await baseDoc()
+t.ui.selectedAnnotationIds = []
+;[...document.querySelectorAll('.toolbar button')].find((b) => (b.title || '').includes('打印')).click()
+await sleep(500)
+const input = document.querySelector('.mask .dialog input')
+input.value = '1-2'
+input.dispatchEvent(new Event('input', { bubbles: true }))
+const selects = [...document.querySelectorAll('.mask .dialog select')]
+const quality = selects.find((s) => [...s.options].some((o) => o.textContent.includes('高清')))
+if (quality) {
+  quality.value = 'high'
+  quality.dispatchEvent(new Event('change', { bubbles: true }))
+}
+await sleep(400)
+return { shot: 'print-dialog', selects: selects.length }
+`
+  },
+  {
+    name: '16-about',
+    caption: '关于:版本、环境自检(系统 / 字体 / 目录可写性)、运行日志开关与开源许可清单',
+    // 日志目录按默认形态展示(截图里不要出现本机开发路径)
+    env: { PDF_EDITOR_LOG_DIR: 'C:\\Users\\Administrator\\AppData\\Roaming\\PDF编辑器\\logs' },
+    body: `
+t.ui.aboutOpen = true
+await sleep(1200)
+return { shot: 'about' }
+`
+  },
+  {
+    name: '17-form',
+    caption: '表单填写:覆盖层上就地填写,保存时写回 PDF(加密文档写同名 sidecar)',
+    body: `
+await t.openPath(\`\${__smokeRoot}/samples/sample-form.pdf\`)
+await sleep(1500)
+const input = document.querySelector('.form-layer input[type="text"]')
+input.value = '张三'
+input.dispatchEvent(new Event('input', { bubbles: true }))
+const cb = document.querySelector('.form-layer input[type="checkbox"]')
+cb.checked = true
+cb.dispatchEvent(new Event('change', { bubbles: true }))
+await sleep(400)
+return { shot: 'form', values: t.docState.formValues }
+`
+  },
+  {
+    name: '18-outline',
+    caption: '大纲(书签):右侧面板切换到大纲页签,点击跳页,行内新增 / 重命名 / 删除书签',
+    body: `
+await t.openPath(\`\${__smokeRoot}/samples/sample-outline.pdf\`)
+await sleep(1800)
+t.ui.sideTab = 'outline'
+await sleep(500)
+return { shot: 'outline' }
+`
+  },
+  {
+    name: '19-orientation',
+    caption: '统一页面方向:逐页列出待调整页、判定原因与建议角度,可单独勾选与改角度',
+    body: `
+await t.openPath(\`\${__smokeRoot}/samples/sample-mixed-orient.pdf\`)
+await sleep(1200)
+await t.normalizePageOrientation()
+for (let i = 0; i < 300; i++) {
+  const s = t.orientationDialogState
+  if (s.open && !s.scanning) break
+  await sleep(100)
+}
+await sleep(600)
+return { shot: 'orientation', items: t.orientationDialogState.items.length }
+`
+  },
+  {
+    name: '20-watermark',
+    caption: '水印:自定义文字、字号、透明度、角度与颜色,可平铺;不勾选则留空 = 全部页',
+    body: `
+await baseDoc()
+t.ui.watermarkDialog.preset = '1-3'
+t.ui.watermarkDialog.open = true
+await sleep(500)
+return { shot: 'watermark' }
+`
+  },
+  {
+    name: '21-page-number',
+    caption: '页码:按页码范围加页码,可选位置、起始编号与格式',
+    body: `
+await baseDoc()
+t.ui.pageNumberDialog.preset = '2-3'
+t.ui.pageNumberDialog.open = true
+await sleep(500)
+return { shot: 'page-number' }
+`
+  },
+  {
+    name: '22-image2pdf',
+    caption: '图片转 PDF:按选择顺序成页,页面尺寸可按图像像素或 A4,转换完自动打开',
+    prepare: ({ root, tmpDir }) => {
+      mkdirSync(tmpDir, { recursive: true })
+      copyFileSync(join(root, 'resources', 'icon.png'), join(tmpDir, '扫描件-封面.png'))
+      copyFileSync(join(root, 'resources', 'icon.png'), join(tmpDir, '扫描件-正文.png'))
+    },
+    body: `
+await t.openImageToPdfDialog([
+  \`\${__smokeRoot}/tmp/manual-shots/扫描件-封面.png\`,
+  \`\${__smokeRoot}/tmp/manual-shots/扫描件-正文.png\`
+])
+await sleep(800)
+return { shot: 'image2pdf', items: t.imagePdfDialogState.items.length }
+`
+  },
+  {
+    name: '23-problems',
+    caption: '问题面板:保存 / 导出 / 打印的失败与提示集中在此,可重试、复制明细',
+    body: `
+await baseDoc()
+t.ui.selectedAnnotationIds = []
+t.ui.problems.push(
+  {
+    id: 'demo-1',
+    at: Date.now() - 65000,
+    title: '打印第 3 页渲染超时,已跳过该页',
+    detail: '重试 3 次仍未完成,可重新打印该页;详细过程见运行日志'
+  },
+  {
+    id: 'demo-2',
+    at: Date.now() - 240000,
+    title: '导出失败:目标目录不可写',
+    detail: '请检查输出目录权限或换一个位置后重试'
+  }
+)
+t.ui.problemsOpen = true
+await sleep(500)
+return { shot: 'problems', count: t.ui.problems.length }
 `
   }
 ]
@@ -178,17 +399,20 @@ for (const shot of SHOTS) {
   writeFileSync(scriptPath, SETUP + shot.body, 'utf8')
   rmSync(shotPath, { force: true })
   rmSync(outPath, { force: true })
+  // 个别截图需要预置现场(生成大文件夹具 / 预填最近文件 / 准备示例图片)
+  await shot.prepare?.({ root, tmpDir, uddDir: join(tmpDir, `udd-${shot.name}`) })
   spawnSync(electron, ['.', `--user-data-dir=${join(tmpDir, `udd-${shot.name}`)}`], {
     cwd: root,
     env: {
       ...process.env,
+      ...(shot.env ?? {}),
       PDF_EDITOR_SMOKE: '1',
       PDF_EDITOR_SMOKE_SCRIPT: join('tmp', 'manual-shots', `${shot.name}.js`),
       PDF_EDITOR_SMOKE_OUT: outPath,
       PDF_EDITOR_SMOKE_SHOT: shotPath,
       PDF_EDITOR_SMOKE_ROOT: root,
       PDF_EDITOR_SMOKE_TIMEOUT: '60000',
-      PDF_EDITOR_SMOKE_SETTLE: '1600'
+      PDF_EDITOR_SMOKE_SETTLE: String(shot.settle ?? 1600)
     },
     stdio: 'ignore'
   })
