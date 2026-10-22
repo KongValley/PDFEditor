@@ -8,7 +8,7 @@ import {
   type SaveDialogOptions
 } from 'electron'
 import { accessSync, constants, existsSync } from 'node:fs'
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { arch, release, totalmem } from 'node:os'
@@ -790,6 +790,68 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
         }
         return { ok: true, savedPath: dir }
       })
+    }
+  )
+
+  // 冒烟专用只读探针:让渲染层脚本能断言导出/保存产物真实落盘(生产环境永不启用)
+  ipcMain.handle(
+    'smoke:fileInfo',
+    async (_e, filePath: string): Promise<{ exists: boolean; size: number }> => {
+      if (!isSmokeMode()) return { exists: false, size: 0 }
+      try {
+        const info = await stat(filePath)
+        return { exists: info.isFile(), size: info.size }
+      } catch {
+        return { exists: false, size: 0 }
+      }
+    }
+  )
+
+  // 冒烟专用:通过 Chromium 输入管线发送真实鼠标拖拽(验证文本划选等原生交互)。
+  // 仅 PDF_EDITOR_SMOKE=1 时可用,生产窗口不会注册可用路径。
+  ipcMain.handle(
+    'smoke:mouseDrag',
+    async (
+      _e,
+      payload: { from: { x: number; y: number }; to: { x: number; y: number }; steps?: number }
+    ): Promise<{ ok: boolean; error?: string }> => {
+      if (!isSmokeMode()) return { ok: false, error: 'not smoke' }
+      const win = getWindow()
+      if (!win) return { ok: false, error: 'no window' }
+      const from = payload?.from
+      const to = payload?.to
+      if (
+        !from ||
+        !to ||
+        ![from.x, from.y, to.x, to.y].every((value) => Number.isFinite(value))
+      ) {
+        return { ok: false, error: 'bad payload' }
+      }
+      const wc = win.webContents
+      win.focus()
+      wc.focus()
+      const x0 = Math.round(from.x)
+      const y0 = Math.round(from.y)
+      const x1 = Math.round(to.x)
+      const y1 = Math.round(to.y)
+      const steps = Math.max(2, Math.min(40, Math.floor(payload.steps ?? 8)))
+      wc.sendInputEvent({ type: 'mouseDown', x: x0, y: y0, button: 'left', clickCount: 1 })
+      for (let i = 1; i <= steps; i++) {
+        const x = Math.round(x0 + ((x1 - x0) * i) / steps)
+        const y = Math.round(y0 + ((y1 - y0) * i) / steps)
+        wc.sendInputEvent({
+          type: 'mouseMove',
+          x,
+          y,
+          button: 'left',
+          movementX: x - Math.round(x0 + ((x1 - x0) * (i - 1)) / steps),
+          movementY: y - Math.round(y0 + ((y1 - y0) * (i - 1)) / steps)
+        })
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
+      wc.sendInputEvent({ type: 'mouseUp', x: x1, y: y1, button: 'left', clickCount: 1 })
+      await new Promise((resolve) => setTimeout(resolve, 80))
+      return { ok: true }
     }
   )
 }

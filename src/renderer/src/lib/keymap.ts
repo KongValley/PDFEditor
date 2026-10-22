@@ -9,8 +9,12 @@ import {
   pagesDialogState,
   passwordState,
   setTool,
+  showToast,
   splitDialogState,
+  submitMergeWork,
   submitPagesRange,
+  submitPassword,
+  submitSplitWork,
   ui
 } from '../store/ui'
 import { copySelection, duplicateSelection, pasteClipboard, removeSelected, redo, undo } from '../store/annotations'
@@ -34,6 +38,22 @@ export function isTypingTarget(target: EventTarget | null): boolean {
   return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable
 }
 
+/** 是否有模态对话框打开:文档级快捷键必须让位(否则会在背景上换文档/旋转页面) */
+function modalOpen(): boolean {
+  return (
+    pagesDialogState.open ||
+    orientationDialogState.open ||
+    imagePdfDialogState.open ||
+    mergeDialogState.open ||
+    splitDialogState.open ||
+    passwordState.open ||
+    ui.watermarkDialog.open ||
+    ui.pageNumberDialog.open ||
+    ui.aboutOpen ||
+    ui.problemsOpen
+  )
+}
+
 export function useGlobalKeymap(): void {
   function onKeyDown(event: KeyboardEvent): void {
     const ctrl = event.ctrlKey || event.metaKey
@@ -42,12 +62,19 @@ export function useGlobalKeymap(): void {
     // 仅"不打断录入"的文档级快捷键在文本框内也生效
     if (ctrl && key === 'o') {
       event.preventDefault()
+      if (modalOpen()) {
+        showToast('请先关闭当前对话框', 'info')
+        return
+      }
       void openFileDialog()
       return
     }
     if (ctrl && key === 's') {
       // 拖拽未提交时保存会漏掉最后一帧位移(move 模式松手才写模型)
-      if (ui.dragging) return
+      if (ui.dragging) {
+        showToast('请先松开拖拽再保存', 'info')
+        return
+      }
       event.preventDefault()
       void (event.shiftKey ? saveDocumentAs() : saveDocument())
       return
@@ -69,19 +96,7 @@ export function useGlobalKeymap(): void {
     // `[`/`]`/Delete/方向键,会在看不见的背景上删除注释、旋转页面、切换视图模式。
     // 该对话框聚焦的是 <button>(其余对话框都聚焦 <input>,被 isTypingTarget 命中),
     // 正好从上面的缝隙漏过来,故在此统一兜住全部模态。
-    if (
-      event.key !== 'Escape' &&
-      (pagesDialogState.open ||
-        orientationDialogState.open ||
-        imagePdfDialogState.open ||
-        mergeDialogState.open ||
-        splitDialogState.open ||
-        passwordState.open ||
-        ui.watermarkDialog.open ||
-        ui.pageNumberDialog.open ||
-        ui.aboutOpen ||
-        ui.problemsOpen)
-    ) {
+    if (event.key !== 'Escape' && modalOpen()) {
       return
     }
 
@@ -147,7 +162,10 @@ export function useGlobalKeymap(): void {
 
     // 编辑类快捷键:文本框/下拉框聚焦时的让位守卫已上移到 Ctrl+S / F11 之后
     if (ctrl && key === 'z') {
-      if (ui.dragging) return
+      if (ui.dragging) {
+        showToast('请先松开拖拽再撤销', 'info')
+        return
+      }
       event.preventDefault()
       void (event.shiftKey ? redo() : undo())
       return
@@ -173,6 +191,7 @@ export function useGlobalKeymap(): void {
       return
     }
     if (ctrl && event.shiftKey && event.key === 'Delete') {
+      if (!docState.pdfDoc || ui.busy !== null) return
       event.preventDefault()
       void deletePages([docState.currentPage - 1])
       return
@@ -212,6 +231,18 @@ export function useGlobalKeymap(): void {
         cancelImagePdf()
         return
       }
+      if (mergeDialogState.open) {
+        submitMergeWork(null)
+        return
+      }
+      if (splitDialogState.open && !splitDialogState.running) {
+        submitSplitWork(null)
+        return
+      }
+      if (passwordState.open) {
+        submitPassword(null)
+        return
+      }
       // 页面右键菜单:菜单本身不可聚焦,它的 @keydown.esc 收不到键盘事件,
       // 只有点外部/滚动能关。Esc 收不到这里就一直挂着,而且下面的 setTool('select')
       // 还会把当前工具悄悄改掉 —— 用户想撤销的只是「关菜单」。
@@ -222,11 +253,11 @@ export function useGlobalKeymap(): void {
       // 水印/页码对话框的遮罩挡鼠标不挡键盘:焦点离开输入框后 Esc 收不到,
       // 只有这里全局兜底(与上面的模态守卫配合:Escape 已被放行到此分支)
       if (ui.watermarkDialog.open) {
-        ui.watermarkDialog.open = false
+        if (!ui.watermarkDialog.running) ui.watermarkDialog.open = false
         return
       }
       if (ui.pageNumberDialog.open) {
-        ui.pageNumberDialog.open = false
+        if (!ui.pageNumberDialog.running) ui.pageNumberDialog.open = false
         return
       }
       if (ui.problemsOpen) {

@@ -12,6 +12,7 @@ const opacity = ref(0.15)
 const rotation = ref(45)
 const tile = ref(false)
 const color = ref('#e03131')
+const error = ref('')
 const inputEl = ref<HTMLInputElement | null>(null)
 
 watch(
@@ -25,6 +26,7 @@ watch(
     rotation.value = 45
     tile.value = false
     color.value = '#e03131'
+    error.value = ''
     await nextTick()
     inputEl.value?.focus()
   }
@@ -34,10 +36,11 @@ const parsed = computed(() => (value.value.trim() ? parsePageRange(value.value, 
 const invalid = computed(() => value.value.trim().length > 0 && parsed.value === null)
 
 async function confirm(): Promise<void> {
-  if (invalid.value) return
-  ui.watermarkDialog.open = false
+  if (invalid.value || ui.watermarkDialog.running) return
+  error.value = ''
+  ui.watermarkDialog.running = true
   const pages = parsed.value ?? []
-  await addWatermark({
+  const ok = await addWatermark({
     pages,
     text: text.value,
     fontSize: fontSize.value,
@@ -46,52 +49,71 @@ async function confirm(): Promise<void> {
     tile: tile.value,
     color: color.value
   })
+  ui.watermarkDialog.running = false
+  if (ok) {
+    ui.watermarkDialog.open = false
+  } else {
+    error.value = '添加失败,请重试'
+  }
 }
 
 function cancel(): void {
+  if (ui.watermarkDialog.running) return
   ui.watermarkDialog.open = false
 }
 </script>
 
 <template>
   <div v-if="ui.watermarkDialog.open" class="mask">
-    <div class="dialog" @keydown.enter="confirm" @keydown.esc="cancel">
+    <div class="dialog" @keydown.esc.stop="cancel">
       <div class="title">添加水印</div>
       <div class="message">共 {{ docState.pageCount }} 页,留空 = 全部页</div>
       <input
         ref="inputEl"
         v-model="value"
         :class="{ invalid }"
+        :disabled="ui.watermarkDialog.running"
         placeholder="如 1-3,5,7-9,留空 = 全部页"
+        @keydown.enter.prevent="confirm"
       />
       <div v-if="invalid" class="range-error">页码范围无效</div>
+      <div v-if="error" class="range-error">{{ error }}</div>
       <div class="row">
         <span class="label">文本</span>
-        <input v-model="text" />
+        <input v-model="text" :disabled="ui.watermarkDialog.running" />
       </div>
       <div class="row">
         <span class="label">字号</span>
-        <input v-model.number="fontSize" type="number" min="6" max="200" />
+        <input v-model.number="fontSize" type="number" min="6" max="200" :disabled="ui.watermarkDialog.running" />
       </div>
       <div class="row">
         <span class="label">不透明度</span>
-        <input v-model.number="opacity" type="number" min="0.02" max="1" step="0.05" />
+        <input
+          v-model.number="opacity"
+          type="number"
+          min="0.02"
+          max="1"
+          step="0.05"
+          :disabled="ui.watermarkDialog.running"
+        />
       </div>
       <div class="row">
         <span class="label">角度</span>
-        <input v-model.number="rotation" type="number" min="-180" max="180" />
+        <input v-model.number="rotation" type="number" min="-180" max="180" :disabled="ui.watermarkDialog.running" />
       </div>
       <div class="row">
         <span class="label">颜色</span>
-        <input v-model="color" type="color" />
+        <input v-model="color" type="color" :disabled="ui.watermarkDialog.running" />
       </div>
       <label class="check-row">
-        <input v-model="tile" type="checkbox" />
+        <input v-model="tile" type="checkbox" :disabled="ui.watermarkDialog.running" />
         铺满页面
       </label>
       <div class="actions">
-        <button @click="cancel">取消</button>
-        <button class="primary" :disabled="invalid || text.trim() === ''" @click="confirm">确定</button>
+        <button :disabled="ui.watermarkDialog.running" @click="cancel">取消</button>
+        <button class="primary" :disabled="invalid || text.trim() === '' || ui.watermarkDialog.running" @click="confirm">
+          {{ ui.watermarkDialog.running ? '处理中…' : '确定' }}
+        </button>
       </div>
     </div>
   </div>

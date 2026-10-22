@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
-import { ui } from '../store/ui'
+import { ui, showToast } from '../store/ui'
 import { deletePages, exportPageImage, extractPages, insertBlankPage, rotatePages } from '../lib/actions'
 
 const menuEl = ref<HTMLElement | null>(null)
@@ -13,7 +13,10 @@ function close(): void {
 function act(fn: (page: number) => void): void {
   const page = ui.pageMenu.page
   close()
-  if (ui.busy !== null) return
+  if (ui.busy !== null) {
+    showToast('上一操作尚未完成,请稍候', 'error')
+    return
+  }
   fn(page)
 }
 

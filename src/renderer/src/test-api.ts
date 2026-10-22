@@ -3,6 +3,8 @@
  * 供 PDF_EDITOR_SMOKE 模式下主进程 executeJavaScript 调用。
  */
 import {
+  addPageNumbers,
+  addWatermark,
   openPath,
   deletePages,
   dropTargetIndex,
@@ -120,6 +122,8 @@ export function installTestApi(): void {
     exportAnnotations,
     undo,
     redo,
+    addPageNumbers,
+    addWatermark,
     deletePages,
     rotatePages,
     insertBlankPage,

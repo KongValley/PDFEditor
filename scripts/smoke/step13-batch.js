@@ -118,7 +118,7 @@ t.mergeDialogState.rows.push({
   pageCount: 2,
   start: '1',
   end: '1',
-  selected: false
+  selected: true
 })
 t.mergeDialogState.outputName = mergeName
 t.mergeDialogState.outputDir = mergeDir
@@ -146,7 +146,7 @@ t.mergeDialogState.rows.push({
   pageCount: 2,
   start: '1',
   end: '1',
-  selected: false
+  selected: true
 })
 t.mergeDialogState.outputName = mergeName
 t.mergeDialogState.outputDir = mergeDir
@@ -174,7 +174,7 @@ t.mergeDialogState.rows.push({
   pageCount: 2,
   start: '1',
   end: '1',
-  selected: false
+  selected: true
 })
 t.mergeDialogState.outputName = `smoke-newdir-${stamp}`
 t.mergeDialogState.outputDir = newDir
@@ -219,7 +219,7 @@ t.splitDialogState.rows.push({
   end: '2',
   pagesPerFile: '1',
   ranges: '1-2',
-  selected: false
+  selected: true
 })
 t.splitDialogState.outputDir = splitGuiDir
 await sleep(100)
@@ -251,7 +251,7 @@ t.splitDialogState.rows.push({
   end: '1',
   pagesPerFile: '1',
   ranges: '1',
-  selected: false
+  selected: true
 })
 t.splitDialogState.outputDir = `${__smokeRoot}/tmp/split-fail-${stamp}`
 await sleep(100)

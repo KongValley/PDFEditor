@@ -1,6 +1,6 @@
 // 依次运行全部冒烟脚本(每个脚本使用独立 user-data-dir,避免多实例缓存争用导致抖动)
 import { spawnSync } from 'node:child_process'
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -9,7 +9,7 @@ const electron = join(root, 'node_modules', 'electron', 'dist', 'electron.exe')
 const tmpDir = join(root, 'tmp')
 mkdirSync(tmpDir, { recursive: true })
 
-const scripts = [
+const allScripts = [
   'step1.js',
   'step2.js',
   'step3.js',
@@ -40,8 +40,28 @@ const scripts = [
   'step26-image2pdf.js',
   'step27-rotate-fit.js',
   'step28-user-actions.js',
-  'step29-error-paths.js'
+  'step29-error-paths.js',
+  'step30-full-flow.js',
+  'step31-relaunch.js'
 ]
+
+// --only=step30-full-flow,step31-relaunch:只跑指定步骤(名字不带 .js),用于全流程回归。
+// 夹具准备、兼容性检查与计时输出保持不变。
+const onlyArg = process.argv.find((arg) => arg.startsWith('--only='))
+const onlyNames = onlyArg ? new Set(onlyArg.slice('--only='.length).split(',').map((n) => n.trim()).filter(Boolean)) : null
+const scripts = onlyNames ? allScripts.filter((script) => onlyNames.has(script.replace(/\.js$/, ''))) : allScripts
+if (scripts.length === 0) {
+  console.error(`--only 未匹配任何步骤:${onlyArg}`)
+  process.exit(1)
+}
+if (onlyNames) {
+  const known = new Set(allScripts.map((script) => script.replace(/\.js$/, '')))
+  const unknown = [...onlyNames].filter((name) => !known.has(name))
+  if (unknown.length > 0) {
+    console.error(`--only 包含未知步骤:${unknown.join(',')}`)
+    process.exit(1)
+  }
+}
 
 if (!existsSync(join(root, 'samples', 'sample-zh.pdf'))) {
   console.error('缺少 samples/,请先运行 npm run samples')
@@ -92,6 +112,26 @@ for (const [file, script] of [
   }
 }
 
+// 全流程夹具:step30 从替身对话框打开 open-me.pdf 并原地保存;step31 共用同一 user-data-dir
+// 验证最近文件与阅读位置。每次开跑重建,避免上一轮保存/提取产物污染合并对话框。
+const e2eDir = join(tmpDir, 'e2e')
+const e2eDialogDir = join(e2eDir, 'dialog')
+rmSync(e2eDir, { recursive: true, force: true })
+mkdirSync(e2eDialogDir, { recursive: true })
+for (const [source, target] of [
+  [join(root, 'samples', 'sample-zh.pdf'), join(e2eDir, 'journey.pdf')],
+  [join(root, 'samples', 'sample-outline.pdf'), join(e2eDir, 'extra.pdf')],
+  [join(root, 'samples', 'sample-form.pdf'), join(e2eDir, 'form.pdf')]
+]) {
+  if (!existsSync(source)) {
+    console.error(`缺少全流程夹具:${source}(请先运行 npm run samples)`)
+    process.exit(1)
+  }
+  copyFileSync(source, target)
+}
+copyFileSync(join(e2eDir, 'journey.pdf'), join(e2eDialogDir, 'open-me.pdf'))
+copyFileSync(join(e2eDir, 'extra.pdf'), join(e2eDialogDir, 'extra.pdf'))
+
 // 护栏前置:产物含超出目标运行时(Electron 22 / Chromium 108)的新特性时,
 // 没必要先付 28 次 Electron 冷启动的代价才发现
 const compat = spawnSync(process.execPath, [join(root, 'scripts', 'check-compat.mjs')], {
@@ -119,13 +159,35 @@ const STEP_TIMEOUTS = {
   'step26-image2pdf.js': '120000',
   'step27-rotate-fit.js': '120000',
   'step28-user-actions.js': '180000',
-  'step29-error-paths.js': '180000'
+  'step29-error-paths.js': '180000',
+  'step30-full-flow.js': '240000',
+  'step31-relaunch.js': '120000'
+}
+
+// 跨进程全流程:step31 复用 step30 的 profile(最近文件、阅读位置、日志)
+const STEP_USERDATA = {
+  'step31-relaunch.js': 'udd-step30-full-flow'
+}
+
+// 关键步骤落一张终态截图,供人工确认布局/toast/空白页(不参与断言)
+const STEP_SHOTS = {
+  'step30-full-flow.js': join(tmpDir, 'smoke-step30-full-flow.png'),
+  'step31-relaunch.js': join(tmpDir, 'smoke-step31-relaunch.png')
 }
 
 // 按步注入的环境变量:只有这两步需要(原生对话框替身 / 强制走「缺中文字体」路径)
 const STEP_ENV = {
   'step28-user-actions.js': { PDF_EDITOR_SMOKE_DIALOG_DIR: join(tmpDir, 'dialog') },
-  'step29-error-paths.js': { PDF_EDITOR_SMOKE_CJK_FONT: 'none' }
+  'step29-error-paths.js': { PDF_EDITOR_SMOKE_CJK_FONT: 'none' },
+  'step30-full-flow.js': {
+    PDF_EDITOR_SMOKE_DIALOG_DIR: e2eDialogDir,
+    PDF_EDITOR_SMOKE_OPEN_FILE: 'open-me.pdf'
+  }
+}
+
+// step30 必须从干净 profile 起步(最近文件为空);step31 随后复用它的 profile
+if (scripts.includes('step30-full-flow.js')) {
+  rmSync(join(tmpDir, 'udd-step30-full-flow'), { recursive: true, force: true })
 }
 
 let failed = 0
@@ -147,22 +209,27 @@ for (const script of scripts) {
   // 窗口起不来时(无显示环境/CI runner)spawnSync 会永远等下去,这里用 spawnSync 自身的 timeout
   // 兜底:到点强杀进程树,让该步记为失败并继续往下跑,而不是整轮挂死。
   const logFd = openSync(logFile, 'a')
-  const spawn = spawnSync(electron, ['.', `--user-data-dir=${join(tmpDir, `udd-${name}`)}`], {
-    cwd: root,
-    env: {
-      ...process.env,
-      ...(STEP_ENV[script] ?? {}),
-      PDF_EDITOR_SMOKE: '1',
-      PDF_EDITOR_SMOKE_SCRIPT: join('scripts', 'smoke', script),
-      PDF_EDITOR_SMOKE_OUT: outFile,
-      PDF_EDITOR_SMOKE_ROOT: root,
-      PDF_EDITOR_SMOKE_TIMEOUT: String(stepTimeoutMs),
-      PDF_EDITOR_LOG_DIR: appLogDir
-    },
-    stdio: ['ignore', logFd, logFd],
-    timeout: stepTimeoutMs + 60000,
-    killSignal: 'SIGKILL'
-  })
+  const spawn = spawnSync(
+    electron,
+    ['.', `--user-data-dir=${join(tmpDir, STEP_USERDATA[script] ?? `udd-${name}`)}`],
+    {
+      cwd: root,
+      env: {
+        ...process.env,
+        ...(STEP_ENV[script] ?? {}),
+        ...(STEP_SHOTS[script] ? { PDF_EDITOR_SMOKE_SHOT: STEP_SHOTS[script] } : {}),
+        PDF_EDITOR_SMOKE: '1',
+        PDF_EDITOR_SMOKE_SCRIPT: join('scripts', 'smoke', script),
+        PDF_EDITOR_SMOKE_OUT: outFile,
+        PDF_EDITOR_SMOKE_ROOT: root,
+        PDF_EDITOR_SMOKE_TIMEOUT: String(stepTimeoutMs),
+        PDF_EDITOR_LOG_DIR: appLogDir
+      },
+      stdio: ['ignore', logFd, logFd],
+      timeout: stepTimeoutMs + 60000,
+      killSignal: 'SIGKILL'
+    }
+  )
   closeSync(logFd)
   let report = { ok: false, error: '未生成结果文件' }
   if ((spawn.error || spawn.signal) && !existsSync(outFile)) {

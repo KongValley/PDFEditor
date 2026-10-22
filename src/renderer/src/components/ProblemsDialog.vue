@@ -121,6 +121,7 @@ function onCopy(entry: { title: string; detail?: string }): void {
   color: var(--toolbar-fg-dim);
   max-height: 120px;
   overflow: auto;
+  user-select: text;
 }
 
 .problem-actions {

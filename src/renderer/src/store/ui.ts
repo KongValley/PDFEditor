@@ -50,8 +50,8 @@ interface UiState {
   pageMenu: PageMenuState
   problems: ProblemEntry[]
   problemsOpen: boolean
-  pageNumberDialog: { open: boolean; preset: string }
-  watermarkDialog: { open: boolean; preset: string }
+  pageNumberDialog: { open: boolean; preset: string; running: boolean }
+  watermarkDialog: { open: boolean; preset: string; running: boolean }
 }
 
 /** 供「问题」面板展示的失败/警告记录(离线打包后没有控制台,这里就是唯一的明细入口) */
@@ -92,8 +92,8 @@ export const ui = reactive<UiState>({
   pageMenu: { open: false, page: 1, x: 0, y: 0 },
   problems: [],
   problemsOpen: false,
-  pageNumberDialog: { open: false, preset: '' },
-  watermarkDialog: { open: false, preset: '' }
+  pageNumberDialog: { open: false, preset: '', running: false },
+  watermarkDialog: { open: false, preset: '', running: false }
 })
 
 let toastTimer: number | undefined
@@ -420,7 +420,7 @@ export function requestSplitWork(seed: {
       end: String(seed.pageCount),
       pagesPerFile: '1',
       ranges: `1-${seed.pageCount}`,
-      selected: false
+      selected: true
     }
   ]
   splitDialogState.outputDir = null

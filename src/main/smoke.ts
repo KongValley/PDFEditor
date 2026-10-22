@@ -69,9 +69,27 @@ export function installSmokeDialogs(): void {
       | undefined
     return { canceled: false, filePath: uniqueFilePath(dir, basename(options?.defaultPath ?? 'out.pdf')) }
   }
-  const open = async (): Promise<OpenDialogReturnValue> => {
-    const pdfs = readdirSync(dir).filter((name) => name.toLowerCase().endsWith('.pdf'))
-    return pdfs.length > 0 ? { canceled: false, filePaths: [join(dir, pdfs[0])] } : { canceled: true, filePaths: [] }
+  const open = async (...args: unknown[]): Promise<OpenDialogReturnValue> => {
+    const options = args.find(
+      (a) => a && typeof a === 'object' && 'properties' in (a as object)
+    ) as { properties?: string[] } | undefined
+    const properties = options?.properties ?? []
+    // 选择目录(PNG 多图导出、合并/拆分输出目录):直接返回替身目录
+    if (properties.includes('openDirectory')) {
+      return { canceled: false, filePaths: [dir] }
+    }
+    const pdfs = readdirSync(dir)
+      .filter((name) => name.toLowerCase().endsWith('.pdf'))
+      .sort()
+    if (pdfs.length === 0) return { canceled: true, filePaths: [] }
+    // 多选(合并/拆分“+ 添加文件”):返回全部,让去重逻辑走真实路径
+    if (properties.includes('multiSelections')) {
+      return { canceled: false, filePaths: pdfs.map((name) => join(dir, name)) }
+    }
+    // 单选:优先使用 runner 指定的文件(避免目录里其它产物抢在“打开”按钮前)
+    const preferred = process.env['PDF_EDITOR_SMOKE_OPEN_FILE'] ?? ''
+    const target = preferred && pdfs.includes(preferred) ? preferred : pdfs[0]
+    return { canceled: false, filePaths: [join(dir, target)] }
   }
 
   const target = dialog as unknown as Record<string, unknown>

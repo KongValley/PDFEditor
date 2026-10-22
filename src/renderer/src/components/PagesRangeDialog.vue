@@ -68,7 +68,7 @@ function cancel(): void {
 
 <template>
   <div v-if="pagesDialogState.open" class="mask">
-    <div class="dialog" @keydown.enter="confirm" @keydown.esc="cancel">
+    <div class="dialog" @keydown.esc.stop="cancel">
       <div class="title">{{ TITLES[pagesDialogState.action] }}</div>
       <div class="message">共 {{ docState.pageCount }} 页,输入页码范围</div>
       <input
@@ -76,6 +76,7 @@ function cancel(): void {
         v-model="value"
         :class="{ invalid }"
         placeholder="如 1-3,5,7-9"
+        @keydown.enter.prevent="confirm"
       />
       <div v-if="invalid" class="range-error">页码范围无效</div>
       <div v-else-if="parsed" class="range-hint">将处理 {{ parsed.length }} 页</div>

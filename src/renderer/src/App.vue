@@ -192,8 +192,8 @@ watch(
         <span class="page-total">/ {{ docState.pageCount }}</span>
         <button title="下一页" @click="stepPage(1)">下一页</button>
 
-        <button title="左旋当前页 ([)" @click="rotateCurrent(-90)">⟲</button>
-        <button title="右旋当前页 (])" @click="rotateCurrent(90)">⟳</button>
+        <button :disabled="ui.busy !== null" title="左旋当前页 ([)" @click="rotateCurrent(-90)">⟲</button>
+        <button :disabled="ui.busy !== null" title="右旋当前页 (])" @click="rotateCurrent(90)">⟳</button>
 
         <span class="status-divider"></span>
 
@@ -220,6 +220,8 @@ watch(
       </template>
 
       <span v-if="ui.busy" class="status-busy">{{ ui.busy }}</span>
+      <span v-if="docReady && docState.loading" class="status-loading">{{ docState.loadProgress ?? '正在打开…' }}</span>
+      <button v-if="docReady && docState.loading" class="status-cancel" @click="cancelOpen">取消</button>
       <button
         v-if="ui.problems.length > 0"
         class="status-problems"
@@ -400,6 +402,15 @@ watch(
   color: #8fd0ff;
 }
 
+.status-loading {
+  color: #8fd0ff;
+  white-space: nowrap;
+}
+
+.status-cancel {
+  padding: 0 6px;
+}
+
 .drop-mask {
   position: fixed;
   inset: 0;
@@ -425,7 +436,7 @@ watch(
   background: #2f3542;
   color: #e6e9f0;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
-  z-index: 200;
+  z-index: 400;
 }
 
 .toast.error {

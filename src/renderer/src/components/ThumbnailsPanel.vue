@@ -115,11 +115,11 @@ function presetRangeText(): string {
 }
 
 function openPageNumber(): void {
-  ui.pageNumberDialog = { open: true, preset: presetRangeText() }
+  ui.pageNumberDialog = { open: true, preset: presetRangeText(), running: false }
 }
 
 function openWatermark(): void {
-  ui.watermarkDialog = { open: true, preset: presetRangeText() }
+  ui.watermarkDialog = { open: true, preset: presetRangeText(), running: false }
 }
 
 async function onRangeAction(action: PagesAction): Promise<void> {
@@ -146,10 +146,11 @@ async function onRangeAction(action: PagesAction): Promise<void> {
     }
   }
   switch (action) {
-    case 'delete':
-      await deletePages(pages)
-      clearSelection()
+    case 'delete': {
+      const deleted = await deletePages(pages)
+      if (deleted) clearSelection()
       break
+    }
     case 'extract':
       await extractPages(pages, includeAnnotations)
       break
@@ -244,6 +245,11 @@ function onThumbDragOver(target: number, event: DragEvent): void {
 
 async function onThumbDrop(target: number, event: DragEvent): Promise<void> {
   if (dragPage === null) return
+  if (ui.busy !== null) {
+    showToast('上一操作尚未完成,请稍候', 'error')
+    onThumbDragEnd()
+    return
+  }
   const el = event.currentTarget as HTMLElement
   const after = isAfterMidpoint(el, event.clientY)
   const from = dragPage - 1
@@ -293,7 +299,7 @@ onBeforeUnmount(() => {
 })
 
 watch(
-  () => [docState.docId, docState.pageBoxes.length] as const,
+  () => [docState.docId, docState.pageCount] as const,
   async () => {
     visibleThumbs.clear()
     selected.value = new Set()

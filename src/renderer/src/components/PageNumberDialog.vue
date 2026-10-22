@@ -13,6 +13,7 @@ const start = ref(1)
 const position = ref<'bottom-center' | 'bottom-right' | 'top-center' | 'top-right'>('bottom-center')
 const fontSize = ref(12)
 const margin = ref(24)
+const error = ref('')
 const inputEl = ref<HTMLInputElement | null>(null)
 
 watch(
@@ -25,6 +26,7 @@ watch(
     position.value = 'bottom-center'
     fontSize.value = 12
     margin.value = 24
+    error.value = ''
     await nextTick()
     inputEl.value?.focus()
   }
@@ -37,10 +39,11 @@ const sample = computed(() =>
 )
 
 async function confirm(): Promise<void> {
-  if (invalid.value) return
-  ui.pageNumberDialog.open = false
+  if (invalid.value || ui.pageNumberDialog.running) return
+  error.value = ''
+  ui.pageNumberDialog.running = true
   const pages = parsed.value ?? []
-  await addPageNumbers({
+  const ok = await addPageNumbers({
     pages,
     format: format.value,
     start: start.value,
@@ -48,28 +51,38 @@ async function confirm(): Promise<void> {
     fontSize: fontSize.value,
     margin: margin.value
   })
+  ui.pageNumberDialog.running = false
+  if (ok) {
+    ui.pageNumberDialog.open = false
+  } else {
+    error.value = '添加失败,请重试'
+  }
 }
 
 function cancel(): void {
+  if (ui.pageNumberDialog.running) return
   ui.pageNumberDialog.open = false
 }
 </script>
 
 <template>
   <div v-if="ui.pageNumberDialog.open" class="mask">
-    <div class="dialog" @keydown.enter="confirm" @keydown.esc="cancel">
+    <div class="dialog" @keydown.esc.stop="cancel">
       <div class="title">添加页码</div>
       <div class="message">共 {{ docState.pageCount }} 页,留空 = 全部页</div>
       <input
         ref="inputEl"
         v-model="value"
         :class="{ invalid }"
+        :disabled="ui.pageNumberDialog.running"
         placeholder="如 1-3,5,7-9,留空 = 全部页"
+        @keydown.enter.prevent="confirm"
       />
       <div v-if="invalid" class="range-error">页码范围无效</div>
+      <div v-if="error" class="range-error">{{ error }}</div>
       <div class="row">
         <span class="label">格式</span>
-        <select v-model="format">
+        <select v-model="format" :disabled="ui.pageNumberDialog.running">
           <option value="1">1</option>
           <option value="1 / N">1 / N</option>
           <option value="第 1 页">第 1 页</option>
@@ -78,11 +91,11 @@ function cancel(): void {
       </div>
       <div class="row">
         <span class="label">起始页码</span>
-        <input v-model.number="start" type="number" min="1" />
+        <input v-model.number="start" type="number" min="1" :disabled="ui.pageNumberDialog.running" />
       </div>
       <div class="row">
         <span class="label">位置</span>
-        <select v-model="position">
+        <select v-model="position" :disabled="ui.pageNumberDialog.running">
           <option value="bottom-center">页脚居中</option>
           <option value="bottom-right">页脚右侧</option>
           <option value="top-center">页眉居中</option>
@@ -91,16 +104,18 @@ function cancel(): void {
       </div>
       <div class="row">
         <span class="label">字号</span>
-        <input v-model.number="fontSize" type="number" min="6" max="72" />
+        <input v-model.number="fontSize" type="number" min="6" max="72" :disabled="ui.pageNumberDialog.running" />
       </div>
       <div class="row">
         <span class="label">边距</span>
-        <input v-model.number="margin" type="number" min="0" max="200" />
+        <input v-model.number="margin" type="number" min="0" max="200" :disabled="ui.pageNumberDialog.running" />
       </div>
       <div class="sample">样例:{{ sample }}</div>
       <div class="actions">
-        <button @click="cancel">取消</button>
-        <button class="primary" :disabled="invalid" @click="confirm">确定</button>
+        <button :disabled="ui.pageNumberDialog.running" @click="cancel">取消</button>
+        <button class="primary" :disabled="invalid || ui.pageNumberDialog.running" @click="confirm">
+          {{ ui.pageNumberDialog.running ? '处理中…' : '确定' }}
+        </button>
       </div>
     </div>
   </div>

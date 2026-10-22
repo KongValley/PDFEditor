@@ -49,8 +49,9 @@ function rowValid(row: SplitRow): boolean {
   return !startBad(row) && !endBad(row) && !pagesBad(row)
 }
 
-const allValid = computed(() => splitDialogState.rows.length > 0 && splitDialogState.rows.every(rowValid))
-const selectedCount = computed(() => splitDialogState.rows.filter((row) => row.selected).length)
+const includedRows = computed(() => splitDialogState.rows.filter((row) => row.selected))
+const allValid = computed(() => includedRows.value.length > 0 && includedRows.value.every(rowValid))
+const selectedCount = computed(() => includedRows.value.length)
 
 async function addFiles(): Promise<void> {
   const entries = await pickPdfFileEntries(splitDialogState.rows.map((row) => row.path))
@@ -65,7 +66,7 @@ async function addFiles(): Promise<void> {
       end: String(entry.pageCount),
       pagesPerFile: '1',
       ranges: `1-${entry.pageCount}`,
-      selected: false
+      selected: true
     })
   }
 }
@@ -94,7 +95,7 @@ async function onDirChange(event: Event): Promise<void> {
 
 function confirm(): void {
   if (!allValid.value) return
-  const tasks: SplitTask[] = splitDialogState.rows.map((row): SplitTask => {
+  const tasks: SplitTask[] = includedRows.value.map((row): SplitTask => {
     if (row.mode === 'ranges') {
       return {
         mode: 'ranges',
@@ -158,10 +159,10 @@ function stopSplit(): void {
   </div>
 
   <div v-if="splitDialogState.open" class="mask">
-    <div ref="dialogEl" class="dialog" @keydown.esc="cancel">
+    <div ref="dialogEl" class="dialog" @keydown.esc.stop="cancel">
       <div class="title">拆分页面</div>
       <div class="head grid-row">
-        <span></span>
+        <span>包含</span>
         <span>名称</span>
         <span>页数</span>
         <span>输出范围</span>
@@ -170,7 +171,11 @@ function stopSplit(): void {
       <div class="list">
         <div v-for="(row, i) in splitDialogState.rows" :key="i" class="row-wrap">
           <div class="grid-row">
-            <input v-model="row.selected" type="checkbox" />
+            <input
+              type="checkbox"
+              :checked="row.selected"
+              @change="row.selected = ($event.target as HTMLInputElement).checked"
+            />
             <span class="file-name" :title="row.path">{{ row.name }}</span>
             <span>{{ row.pageCount }}</span>
             <div class="range">
@@ -207,7 +212,7 @@ function stopSplit(): void {
       <div class="list-foot">
         <button @click="addFiles">+ 添加文件</button>
         <button :disabled="selectedCount === 0" @click="clearSelected">
-          清除选中({{ selectedCount }}/{{ splitDialogState.rows.length }})
+          移除选中({{ selectedCount }})
         </button>
       </div>
       <div class="set-row">

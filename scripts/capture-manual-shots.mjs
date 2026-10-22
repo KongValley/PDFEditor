@@ -122,7 +122,7 @@ buttons.find((b) => b.textContent.trim() === '拆分').click()
 await sleep(500)
 t.splitDialogState.rows.push({
   kind: 'file', path: 'D:\\\\资料\\\\季度报告.pdf', name: '季度报告.pdf', pageCount: 24,
-  mode: 'ranges', start: '1', end: '24', pagesPerFile: '1', ranges: '1-8,9-16,17-24', selected: false
+  mode: 'ranges', start: '1', end: '24', pagesPerFile: '1', ranges: '1-8,9-16,17-24', selected: true
 })
 await sleep(400)
 return { shot: 'split-dialog' }
@@ -139,7 +139,7 @@ buttons.find((b) => b.textContent.trim() === '合并').click()
 await sleep(500)
 t.mergeDialogState.rows.push({
   kind: 'file', path: 'D:\\\\资料\\\\附件.pdf', name: '附件.pdf', pageCount: 6,
-  start: '1', end: '3', selected: false
+  start: '1', end: '3', selected: true
 })
 t.mergeDialogState.outputName = '示例-合并'
 await sleep(400)

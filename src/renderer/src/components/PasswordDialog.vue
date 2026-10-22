@@ -26,7 +26,7 @@ function cancel(): void {
 
 <template>
   <div v-if="passwordState.open" class="mask">
-    <div class="dialog">
+    <div class="dialog" @keydown.esc.stop="submitPassword(null)">
       <div class="title">需要密码</div>
       <div class="message">{{ passwordState.message }}</div>
       <input

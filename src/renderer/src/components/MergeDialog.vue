@@ -38,19 +38,25 @@ const outputNameBad = computed(() => {
   return name === '' || /[\\/:*?"<>|]/.test(name)
 })
 
+const includedRows = computed(() =>
+  mergeDialogState.rows.filter((row) => row.kind === 'current' || row.selected)
+)
+
 const totalPages = computed(() => {
   let total = 0
-  for (const row of mergeDialogState.rows) {
+  for (const row of includedRows.value) {
     if (!startBad(row) && !endBad(row)) total += endInt(row) - startInt(row) + 1
   }
   return total
 })
 
-const selectedCount = computed(() => mergeDialogState.rows.filter((row) => row.selected).length)
+const selectedCount = computed(() => mergeDialogState.rows.filter((row) => row.kind === 'file' && row.selected).length)
 
-const allValid = computed(() => mergeDialogState.rows.every((row) => !startBad(row) && !endBad(row)))
+const allValid = computed(() => includedRows.value.every((row) => !startBad(row) && !endBad(row)))
 
-const canMerge = computed(() => mergeDialogState.rows.length >= 2 && allValid.value && !outputNameBad.value)
+const canMerge = computed(
+  () => includedRows.value.length >= 2 && allValid.value && !outputNameBad.value
+)
 
 async function addFiles(): Promise<void> {
   const entries = await pickPdfFileEntries(mergeDialogState.rows.map((row) => row.path))
@@ -62,7 +68,7 @@ async function addFiles(): Promise<void> {
       pageCount: entry.pageCount,
       start: '1',
       end: String(entry.pageCount),
-      selected: false
+      selected: true
     })
   }
 }
@@ -102,7 +108,7 @@ async function onDirChange(event: Event): Promise<void> {
 function confirm(): void {
   if (!canMerge.value) return
   submitMergeWork({
-    files: mergeDialogState.rows
+    files: includedRows.value
       .filter((row) => row.kind === 'file')
       .map((row) => {
         const pages: number[] = []
@@ -122,10 +128,10 @@ function cancel(): void {
 
 <template>
   <div v-if="mergeDialogState.open" class="mask">
-    <div class="dialog" @keydown.esc="cancel">
+    <div class="dialog" @keydown.esc.stop="cancel">
       <div class="title">合并页面</div>
       <div class="head grid-row">
-        <span></span>
+        <span>包含</span>
         <span>名称</span>
         <span>页数</span>
         <span>输出范围</span>
@@ -134,7 +140,12 @@ function cancel(): void {
       <div class="list">
         <div v-for="(row, i) in mergeDialogState.rows" :key="i" class="row-wrap">
           <div class="grid-row">
-            <input v-model="row.selected" type="checkbox" :disabled="row.kind === 'current'" />
+            <input
+              type="checkbox"
+              :checked="row.kind === 'current' || row.selected"
+              :disabled="row.kind === 'current'"
+              @change="row.selected = ($event.target as HTMLInputElement).checked"
+            />
             <span class="file-name" :title="row.path">{{ row.name }}</span>
             <span>{{ row.pageCount }}</span>
             <div class="range">
@@ -168,7 +179,7 @@ function cancel(): void {
       <div class="list-foot">
         <button @click="addFiles">+ 添加文件</button>
         <button :disabled="selectedCount === 0" @click="clearSelected">
-          清除选中({{ selectedCount }}/{{ mergeDialogState.rows.length }})
+          移除选中({{ selectedCount }})
         </button>
       </div>
       <div class="set-row">

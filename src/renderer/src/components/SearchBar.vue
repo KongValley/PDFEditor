@@ -3,7 +3,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { docState } from '../store/document'
 import { searchGoTo, searchState, searchStep } from '../store/search'
 import { clearSearchIndex, searchDocument } from '../lib/textsearch'
-import { ui } from '../store/ui'
+import { showToast, ui } from '../store/ui'
 
 const inputEl = ref<HTMLInputElement | null>(null)
 let debounceTimer: number | undefined
@@ -37,10 +37,16 @@ async function runSearch(): Promise<void> {
   searchState.searching = true
   try {
     const { matches, truncated } = await searchDocument(query)
-    if (seq !== searchSeq || docId !== docState.docId) return
+    // 关闭搜索栏/换文档/换查询词后,在飞结果一律丢弃
+    if (seq !== searchSeq || docId !== docState.docId || !ui.searchOpen) return
     searchState.results = matches
     searchState.truncated = truncated
     if (matches.length > 0) void searchGoTo(0)
+  } catch (err) {
+    if (seq === searchSeq && ui.searchOpen) {
+      searchState.searching = false
+      showToast(`搜索失败:${err instanceof Error ? err.message : String(err)}`, 'error')
+    }
   } finally {
     if (seq === searchSeq) searchState.searching = false
   }
@@ -62,6 +68,8 @@ function onKeyDown(event: KeyboardEvent): void {
 }
 
 function close(): void {
+  searchSeq++
+  searchState.searching = false
   ui.searchOpen = false
 }
 
@@ -73,6 +81,8 @@ watch(
       inputEl.value?.focus()
       inputEl.value?.select()
     } else {
+      searchSeq++
+      searchState.searching = false
       searchState.results = []
       searchState.current = -1
       searchState.truncated = false

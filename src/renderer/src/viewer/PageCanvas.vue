@@ -499,6 +499,7 @@ defineExpose({ rendered, viewport })
   forced-color-adjust: none;
   transform-origin: 0 0;
   caret-color: transparent;
+  user-select: text;
   z-index: 2;
 }
 

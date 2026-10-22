@@ -1,6 +1,6 @@
 {
   "name": "pdf-editor",
-  "version": "1.18.1",
+  "version": "1.19.0",
   "description": "PDF 编辑器 - 基于 Electron 的完整标注编辑器",
   "main": "out/main/index.js",
   "author": "",
@@ -17,6 +17,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "smoke": "node scripts/run-smokes.mjs",
+    "smoke:flow": "node scripts/run-smokes.mjs --only=step30-full-flow,step31-relaunch",
     "licenses": "node scripts/gen-licenses.mjs",
     "manual": "node scripts/manual-to-pdf.mjs",
     "manual:shots": "node scripts/capture-manual-shots.mjs",

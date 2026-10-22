@@ -241,7 +241,7 @@ export async function applyOrientationFix(items: OrientationPlanItem[]): Promise
     return
   }
   await runBusy('正在统一页面方向…', async () => {
-    const ok = await runPageOp({ kind: 'rotate', pages, delta: 90, deltas })
+    const ok = await applyPageOp({ kind: 'rotate', pages, delta: 90, deltas })
     cancelOrientationPlan()
     if (!ok) return
     showToast(
@@ -400,7 +400,29 @@ export async function exportCurrentPageImage(): Promise<void> {
 /** 最近一次页面操作是否记了历史(主进程是否留了快照);供删除后的提示判断 */
 let lastPageOpUndoable = false
 
-async function runPageOp(op: PageOp, options: { recordHistory?: boolean } = {}): Promise<boolean> {
+const PAGE_OP_NAMES: Record<PageOp['kind'], string> = {
+  delete: '删除页面',
+  rotate: '旋转页面',
+  insertBlank: '插入空白页',
+  move: '移动页面',
+  append: '合并文档',
+  export: '导出页面',
+  pagenumber: '添加页码',
+  watermark: '添加水印'
+}
+
+const PAGE_OP_BUSY: Record<PageOp['kind'], string> = {
+  delete: '正在删除页面…',
+  rotate: '正在旋转页面…',
+  insertBlank: '正在插入空白页…',
+  move: '正在移动页面…',
+  append: '正在合并文档…',
+  export: '正在导出页面…',
+  pagenumber: '正在添加页码…',
+  watermark: '正在添加水印…'
+}
+
+async function applyPageOp(op: PageOp, options: { recordHistory?: boolean } = {}): Promise<boolean> {
   lastPageOpUndoable = false
   const docId = docState.docId
   if (!docId) return false
@@ -418,7 +440,11 @@ async function runPageOp(op: PageOp, options: { recordHistory?: boolean } = {}):
     return false
   }
   if (!result.ok || !result.buffer) {
-    if (result.error !== 'canceled') showToast(result.error ?? '页面操作失败', 'error')
+    const message = result.error ?? '页面操作失败'
+    if (result.error !== 'canceled') {
+      showToast(message, 'error')
+      pushProblem({ title: `${PAGE_OP_NAMES[op.kind]}失败`, detail: message })
+    }
     return false
   }
   if (result.pageMap) applyPageMap(result.pageMap)
@@ -462,15 +488,23 @@ async function runPageOp(op: PageOp, options: { recordHistory?: boolean } = {}):
   return true
 }
 
-export async function deletePages(pages: number[]): Promise<void> {
-  if (pages.length === 0) return
+/** 统一忙碌闸门:页面操作期间状态栏显示进度,工具栏/缩略图/快捷键入口全部置灰 */
+async function runPageOp(op: PageOp, options: { recordHistory?: boolean } = {}): Promise<boolean> {
+  const result = await runBusy(PAGE_OP_BUSY[op.kind], () => applyPageOp(op, options))
+  return result === true
+}
+
+export async function deletePages(pages: number[]): Promise<boolean> {
+  if (pages.length === 0) return false
   // 撤销能力取决于主进程快照(>128MB 的文档根本不记快照),执行前无法确定,
   // 因此确认框不承诺可撤销;执行后按实际能力提示
   const confirmed = window.confirm(`确定删除选中的 ${pages.length} 页吗?`)
-  if (!confirmed) return
-  if (await runPageOp({ kind: 'delete', pages }) && lastPageOpUndoable) {
+  if (!confirmed) return false
+  const ok = await runPageOp({ kind: 'delete', pages })
+  if (ok && lastPageOpUndoable) {
     showToast(`已删除 ${pages.length} 页,可用 Ctrl+Z 撤销`)
   }
+  return ok
 }
 
 export async function rotatePages(pages: number[], delta: number): Promise<void> {
@@ -483,7 +517,7 @@ export async function insertBlankPage(afterIndex: number): Promise<void> {
 }
 
 /** 添加页码:一次页面操作 → 一次撤销 */
-export function addPageNumbers(options: {
+export async function addPageNumbers(options: {
   pages: number[]
   format: PageNumberFormat
   start: number
@@ -491,11 +525,17 @@ export function addPageNumbers(options: {
   fontSize: number
   margin: number
 }): Promise<boolean> {
-  return runPageOp({ kind: 'pagenumber', ...options })
+  const ok = await runPageOp({ kind: 'pagenumber', ...options })
+  if (ok) {
+    showToast(
+      lastPageOpUndoable ? '已添加页码,可用 Ctrl+Z 撤销' : '已添加页码(文档较大,该操作不可撤销)'
+    )
+  }
+  return ok
 }
 
 /** 添加水印:一次页面操作 → 一次撤销 */
-export function addWatermark(options: {
+export async function addWatermark(options: {
   pages: number[]
   text: string
   fontSize: number
@@ -504,7 +544,13 @@ export function addWatermark(options: {
   tile: boolean
   color: string
 }): Promise<boolean> {
-  return runPageOp({ kind: 'watermark', ...options })
+  const ok = await runPageOp({ kind: 'watermark', ...options })
+  if (ok) {
+    showToast(
+      lastPageOpUndoable ? '已添加水印,可用 Ctrl+Z 撤销' : '已添加水印(文档较大,该操作不可撤销)'
+    )
+  }
+  return ok
 }
 
 /** 书签编辑(新建/重命名/删除):走 outline:apply,与页面操作共用撤销栈 */
@@ -657,7 +703,7 @@ export async function mergePdfs(specs?: AppendFileSpec[], targetPath?: string): 
     commitOpenEditor()
     const annotationsBefore = exportAnnotations()
     const filePathBefore = filePath
-    if (!(await runPageOp({ kind: 'append', files }, { recordHistory: false }))) return
+    if (!(await applyPageOp({ kind: 'append', files }, { recordHistory: false }))) return
     // 首次保存成功前 redo 不可用(保存失败时条目仅用于撤销)
     let savedPath: string | null = null
     // 主进程快照与本条目严格配对:先入栈(保存失败也保留,撤销可用)

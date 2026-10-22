@@ -84,7 +84,7 @@ watch(
 </script>
 
 <template>
-  <div v-if="ui.aboutOpen" class="mask" @click.self="ui.aboutOpen = false">
+  <div v-if="ui.aboutOpen" class="mask" @click.self="ui.aboutOpen = false" @keydown.esc.stop="ui.aboutOpen = false">
     <div class="dialog">
       <div class="title">关于 / 开源许可</div>
       <div class="message">
