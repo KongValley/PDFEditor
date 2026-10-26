@@ -42,7 +42,8 @@ const allScripts = [
   'step28-user-actions.js',
   'step29-error-paths.js',
   'step30-full-flow.js',
-  'step31-relaunch.js'
+  'step31-relaunch.js',
+  'step32-ofd.js'
 ]
 
 // --only=step30-full-flow,step31-relaunch:只跑指定步骤(名字不带 .js),用于全流程回归。
@@ -72,7 +73,7 @@ if (!existsSync(join(root, 'samples', 'sample-zh.pdf'))) {
 // (step14/15/28 的「保存直存」「另存为」之外的路径),一次崩在中途的运行会把批注留在
 // 样本里,导致下一次跑出「注释多了 2 条」这类与代码无关的假红。这里每次开跑前重生成,
 // samples/ 本就不入版本库(代价 ≈0.2s)。
-for (const script of ['make-samples.mjs', 'make-outline-sample.mjs']) {
+for (const script of ['make-samples.mjs', 'make-outline-sample.mjs', 'make-ofd-sample.mjs']) {
   const reset = spawnSync(process.execPath, [join(root, 'scripts', script)], { cwd: root, stdio: 'inherit' })
   if (reset.status !== 0) {
     console.error(`重生成夹具失败:${script}`)
@@ -116,6 +117,8 @@ for (const [file, script] of [
 // 验证最近文件与阅读位置。每次开跑重建,避免上一轮保存/提取产物污染合并对话框。
 const e2eDir = join(tmpDir, 'e2e')
 const e2eDialogDir = join(e2eDir, 'dialog')
+// step32 的保存对话框替身目录:每轮清空,保证 <源名>.pdf 是首次落盘(断言默认名不受 -1 干扰)
+rmSync(join(tmpDir, 'dialog-ofd'), { recursive: true, force: true })
 rmSync(e2eDir, { recursive: true, force: true })
 mkdirSync(e2eDialogDir, { recursive: true })
 for (const [source, target] of [
@@ -179,6 +182,8 @@ const STEP_SHOTS = {
 const STEP_ENV = {
   'step28-user-actions.js': { PDF_EDITOR_SMOKE_DIALOG_DIR: join(tmpDir, 'dialog') },
   'step29-error-paths.js': { PDF_EDITOR_SMOKE_CJK_FONT: 'none' },
+  // step32 的保存语义断言需要保存对话框替身(OFD 源另存为 .pdf)
+  'step32-ofd.js': { PDF_EDITOR_SMOKE_DIALOG_DIR: join(tmpDir, 'dialog-ofd') },
   'step30-full-flow.js': {
     PDF_EDITOR_SMOKE_DIALOG_DIR: e2eDialogDir,
     PDF_EDITOR_SMOKE_OPEN_FILE: 'open-me.pdf'

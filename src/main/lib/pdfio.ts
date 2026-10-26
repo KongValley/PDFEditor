@@ -5,6 +5,8 @@ import { randomUUID } from 'node:crypto'
 import { PDFDocument } from 'pdf-lib'
 import type { Annotation, OpenResult, SidecarData } from '@shared/types'
 import { extractEditorAnnotations } from './pdflibwrite'
+import { detectDocumentKind } from './ofd/model'
+import { convertOfdToPdf } from './ofd/topdf'
 
 /**
  * 原子写:先写同目录临时文件再 rename 覆盖。
@@ -157,7 +159,7 @@ export async function readPdfPageCount(
 }
 
 export interface ReadProgress {
-  onProgress?: (read: number, total: number) => void
+  onProgress?: (read: number, total: number, phase: 'read' | 'convert') => void
   signal?: AbortSignal
 }
 
@@ -182,7 +184,7 @@ async function readFileWithProgress(filePath: string, options: ReadProgress): Pr
       if (options.onProgress && (read - lastBytes >= 1024 * 1024 || now - lastAt >= 200)) {
         lastBytes = read
         lastAt = now
-        options.onProgress(read, size)
+        options.onProgress(read, size, 'read')
       }
     }
   } catch (err) {
@@ -204,13 +206,33 @@ export async function openDocument(filePath: string, options: ReadProgress = {})
     return { ok: false, error: 'unknown', errorMessage: `无法读取文件:${(err as Error).message}` }
   }
 
+  // OFD 是 ZIP 容器,不是 PDF:先转成 PDF 字节,后续流程(页数、批注、range 流式加载)完全复用
+  const kind = detectDocumentKind(buffer)
+  if (kind === 'other') {
+    return { ok: false, error: 'corrupt', errorMessage: '不是有效的 PDF 或 OFD 文件' }
+  }
+  const warnings: string[] = []
+  let pdfBuffer = buffer
+  if (kind === 'ofd') {
+    const converted = await convertOfdToPdf(buffer, {
+      onProgress: (done, total) => options.onProgress?.(done, total, 'convert'),
+      signal: options.signal
+    })
+    warnings.push(...converted.warnings)
+    if (!converted.ok) {
+      if (converted.error === 'canceled') return { ok: false, error: 'canceled', errorMessage: '已取消' }
+      return { ok: false, error: 'corrupt', errorMessage: converted.error }
+    }
+    pdfBuffer = Buffer.from(converted.bytes)
+  }
+
   let encrypted = false
   let pageCount = 0
   let annotations: Annotation[] = []
   try {
     // 用 ignoreEncryption 加载并读取 isEncrypted:pdf-lib 的 EncryptedPDFError 在
     // CJS/ES5 构建下 instanceof 判定不可靠(Error.call 返回新对象导致原型丢失)
-    const parsed = await PDFDocument.load(buffer, { ignoreEncryption: true })
+    const parsed = await PDFDocument.load(pdfBuffer, { ignoreEncryption: true })
     encrypted = parsed.isEncrypted
     pageCount = parsed.getPageCount()
     // 加密文档不提取(无法可靠解析批注结构,沿用 sidecar 注释)
@@ -219,13 +241,13 @@ export async function openDocument(filePath: string, options: ReadProgress = {})
     return { ok: false, error: 'corrupt', errorMessage: `无法解析 PDF:${(err as Error).message}` }
   }
 
-  const useRange = !encrypted && buffer.byteLength >= RANGE_MIN_FILE_SIZE
+  const useRange = !encrypted && pdfBuffer.byteLength >= RANGE_MIN_FILE_SIZE
   // 只有当前文档可能被 range 读取:新开文档时解除其它文档的 pin,否则淘汰会失效
   for (const other of docs.values()) other.pinned = false
   const docId = randomUUID()
   docs.set(docId, {
     path: filePath,
-    buffer,
+    buffer: pdfBuffer,
     encrypted,
     pageCount,
     undoBuffers: [],
@@ -237,13 +259,16 @@ export async function openDocument(filePath: string, options: ReadProgress = {})
     ok: true,
     docId,
     path: filePath,
-    buffer: useRange ? undefined : toArrayBuffer(buffer),
-    fileSize: buffer.byteLength,
+    buffer: useRange ? undefined : toArrayBuffer(pdfBuffer),
+    fileSize: pdfBuffer.byteLength,
     stream: useRange ? 'range' : 'buffer',
     pageCount,
     encrypted,
     annotations,
-    sidecar: readSidecar(filePath)
+    // OFD 源没有 PDF 的 sidecar 语义:不读 <源名>.ofdanno.json
+    sidecar: kind === 'ofd' ? null : readSidecar(filePath),
+    kind,
+    warnings
   }
 }
 

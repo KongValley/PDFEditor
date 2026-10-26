@@ -3,13 +3,16 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
+  openDocument,
   pruneBufferStack,
   pushBufferSnapshot,
   readSidecar,
+  releaseDocument,
   sidecarPathFor,
   uniqueFilePath,
   type DocEntry
 } from '../../src/main/lib/pdfio'
+import { writeZipStored } from '../../src/main/lib/ofd/zip'
 
 let dir = ''
 
@@ -125,5 +128,52 @@ describe('pushBufferSnapshot', () => {
     expect(pushBufferSnapshot(e)).toBe(true)
     expect(e.undoBuffers).toHaveLength(1)
     expect(e.redoBuffers).toHaveLength(0)
+  })
+})
+describe('openDocument 的格式判定', () => {
+  /** 造一份最小 OFD(与 ofd-model 测试同构的精简版) */
+  const NS = 'http://www.ofdspec.org/2016'
+  async function writeOfd(): Promise<string> {
+    const target = join(dir, 'sample.ofd')
+    await writeZipStored(target, [
+      {
+        name: 'OFD.xml',
+        data: `<ofd:OFD xmlns:ofd="${NS}" DocType="OFD" Version="1.0"><ofd:DocBody><ofd:DocInfo><ofd:DocID>a</ofd:DocID></ofd:DocInfo><ofd:DocRoot>Doc_0/Document.xml</ofd:DocRoot></ofd:DocBody></ofd:OFD>`
+      },
+      {
+        name: 'Doc_0/Document.xml',
+        data:
+          `<ofd:Document xmlns:ofd="${NS}"><ofd:CommonData><ofd:MaxUnitID>10</ofd:MaxUnitID>` +
+          `<ofd:PageArea><ofd:PhysicalBox>0 0 210 297</ofd:PhysicalBox></ofd:PageArea></ofd:CommonData>` +
+          `<ofd:Pages><ofd:Page ID="1" BaseLoc="Pages/Page_0/Content.xml"/></ofd:Pages></ofd:Document>`
+      },
+      {
+        name: 'Doc_0/Pages/Page_0/Content.xml',
+        data:
+          `<ofd:Page xmlns:ofd="${NS}"><ofd:Content><ofd:Layer ID="1"><ofd:PathObject ID="2" Boundary="0 0 100 20" Fill="true">` +
+          `<ofd:FillColor Value="0 0 0"/><ofd:AbbreviatedData>M 0 0 L 100 0 L 100 20 L 0 20 C</ofd:AbbreviatedData>` +
+          `</ofd:PathObject></ofd:Layer></ofd:Content></ofd:Page>`
+      }
+    ])
+    return target
+  }
+
+  it('OFD 源被转成 PDF 并标记 kind', async () => {
+    const result = await openDocument(await writeOfd())
+    expect(result.ok).toBe(true)
+    expect(result.kind).toBe('ofd')
+    expect(result.pageCount).toBe(1)
+    expect(result.sidecar).toBeNull()
+    const bytes = Buffer.from(result.buffer as ArrayBuffer)
+    expect(bytes.subarray(0, 5).toString('latin1')).toBe('%PDF-')
+    if (result.docId) releaseDocument(result.docId)
+  })
+
+  it('是 ZIP 但没有 OFD.xml 时给出明确提示', async () => {
+    const target = join(dir, 'not-ofd.zip')
+    await writeZipStored(target, [{ name: 'readme.txt', data: 'x' }])
+    const result = await openDocument(target)
+    expect(result.ok).toBe(false)
+    expect(result.errorMessage).toBe('不是有效的 PDF 或 OFD 文件')
   })
 })

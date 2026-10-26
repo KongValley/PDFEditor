@@ -3,6 +3,7 @@ import { totalmem } from 'node:os'
 import { join, normalize, sep } from 'node:path'
 import { isRendererDirty, registerIpc, setRendererDirty } from './ipc'
 import { cleanupPrintJobs } from './lib/print'
+import { cleanupOfdExportJobs } from './lib/ofdexport'
 import { initLogger, logEvent } from './lib/logger'
 import {
   armSmokeWatchdog,
@@ -202,4 +203,5 @@ app.on('window-all-closed', () => {
 
 app.on('will-quit', () => {
   cleanupPrintJobs()
+  void cleanupOfdExportJobs()
 })

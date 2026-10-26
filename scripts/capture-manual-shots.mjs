@@ -346,7 +346,23 @@ return { shot: 'page-number' }
 `
   },
   {
-    name: '22-image2pdf',
+    name: '22-ofd-export',
+    caption: '导出 OFD:选页码范围、分辨率与是否含批注;产物为图片页 OFD,不含可检索文本',
+    body: `
+await t.openPath(\`\${__smokeRoot}/samples/sample-ofd.ofd\`)
+await sleep(1500)
+const button = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === '导出 OFD')
+button.click()
+await sleep(600)
+const rangeInput = document.querySelector('.mask .dialog input:not([type="checkbox"])')
+rangeInput.value = '1-2'
+rangeInput.dispatchEvent(new Event('input', { bubbles: true }))
+await sleep(400)
+return { shot: 'ofd-export', pages: t.docState.pageCount, kind: t.docState.sourceKind }
+`
+  },
+  {
+    name: '23-image2pdf',
     caption: '图片转 PDF:按选择顺序成页,页面尺寸可按图像像素或 A4,转换完自动打开',
     prepare: ({ root, tmpDir }) => {
       mkdirSync(tmpDir, { recursive: true })
@@ -363,7 +379,7 @@ return { shot: 'image2pdf', items: t.imagePdfDialogState.items.length }
 `
   },
   {
-    name: '23-problems',
+    name: '24-problems',
     caption: '问题面板:保存 / 导出 / 打印的失败与提示集中在此,可重试、复制明细',
     body: `
 await baseDoc()

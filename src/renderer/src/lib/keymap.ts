@@ -5,6 +5,7 @@ import {
   cancelOrientationPlan,
   imagePdfDialogState,
   mergeDialogState,
+  ofdExportDialogState,
   orientationDialogState,
   pagesDialogState,
   passwordState,
@@ -44,6 +45,7 @@ function modalOpen(): boolean {
     pagesDialogState.open ||
     orientationDialogState.open ||
     imagePdfDialogState.open ||
+    ofdExportDialogState.open ||
     mergeDialogState.open ||
     splitDialogState.open ||
     passwordState.open ||

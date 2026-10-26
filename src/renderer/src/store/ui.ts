@@ -359,6 +359,37 @@ export function cancelImagePdf(): void {
   imagePdfDialogState.result = null
 }
 
+/* --------------------------- 导出 OFD 对话框 --------------------------- */
+
+/** 导出清晰度:144dpi(约 2 倍)/ 300dpi(高清) */
+export type OfdDpi = 144 | 300
+
+export const ofdExportDialogState = reactive({
+  open: false,
+  /** 导出中(进度条显示,按钮禁用) */
+  running: false,
+  done: 0,
+  total: 0,
+  /** 进度条副标题,如「正在渲染第 2/5 页」 */
+  progress: ''
+})
+
+export function requestOfdExport(): void {
+  ofdExportDialogState.open = true
+  ofdExportDialogState.running = false
+  ofdExportDialogState.done = 0
+  ofdExportDialogState.total = 0
+  ofdExportDialogState.progress = ''
+}
+
+export function cancelOfdExport(): void {
+  ofdExportDialogState.open = false
+  ofdExportDialogState.running = false
+  ofdExportDialogState.done = 0
+  ofdExportDialogState.total = 0
+  ofdExportDialogState.progress = ''
+}
+
 /* --------------------------- 拆分对话框 --------------------------- */
 
 export type SplitMode = 'maxPages' | 'ranges'

@@ -12,6 +12,7 @@ const AboutDialog = defineAsyncComponent(() => import('./components/AboutDialog.
 const PagesRangeDialog = defineAsyncComponent(() => import('./components/PagesRangeDialog.vue'))
 const OrientationDialog = defineAsyncComponent(() => import('./components/OrientationDialog.vue'))
 const ImageToPdfDialog = defineAsyncComponent(() => import('./components/ImageToPdfDialog.vue'))
+const OfdExportDialog = defineAsyncComponent(() => import('./components/OfdExportDialog.vue'))
 const ProblemsDialog = defineAsyncComponent(() => import('./components/ProblemsDialog.vue'))
 const PageNumberDialog = defineAsyncComponent(() => import('./components/PageNumberDialog.vue'))
 const WatermarkDialog = defineAsyncComponent(() => import('./components/WatermarkDialog.vue'))
@@ -77,9 +78,9 @@ function onDrop(event: DragEvent): void {
   dragging.value = false
   const files = Array.from(event.dataTransfer?.files ?? [])
   if (files.length === 0) return
-  const pdfs = files.filter((f) => /\.pdf$/i.test(f.path ?? ''))
+  const pdfs = files.filter((f) => /\.(pdf|ofd)$/i.test(f.path ?? ''))
   const images = files.filter((f) => /\.(png|jpe?g)$/i.test(f.path ?? ''))
-  // 混着拖时以 PDF 为准(与旧行为一致);只有图片时才走转换流程
+  // 混着拖时以 PDF / OFD 为准(与旧行为一致);只有图片时才走转换流程
   if (pdfs.length > 0) {
     const path = window.pdfAPI.getPathForFile(pdfs[0])
     if (!path) return
@@ -92,7 +93,7 @@ function onDrop(event: DragEvent): void {
     void openImageToPdfDialog(images.map((f) => window.pdfAPI.getPathForFile(f)).filter(Boolean))
     return
   }
-  showToast('仅支持 PDF 或 PNG/JPEG 图片', 'error')
+  showToast('仅支持 PDF / OFD 或 PNG/JPEG 图片', 'error')
 }
 
 const fileName = computed(() => baseNameOf(docState.filePath ?? ''))
@@ -234,12 +235,13 @@ watch(
       <span v-if="docState.encrypted" class="status-warn">加密文档</span>
     </footer>
 
-    <div v-if="dragging" class="drop-mask">松开以打开 PDF</div>
+    <div v-if="dragging" class="drop-mask">松开以打开 PDF / OFD</div>
     <PasswordDialog />
     <MergeDialog />
     <PagesRangeDialog />
     <OrientationDialog />
     <ImageToPdfDialog />
+    <OfdExportDialog />
     <SplitDialog />
     <AboutDialog />
     <ProblemsDialog />

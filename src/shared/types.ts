@@ -212,6 +212,40 @@ export interface OpenResult {
   stream?: 'range' | 'buffer'
   /** 文件总字节数(stream='range' 时必需) */
   fileSize?: number
+  /** 源文件格式:'ofd' 表示当前工作文档是由 OFD 转换来的 PDF(保存时必须另存为 .pdf) */
+  kind?: 'pdf' | 'ofd'
+  /** 转换过程中的提示(缺字体/不支持的图元等),渲染层汇总进「问题」面板 */
+  warnings?: string[]
+}
+
+/** PDF → 图片页 OFD 导出的作业结果 */
+export interface OfdExportResult {
+  ok: boolean
+  canceled?: boolean
+  jobId?: string
+  savedPath?: string
+  pages?: number
+  error?: string
+}
+
+/**
+ * OFD 导出的不可见文本层:一段文字(已由渲染层换算成毫米/页面坐标)。
+ * 产物是「位图 + Alpha=0 的文本」,视觉与原 PDF 一致,同时可检索/可选中。
+ */
+export interface OfdTextRun {
+  text: string
+  /** 文字左边界距页面左边缘(mm) */
+  xMm: number
+  /** 基线距页面顶边(mm) */
+  baselineMm: number
+  /** 字号(mm) */
+  sizeMm: number
+  /** 整段宽度(mm):按字符数均分成 DeltaX */
+  widthMm: number
+  /** 字体族名(不可见,只作资源声明,不内嵌字体) */
+  family: string
+  /** 上升高度占字号比例(0..1),用于把基线放进外接矩形 */
+  ascent: number
 }
 
 /** 运行时机器画像(供渲染层按硬件调整上限) */

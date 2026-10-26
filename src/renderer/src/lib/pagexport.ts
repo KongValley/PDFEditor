@@ -37,14 +37,16 @@ function fitLongImageScale(pageW: number, pageH: number, count: number, vertical
   return 0
 }
 
-/** 渲染单页到离屏 canvas(默认 scale=2;批注不画入位图,由调用方按勾选用画笔叠加) */
+/** 渲染单页到离屏 canvas(默认 scale=2;批注不画入位图,由调用方按勾选用画笔叠加)
+ *  rotation 默认取视图旋转(WYSIWYG);OFD 导出传 0,让产物跟随文档自身的 /Rotate */
 export async function renderPageToCanvas(
   pageNumber: number,
   includeAnnotations: boolean,
-  scale = 2
+  scale = 2,
+  rotation = docState.rotationView
 ): Promise<HTMLCanvasElement | null> {
   const page = await getPage(pageNumber)
-  const { viewport } = getPageViewport(page, scale, docState.rotationView)
+  const { viewport } = getPageViewport(page, scale, rotation)
   const canvas = document.createElement('canvas')
   canvas.width = Math.floor(viewport.width)
   canvas.height = Math.floor(viewport.height)
@@ -151,6 +153,11 @@ export async function exportPagesAsImages(
  *  省内存机自动降回标准档。纯函数便于冒烟直接断言,不必触发系统打印对话框。 */
 export function resolvePrintScale(quality: PrintQuality): number {
   return quality === 'high' && !machineProfile.lowMem ? 300 / 72 : 2
+}
+
+/** OFD 导出的渲染倍率:144dpi→2×;300dpi 在省内存机降到 2×(与打印同一策略,单页位图 33MB) */
+export function resolveOfdScale(dpi: 144 | 300): number {
+  return dpi === 300 && !machineProfile.lowMem ? 300 / 72 : 2
 }
 
 /** 打印单页 PNG 字节:标准 2×(≈144dpi)、高清 300dpi(Uint8Array 走结构化克隆,免 base64×1.33) */

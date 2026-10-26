@@ -84,6 +84,10 @@ interface DocState {
   dirty: boolean
   /** 打开时从 PDF /Annots 提取的本应用批注(sidecar 兜底前的首选来源) */
   pdfAnnotations: Annotation[]
+  /** 源文件格式:'ofd' = 当前工作文档由 OFD 转换而来(保存时必须另存为 .pdf,不能写回源文件) */
+  sourceKind: 'pdf' | 'ofd'
+  /** OFD 转换提示(缺字体/不支持的图元等),打开后汇总进「问题」面板 */
+  ofdWarnings: string[]
 }
 
 export const docState = reactive<DocState>({
@@ -106,7 +110,9 @@ export const docState = reactive<DocState>({
   formFields: [],
   outline: [],
   dirty: false,
-  pdfAnnotations: []
+  pdfAnnotations: [],
+  sourceKind: 'pdf',
+  ofdWarnings: []
 })
 
 /**
@@ -287,9 +293,11 @@ export async function openByPath(path: string, options: OpenOptions = {}): Promi
   // 大文件在内网共享盘上读取要几秒到几十秒:订阅主进程的分块进度,并在标题区提供「取消」
   const offProgress = window.pdfAPI.on('doc:openProgress', (raw) => {
     if (mySeq !== openSeq) return
-    const info = raw as { read?: number; total?: number }
+    const info = raw as { read?: number; total?: number; phase?: 'read' | 'convert' }
     const total = info?.total ?? 0
-    if (total > 0) docState.loadProgress = `正在读取文件 ${Math.round(((info?.read ?? 0) / total) * 100)}%`
+    if (total <= 0) return
+    const percent = Math.round(((info?.read ?? 0) / total) * 100)
+    docState.loadProgress = info?.phase === 'convert' ? `正在转换 OFD ${percent}%` : `正在读取文件 ${percent}%`
   })
   try {
     const result = (await window.pdfAPI.invoke('doc:open', path)) as OpenResult
@@ -350,6 +358,8 @@ export async function openByPath(path: string, options: OpenOptions = {}): Promi
     if (prevDocId && prevDocId !== result.docId) releaseDocEntry(prevDocId)
     docState.docId = result.docId
     docState.filePath = result.path ?? path
+    docState.sourceKind = result.kind ?? 'pdf'
+    docState.ofdWarnings = result.warnings ?? []
     // 释放上一份文档的 worker 资源(与 reloadDocument 一致),避免反复打开后 worker 侧内存单调增长
     if (docState.pdfDoc) {
       void destroyPdfDocument(docState.pdfDoc)
@@ -514,6 +524,8 @@ export function closeDocument(): void {
   docState.loadError = null
   docState.dirty = false
   docState.pdfAnnotations = []
+  docState.sourceKind = 'pdf'
+  docState.ofdWarnings = []
   // 跨文档状态:搜索命中、批注与历史栈、阅读前进/后退历史、选中集
   invalidateSearch()
   resetAnnotations()

@@ -17,7 +17,9 @@ const BUNDLED_RUNTIME = [
   '@vue/shared',
   'pdfjs-dist',
   'pdf-lib',
-  '@pdf-lib/fontkit'
+  '@pdf-lib/fontkit',
+  // OFD 解析用(node16 无 DOMParser;主进程侧使用,由 electron-vite 打进 out/main)
+  '@xmldom/xmldom'
 ]
 
 /** 个别包的 LICENSE 不在包根(记录其相对路径) */

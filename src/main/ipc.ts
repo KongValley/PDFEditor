@@ -48,6 +48,7 @@ import {
   type ImageToPdfResult
 } from './lib/imagetopdf'
 import { abortPrintJob, addPrintPage, commitPrintJob, preparePrintJob } from './lib/print'
+import { abortOfdExport, addOfdExportPage, commitOfdExport, prepareOfdExport } from './lib/ofdexport'
 import { getRecentPage, listRecentFiles, setRecentPage } from './lib/recent'
 import { isSmokeMode } from './smoke'
 import { extractEditorAnnotations, findCjkFontFile, writeAnnotations } from './lib/pdflibwrite'
@@ -56,6 +57,8 @@ import type {
   ChooseFileResult,
   FormValue,
   LogLevel,
+  OfdExportResult,
+  OfdTextRun,
   PageOp,
   PageOpResult,
   RangeReadResult,
@@ -113,16 +116,26 @@ async function guard<T extends OkResult>(run: () => Promise<T> | T): Promise<T> 
 let currentOpenAbort: AbortController | null = null
 
 export function registerIpc(getWindow: () => BrowserWindow | null): void {
-  ipcMain.handle('app:chooseFile', async (_e, multi: boolean): Promise<ChooseFileResult> => {
-    const options: OpenDialogOptions = {
-      title: '打开 PDF 文件',
-      filters: [{ name: 'PDF 文件', extensions: ['pdf'] }],
-      properties: multi ? ['openFile', 'multiSelections'] : ['openFile']
+  ipcMain.handle(
+    'app:chooseFile',
+    async (_e, payload: { multi?: boolean; allowOfd?: boolean }): Promise<ChooseFileResult> => {
+      // allowOfd 只给主打开入口:合并/拆分选文件只认 PDF(OFD 需先导入转 PDF)
+      const multi = !!payload?.multi
+      const allowOfd = !!payload?.allowOfd
+      const options: OpenDialogOptions = {
+        title: allowOfd ? '打开 PDF / OFD 文件' : '打开 PDF 文件',
+        filters: [
+          allowOfd
+            ? { name: 'PDF / OFD 文件', extensions: ['pdf', 'ofd'] }
+            : { name: 'PDF 文件', extensions: ['pdf'] }
+        ],
+        properties: multi ? ['openFile', 'multiSelections'] : ['openFile']
+      }
+      const win = getWindow()
+      const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
+      return { canceled: result.canceled, paths: result.filePaths }
     }
-    const win = getWindow()
-    const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
-    return { canceled: result.canceled, paths: result.filePaths }
-  })
+  )
 
   ipcMain.handle('doc:open', async (_e, filePath: string) => {
     const win = getWindow()
@@ -131,7 +144,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
     const started = Date.now()
     try {
       const result = await openDocument(filePath, {
-        onProgress: (read, total) => win?.webContents.send('doc:openProgress', { read, total }),
+        onProgress: (read, total, phase) => win?.webContents.send('doc:openProgress', { read, total, phase }),
         signal: controller.signal
       })
       const ms = Date.now() - started
@@ -140,6 +153,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
       } else if (result.ok) {
         logEvent('info', 'open', '打开文件', {
           file: filePath,
+          kind: result.kind ?? 'pdf',
           sizeMB: Math.round((result.fileSize ?? 0) / 1048576),
           pages: result.pageCount,
           mode: result.stream,
@@ -410,6 +424,12 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
           targetPath = result.filePath
         }
 
+        // 兜底守卫:OFD 源文档(已转成 PDF 工作)绝不能原地写回 .ofd —— 那会把用户的源文件
+        // 换成一个扩展名不匹配的 PDF。渲染层已强制走另存为,这里防的是直接传 targetPath 的调用方。
+        if (/\.ofd$/i.test(targetPath)) {
+          return { ok: false, error: 'OFD 文件不能原地保存为 PDF,请另存为 .pdf' }
+        }
+
         await mkdir(dirname(targetPath), { recursive: true })
 
         // D1:明文文档注释只存 PDF /Annots,sidecar 仅保留表单值;加密文档仍走 sidecar 注释
@@ -546,6 +566,76 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   ipcMain.handle('app:printAbort', (_e, payload: { jobId?: string } | undefined) =>
     guard(() => abortPrintJob(String(payload?.jobId ?? '')))
   )
+
+  // ---- PDF → 图片页 OFD 导出:先定目标(保存对话框),再逐页收图,最后打包 ----
+  ipcMain.handle(
+    'ofd:exportPrepare',
+    async (_e, payload: { defaultName: string }): Promise<OfdExportResult> =>
+      guard<OfdExportResult>(async () => {
+        let savedPath: string
+        if (isSmokeMode()) {
+          // 冒烟:保存对话框会挂起渲染层的 executeJavaScript,固定落 tmp 供断言
+          const dir = join(app.getAppPath(), 'tmp')
+          await mkdir(dir, { recursive: true })
+          savedPath = join(dir, 'ofd-export.ofd')
+        } else {
+          const win = getWindow()
+          const options: SaveDialogOptions = {
+            title: '导出 OFD 文件',
+            defaultPath: payload?.defaultName || 'document.ofd',
+            filters: [{ name: 'OFD 文件', extensions: ['ofd'] }]
+          }
+          const result = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options)
+          if (result.canceled || !result.filePath) return { ok: false, canceled: true }
+          savedPath = result.filePath
+        }
+        const jobId = await prepareOfdExport(savedPath)
+        return { ok: true, jobId, savedPath }
+      })
+  )
+
+  ipcMain.handle(
+    'ofd:exportPage',
+    (
+      _e,
+      payload: {
+        jobId: string
+        index: number
+        widthMm: number
+        heightMm: number
+        png: Uint8Array
+        /** 不可见文本层(可检索/可选中);缺省表示该页只有位图 */
+        texts?: OfdTextRun[]
+      }
+    ) =>
+      guard(() =>
+        addOfdExportPage(
+          String(payload?.jobId ?? ''),
+          payload?.index,
+          payload?.widthMm,
+          payload?.heightMm,
+          payload?.png,
+          payload?.texts
+        )
+      )
+  )
+
+  ipcMain.handle('ofd:exportCommit', async (_e, payload: { jobId: string }): Promise<OfdExportResult> => {
+    const started = Date.now()
+    const result = await guard<OfdExportResult>(() => commitOfdExport(String(payload?.jobId ?? '')))
+    logEvent(result.ok ? 'info' : 'error', 'ofd', result.ok ? '导出 OFD' : '导出 OFD 失败', {
+      pages: result.pages,
+      ms: Date.now() - started,
+      ok: result.ok,
+      error: result.ok ? undefined : result.error
+    })
+    return result
+  })
+
+  ipcMain.handle('ofd:exportAbort', (_e, payload: { jobId?: string } | undefined) => {
+    abortOfdExport(String(payload?.jobId ?? ''))
+    return { ok: true }
+  })
 
   // 渲染层的日志经此落盘(主进程是唯一落盘方,见 lib/logger.ts)
   ipcMain.handle(

@@ -4,7 +4,7 @@ import { docReady } from '../store/document'
 import { setTool, ui, type Tool } from '../store/ui'
 import { canRedo, canUndo, removeSelected, redo, undo } from '../store/annotations'
 import { rotateView } from '../store/viewer'
-import { exportCurrentPageImage, openFileDialog, openImageToPdfDialog, printPagesDialog, saveDocument, saveDocumentAs } from '../lib/actions'
+import { exportCurrentPageImage, openFileDialog, openImageToPdfDialog, openOfdExportDialog, printPagesDialog, saveDocument, saveDocumentAs } from '../lib/actions'
 import { STAMPS, STAMP_KEYS } from '../lib/annots'
 
 const TOOLS: Array<{ tool: Tool; label: string; title: string }> = [
@@ -35,6 +35,9 @@ const busy = computed(() => ui.busy !== null)
       <button :disabled="!hasDoc || busy" title="保存 PDF (Ctrl+S)" @click="saveDocument">保存</button>
       <button :disabled="!hasDoc || busy" title="另存为 (Ctrl+Shift+S)" @click="saveDocumentAs">另存为</button>
       <button :disabled="!hasDoc || busy" title="导出当前页为 PNG (Ctrl+E)" @click="exportCurrentPageImage">导出图片</button>
+      <button :disabled="!hasDoc || busy" title="导出为 OFD(图片页,可检索文本不保留)" @click="openOfdExportDialog">
+        导出 OFD
+      </button>
       <button :disabled="!hasDoc || busy" title="打印 (Ctrl+P)" @click="printPagesDialog">打印</button>
 
       <span class="divider"></span>

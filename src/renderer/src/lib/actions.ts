@@ -4,6 +4,8 @@ import type {
   ChooseFileResult,
   ImageAnnotation,
   ImageInfo,
+  OfdExportResult,
+  OfdTextRun,
   PageOp,
   PageOpResult,
   SaveResult,
@@ -52,7 +54,7 @@ import { loadOutline } from './outline'
 import { parsePageRange } from '@shared/text'
 import { planPageOrientation, type OrientationPlanItem } from './orientation'
 import { cancelOrientationPlan, requestOrientationPlan, submitOrientationPlan } from '../store/ui'
-import { imagePdfDialogState, requestImagePdf, type ImagePdfItem } from '../store/ui'
+import { imagePdfDialogState, ofdExportDialogState, requestImagePdf, requestOfdExport, type ImagePdfItem, type OfdDpi } from '../store/ui'
 import { invalidateSearch } from '../store/search'
 import { beginOpen, endOpen, maybeRestoreLastPage } from '../store/reading'
 import { orientationFlipped, refitAfterOrientationChange, scrollToPage } from '../store/viewer'
@@ -60,7 +62,7 @@ import { getPageViewport, pdfjs } from './pdfjs'
 import { paintAnnotations } from './canvasannot'
 // 图片导出/打印的渲染管线已拆到 pagexport(见 D4);这里再导出维持既有 import 面
 export { exportPagesAsImages, printPages, renderPrintPageDataUrl, resolvePrintScale } from './pagexport'
-import { printPages } from './pagexport'
+import { printPages, renderPageToCanvas, resolveOfdScale } from './pagexport'
 
 /** 从 PDF /Annots 提取(优先)或 sidecar(旧文件兜底)恢复注释与图片缓存 */
 async function restoreSidecar(): Promise<void> {
@@ -122,6 +124,14 @@ export async function openPath(path: string): Promise<void> {
     await restoreSidecar()
     if (token !== currentOpenToken()) return
     await maybeRestoreLastPage(docState.filePath ?? path)
+    // OFD 源提示放在最后:恢复阅读位置也会 toast 一条,而「保存必须另存为 .pdf」更该被看见
+    if (docState.sourceKind === 'ofd') {
+      showToast('已把 OFD 转换为 PDF(保存时请另存为 .pdf)')
+      if (docState.ofdWarnings.length > 0) {
+        pushProblem({ title: 'OFD 转换提示', detail: docState.ofdWarnings.join('\n') })
+        showToast(`OFD 转换完成,有 ${docState.ofdWarnings.length} 条提示`)
+      }
+    }
   } finally {
     if (currentOpenToken() === seqBefore + 1) endOpen()
   }
@@ -132,9 +142,9 @@ export function confirmDiscardChanges(): boolean {
   return !docState.dirty || window.confirm('当前文档有未保存的更改,确定放弃吗?')
 }
 
-/** 保存:直写当前路径(无路径时回退保存对话框) */
+/** 保存:直写当前路径(无路径时回退保存对话框);OFD 源文档永不原地写回,一律走另存为 */
 export async function saveDocument(): Promise<void> {
-  await saveTo(docState.filePath ?? undefined)
+  await saveTo(docState.sourceKind === 'ofd' ? undefined : (docState.filePath ?? undefined))
 }
 
 /** 另存为:总是弹保存对话框 */
@@ -161,7 +171,8 @@ async function saveTo(targetPath: string | undefined): Promise<void> {
     const version = editVersion()
     const result = (await window.pdfAPI.invoke('save:saveAs', {
       docId,
-      defaultPath: docState.filePath ?? 'document.pdf',
+      // OFD 源:默认名换成同名 .pdf,绝不把 .ofd 交给保存对话框(否则会覆盖源文件)
+      defaultPath: docState.sourceKind === 'ofd' ? `${fileStem()}.pdf` : (docState.filePath ?? 'document.pdf'),
       targetPath,
       annotations: exportAnnotations(),
       formValues: { ...docState.formValues }
@@ -185,6 +196,8 @@ async function saveTo(targetPath: string | undefined): Promise<void> {
       return
     }
     if (result.savedPath) docState.filePath = result.savedPath
+    // 已落盘为 .pdf:此后就是普通 PDF 文档,再按 Ctrl+S 直接就地保存
+    if (result.savedPath) docState.sourceKind = 'pdf'
     // 保存期间又有编辑 → 保持脏标记(否则编辑被静默标记为已保存)
     // savedPath 缺失(加密文档另存为:只写了新路径旁的孤立 sidecar,当前文档并未落盘)→ 不能清脏
     if (result.savedPath && editVersion() === version) docState.dirty = false
@@ -266,6 +279,166 @@ export async function openImageToPdfDialog(seed: string[] = []): Promise<void> {
   requestImagePdf(items)
 }
 
+/** 导出 OFD:打开对话框(页码范围 / 清晰度 / 是否含批注由对话框收集) */
+export function openOfdExportDialog(): void {
+  requestOfdExport()
+}
+
+/** 字体族名只作资源声明(文本不可见):取家族列表首项并限长 */
+function normalizeFamily(family: string): string {
+  const first = family.split(',')[0]?.replace(/["']/g, '').trim() ?? ''
+  return first ? first.slice(0, 120) : 'sans-serif'
+}
+
+/**
+ * 一页的文字段:只保留「输出方向为水平」的文字,旋转/斜切段跳过(位图里仍在),换算成毫米。
+ *
+ * 必须把 item.transform 过一遍 scale=1 的 viewport 变换:位图是按 viewport(含页面 /Rotate)渲染的,
+ * 直接用 PDF 用户空间坐标会让带 /Rotate 的页面文字层整体转 90°/180°,选择框与图上文字对不上。
+ *
+ * 返回 null 表示渲染层取不到文字(调用方按「该页只有位图」继续,不让导出失败)。
+ */
+async function textRunsOf(pageNumber: number): Promise<{ runs: OfdTextRun[]; skipped: number } | null> {
+  try {
+    const page = await getPage(pageNumber)
+    const viewport = getPageViewport(page, 1, 0).viewport
+    const content = await page.getTextContent()
+    const runs: OfdTextRun[] = []
+    let skipped = 0
+    for (const raw of content.items) {
+      const item = raw as { str?: string; transform?: number[]; width?: number; fontName?: string }
+      const text = typeof item.str === 'string' ? item.str : ''
+      if (!text.trim()) continue
+      if (!Array.isArray(item.transform) || item.transform.length < 6) continue
+      // viewport 坐标系:原点左上、y 向下,scale=1 时单位即 pt(与位图同向)
+      const t = pdfjs.Util.transform(viewport.transform, item.transform)
+      const scaleX = Math.hypot(t[0], t[1])
+      const scaleY = Math.hypot(t[2], t[3])
+      if (scaleX <= 0 || scaleY <= 0) continue
+      // 水平 = 字型的 x 轴没有 y 分量、y 轴没有 x 分量、且向右推进。
+      // 注意 t[3] 在 viewport(y 向下)下本来就是负数(坐标系翻转,不是倒置),不能要求它为正。
+      const horizontal = Math.abs(t[1]) < 1e-3 * scaleX && Math.abs(t[2]) < 1e-3 * scaleY && t[0] > 0
+      if (!horizontal) {
+        skipped++
+        continue
+      }
+      const sizeMm = (scaleY * 25.4) / 72
+      const style = item.fontName ? content.styles?.[item.fontName] : undefined
+      const ascent = typeof style?.ascent === 'number' && Number.isFinite(style.ascent) ? style.ascent : 0.8
+      runs.push({
+        text,
+        xMm: (t[4] * 25.4) / 72,
+        baselineMm: (t[5] * 25.4) / 72,
+        sizeMm,
+        widthMm: Math.max(((item.width ?? 0) * 25.4) / 72, sizeMm * 0.1),
+        // 含中文的段用中文字体族名:换行字体时中文字符才不会被替代字体丢掉(文本不可见,只影响可提取性)
+        family: /[\u3400-\u9fff]/.test(text) ? 'SimSun' : normalizeFamily(style?.fontFamily ?? 'sans-serif'),
+        ascent: Math.min(1.2, Math.max(0.5, ascent))
+      })
+    }
+    return { runs, skipped }
+  } catch (err) {
+    logEvent('warn', 'ofd', '文本层提取失败,该页只有位图', { page: pageNumber, error: (err as Error).message })
+    return null
+  }
+}
+
+/**
+ * 执行 OFD 导出:逐页渲染成 PNG 交主进程,并按需叠加不可见文本层,最后打包成 .ofd。
+ * 每页渲染完立即经 IPC 传字节(结构化克隆,不走 base64),内存峰值只占一页位图。
+ */
+export async function exportOfd(options: {
+  pages: number[]
+  dpi: OfdDpi
+  includeAnnotations: boolean
+  /** 叠加不可见文本层(可检索/可选中);缺省 true */
+  textLayer?: boolean
+}): Promise<void> {
+  const docId = docState.docId
+  if (!docState.pdfDoc || !docId || options.pages.length === 0) {
+    showToast('请先打开 PDF 文件', 'error')
+    return
+  }
+  commitOpenEditor()
+  const scale = resolveOfdScale(options.dpi)
+  const total = options.pages.length
+  await runBusy('正在导出 OFD…', async () => {
+    ofdExportDialogState.done = 0
+    ofdExportDialogState.total = total
+    let jobId = ''
+    try {
+      const prepared = (await window.pdfAPI.invoke('ofd:exportPrepare', {
+        defaultName: `${fileStem()}-导出.ofd`
+      })) as OfdExportResult
+      if (prepared.canceled) return
+      if (!prepared.ok || !prepared.jobId) {
+        showToast(prepared.error ?? '导出 OFD 失败', 'error')
+        return
+      }
+      jobId = prepared.jobId
+      const withText = options.textLayer !== false
+      let skippedPages = 0
+      let skippedRuns = 0
+      for (let i = 0; i < total; i++) {
+        ofdExportDialogState.progress = `正在渲染第 ${i + 1}/${total} 页`
+        // rotation=0:产物跟随文档自身的 /Rotate,不把临时视图旋转烘进 OFD(否则文字层无法对应)
+        const canvas = await renderPageToCanvas(options.pages[i] + 1, options.includeAnnotations, scale, 0)
+        if (!canvas) throw new Error(`第 ${options.pages[i] + 1} 页渲染失败`)
+        const png = await new Promise<Uint8Array>((resolve, reject) => {
+          canvas.toBlob((blob) => {
+            if (!blob) {
+              reject(new Error('画布导出失败'))
+              return
+            }
+            void blob.arrayBuffer().then((buffer) => resolve(new Uint8Array(buffer)), reject)
+          }, 'image/png')
+        })
+        const extracted = withText ? await textRunsOf(options.pages[i] + 1) : { runs: [], skipped: 0 }
+        if (extracted === null) skippedPages++
+        else skippedRuns += extracted.skipped
+        // 毫米尺寸由画布像素反推:与页面 /Rotate 保持一致,不依赖 pageBoxes
+        const page = (await window.pdfAPI.invoke('ofd:exportPage', {
+          jobId,
+          index: i,
+          widthMm: (canvas.width / scale / 72) * 25.4,
+          heightMm: (canvas.height / scale / 72) * 25.4,
+          png,
+          texts: extracted?.runs.length ? extracted.runs : undefined
+        })) as { ok: boolean; error?: string }
+        if (!page.ok) throw new Error(page.error ?? '页面写入失败')
+        ofdExportDialogState.done = i + 1
+      }
+      const committed = (await window.pdfAPI.invoke('ofd:exportCommit', { jobId })) as OfdExportResult
+      jobId = ''
+      if (!committed.ok) {
+        showToast(committed.error ?? '导出 OFD 失败', 'error')
+        return
+      }
+      showToast(`已导出 OFD:${committed.savedPath ?? ''}`)
+      if (skippedPages > 0 || skippedRuns > 0) {
+        const parts: string[] = []
+        if (skippedRuns > 0) parts.push(`${skippedRuns} 段旋转/斜排文字未生成文本层`)
+        if (skippedPages > 0) parts.push(`${skippedPages} 页文字提取失败`)
+        pushProblem({
+          title: '部分内容未生成文本层',
+          detail: `${parts.join(';')}。位图完整,查看/打印不受影响;这些内容不可检索。`
+        })
+        showToast(`导出完成:${parts.join(',')}`)
+      }
+    } catch (err) {
+      if (jobId) void window.pdfAPI.invoke('ofd:exportAbort', { jobId })
+      const message = err instanceof Error ? err.message : String(err)
+      showToast(`导出 OFD 失败:${message}`, 'error')
+      // 重试闭包冻结文档身份:失败后切到别的文档再点「重试」不能把新文档写进旧产物
+      const owner = docId
+      pushProblem({
+        title: '导出 OFD 失败',
+        detail: message,
+        retry: () => (docState.docId === owner ? exportOfd(options) : Promise.resolve())
+      })
+    }
+  })
+}
 /** 对话框「+ 添加图片」:系统多选框,返回按选择顺序的图片信息 */
 export async function pickImageFiles(): Promise<ImagePdfItem[]> {
   const result = (await window.pdfAPI.invoke('img:chooseMany')) as
@@ -349,7 +522,7 @@ export async function convertImagesToPdf(items: ImagePdfItem[]): Promise<void> {
 }
 
 export async function openFileDialog(): Promise<void> {
-  const result = (await window.pdfAPI.invoke('app:chooseFile', false)) as ChooseFileResult
+  const result = (await window.pdfAPI.invoke('app:chooseFile', { multi: false, allowOfd: true })) as ChooseFileResult
   if (result.canceled || result.paths.length === 0) return
   if (!confirmDiscardChanges()) return
   await openPath(result.paths[0])
@@ -619,7 +792,8 @@ export async function movePage(fromIndex: number, toIndex: number): Promise<void
 
 /** 对话框「+ 添加文件」:选 PDF、去重、读页数;返回可加入列表的条目 */
 export async function pickPdfFileEntries(existingPaths: string[]): Promise<PdfFileEntry[]> {
-  const result = (await window.pdfAPI.invoke('app:chooseFile', true)) as ChooseFileResult
+  // 合并/拆分只接受 PDF:OFD 需先导入转 PDF,不在这里隐式转换
+  const result = (await window.pdfAPI.invoke('app:chooseFile', { multi: true })) as ChooseFileResult
   if (result.canceled || result.paths.length === 0) return []
   const fresh = result.paths.filter((path) => !existingPaths.includes(path))
   if (fresh.length === 0) return []
