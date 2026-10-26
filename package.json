@@ -74,5 +74,8 @@
       ],
       "icon": "resources/icon.png"
     }
+  },
+  "allowScripts": {
+    "electron@22.3.27": true
   }
 }

@@ -55,13 +55,13 @@ jobs:
       # 应用默认关闭硬件加速(软件光栅),CI 无 GPU 也能跑。
       # continue-on-error:端到端层里有若干依赖渲染时序/窗口尺寸的断言,在 GitHub 的
       # windows runner(软件光栅 + 窗口被裁到较小尺寸)上会红;端到端以本地 npm run smoke 为准。
-      # 这里仍会跑完整 31 步并上传每步结果,便于对照;上面四步是确定性硬门禁。
-      - name: 端到端冒烟(31 步,失败不阻断)
+      # 这里仍会跑完整套步骤并上传每步结果,便于对照;上面的类型检查/单测/build/兼容性是确定性硬门禁。
+      - name: 端到端冒烟(全部步骤,失败不阻断)
         timeout-minutes: 30
         continue-on-error: true
         run: npm run smoke
 
-      # 失败时把每步的结果 JSON 与进程输出都传上来,否则只能看到「31 项失败」而定位不到是哪一步
+      # 失败时把每步的结果 JSON 与进程输出都传上来,否则只能看到「N 项失败」而定位不到是哪一步
       - name: 上传冒烟结果
         if: always()
         uses: actions/upload-artifact@v4
