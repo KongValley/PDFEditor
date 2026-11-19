@@ -95,6 +95,8 @@ export interface TextAnnotation extends AnnotationBase {
   kind: 'text'
   text: string
   fontSize: number
+  /** 字体族名(本机已安装字体;缺省 = 内置默认中文字体) */
+  fontFamily?: string
   /** 用户创建该注释时的显示旋转角(顺时针,0/90/180/270);保存时作为文字旋转角 */
   rotate: number
 }
@@ -116,6 +118,8 @@ export interface StampAnnotation extends AnnotationBase {
   stampKey: StampKey
   label: string
   fontSize: number
+  /** 字体族名(本机已安装字体;缺省 = 内置默认中文字体) */
+  fontFamily?: string
   rotate: number
 }
 
@@ -383,6 +387,14 @@ export interface ImageInfo {
 export interface ChooseFileResult {
   canceled: boolean
   paths: string[]
+}
+
+/** 系统字体下拉项(只含展示/存储需要的字段;磁盘路径不离开主进程) */
+export interface SystemFontInfo {
+  /** 规范字体族名(保存进注释,也是 CSS font-family 用名) */
+  family: string
+  /** 本地化显示名(通常是中文,如「微软雅黑」);没有本地化名时与 family 相同 */
+  label: string
 }
 
 export interface OutlineNode {

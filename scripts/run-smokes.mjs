@@ -43,7 +43,8 @@ const allScripts = [
   'step29-error-paths.js',
   'step30-full-flow.js',
   'step31-relaunch.js',
-  'step32-ofd.js'
+  'step32-ofd.js',
+  'step33-fonts.js'
 ]
 
 // --only=step30-full-flow,step31-relaunch:只跑指定步骤(名字不带 .js),用于全流程回归。
@@ -164,7 +165,8 @@ const STEP_TIMEOUTS = {
   'step28-user-actions.js': '180000',
   'step29-error-paths.js': '180000',
   'step30-full-flow.js': '240000',
-  'step31-relaunch.js': '120000'
+  'step31-relaunch.js': '120000',
+  'step33-fonts.js': '120000'
 }
 
 // 跨进程全流程:step31 复用 step30 的 profile(最近文件、阅读位置、日志)
@@ -175,7 +177,8 @@ const STEP_USERDATA = {
 // 关键步骤落一张终态截图,供人工确认布局/toast/空白页(不参与断言)
 const STEP_SHOTS = {
   'step30-full-flow.js': join(tmpDir, 'smoke-step30-full-flow.png'),
-  'step31-relaunch.js': join(tmpDir, 'smoke-step31-relaunch.png')
+  'step31-relaunch.js': join(tmpDir, 'smoke-step31-relaunch.png'),
+  'step33-fonts.js': join(tmpDir, 'smoke-step33-fonts.png')
 }
 
 // 按步注入的环境变量:只有这两步需要(原生对话框替身 / 强制走「缺中文字体」路径)
@@ -187,7 +190,10 @@ const STEP_ENV = {
   'step30-full-flow.js': {
     PDF_EDITOR_SMOKE_DIALOG_DIR: e2eDialogDir,
     PDF_EDITOR_SMOKE_OPEN_FILE: 'open-me.pdf'
-  }
+  },
+  // CI runner 的思源黑体只下载到 tmp/(未安装进系统字体目录):让字体枚举把它也列出来,
+  // 确保「自选字体保存」在 CI 上走真实的中文字体
+  'step33-fonts.js': { PDF_EDITOR_EXTRA_FONT_DIRS: tmpDir }
 }
 
 // step30 必须从干净 profile 起步(最近文件为空);step31 随后复用它的 profile

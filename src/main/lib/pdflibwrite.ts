@@ -28,10 +28,12 @@ import {
 import fontkit from '@pdf-lib/fontkit'
 import type { Annotation, FormValue, Rect } from '@shared/types'
 import { fitFontSize, pointsToMm, textBlockFrame, textLocalToPdf, wrapText } from '@shared/text'
+import { findSystemFont, readSystemFontBytes } from './fonts'
 
 /**
- * 可嵌入的中文字体。**只列 TTF**:pdf-lib 无法直接嵌入 TTC 集合(Win8+ 的微软雅黑是 msyh.ttc)。
- * Win7 的雅黑是单文件 msyh.ttf,Win10 必然带 simhei.ttf,因此不必为 TTC 引入解包复杂度。
+ * 默认中文字体候选。**只列 TTF**:默认字体直接整份嵌入,pdf-lib 无法直接嵌入 TTC 集合
+ * (Win8+ 的微软雅黑是 msyh.ttc)。用户自选的字体(可能是 TTC)走 fonts.ts 的抽取逻辑,
+ * 与这里的默认字体互不影响。
  */
 const CJK_FONT_CANDIDATES = [
   'C:/Windows/Fonts/simhei.ttf',
@@ -55,7 +57,10 @@ export interface WriteOptions {
 
 /** 批注外观绘制上下文(字体 + 图片解析 + 警告收集) */
 export interface AnnotWriteContext {
+  /** 默认字体(内置中文字体;缺失时 Helvetica) */
   font: PDFFont
+  /** 按批注指定的系统字体取字体;未指定/找不到/字符不全时返回默认字体并记警告 */
+  resolveFont: (family: string | undefined, text: string) => Promise<PDFFont>
   resolveImage: (imgId: string, refPath: string) => Promise<Buffer | undefined>
   warnings: string[]
   /** 已嵌入图片(键 = imgId||refPath):同一图片在多页出现时只 embed 一次,
@@ -208,6 +213,44 @@ async function embedCjkFont(doc: PDFDocument, warnings: string[]): Promise<PDFFo
   }
 }
 
+/** 系统字体嵌入缓存(同一份产物里同一字族只嵌入一次) */
+interface CustomFontEntry {
+  bytes: Buffer | null
+  /** fontkit 字体对象:只用于「字符是否都有字形」检查 */
+  kit: ReturnType<typeof fontkit.create> | null
+  font: PDFFont | null
+  /** 字体不存在/损坏/无法嵌入:后续注释直接走默认字体,不重复尝试 */
+  failed: boolean
+}
+
+/** 第一个可见字符(用于给字体子集写入至少一个真字形) */
+function firstVisibleChar(text: string): string | undefined {
+  for (const char of text) {
+    const code = char.codePointAt(0)
+    if (code === undefined) continue
+    if (code < 0x20 || code === 0x7f || (code >= 0x200b && code <= 0x200f) || code === 0xfeff) continue
+    return char
+  }
+  return undefined
+}
+
+/** 文本里的可见字符是否都能在该字体里找到字形 */
+function fontCoversText(font: ReturnType<typeof fontkit.create>, text: string): boolean {
+  for (const char of text) {
+    const code = char.codePointAt(0)
+    if (code === undefined) continue
+    // 空白/控制符/零宽字符不参与覆盖判定
+    if (code < 0x20 || code === 0x7f || (code >= 0x200b && code <= 0x200f) || code === 0xfeff) continue
+    if (!font.hasGlyphForCodePoint(code)) return false
+  }
+  return true
+}
+
+function sameFontFile(a: string, b: string): boolean {
+  const normalize = (value: string): string => value.replace(/\\/g, '/').toLowerCase()
+  return normalize(a) === normalize(b)
+}
+
 /** 准备批注外观绘制上下文:嵌入中文字体(失败退 Helvetica);skipCjkFont=true 时只嵌 Helvetica(图形批注够用) */
 export async function createAnnotContext(
   doc: PDFDocument,
@@ -218,7 +261,76 @@ export async function createAnnotContext(
   doc.registerFontkit(fontkit)
   const cjkFont = options.skipCjkFont ? null : await embedCjkFont(doc, warnings)
   const font = cjkFont ?? (await doc.embedFont(StandardFonts.Helvetica))
-  return { ctx: { font, resolveImage, warnings, images: new Map(), missingImages: new Set() }, cjkFont }
+
+  // 用户给注释选的系统字体:按字族懒加载 + 缓存。找不到/字符不全时退回默认字体,
+  // 只记一条可读警告(保存不失败,注释内容也不会丢)。
+  const defaultFontPath = cjkFont ? findCjkFontFile() : null
+  const customFonts = new Map<string, CustomFontEntry>()
+  const warned = new Set<string>()
+  const warnOnce = (message: string): void => {
+    if (warned.has(message)) return
+    warned.add(message)
+    warnings.push(message)
+  }
+
+  const resolveFont = async (family: string | undefined, text: string): Promise<PDFFont> => {
+    const name = family?.trim() ?? ''
+    // 纯空白文本不需要任何字形;避免为一个空标签白白嵌入字体
+    if (name === '' || text.trim() === '') return font
+
+    const key = name.toLowerCase()
+    let entry = customFonts.get(key)
+    if (!entry) {
+      entry = { bytes: null, kit: null, font: null, failed: false }
+      try {
+        const face = await findSystemFont(name)
+        if (!face) {
+          entry.failed = true
+          warnOnce(`未找到字体「${name}」,相关注释已改用默认字体`)
+        } else if (cjkFont && defaultFontPath && face.index === 0 && sameFontFile(face.file, defaultFontPath)) {
+          // 用户选的正是内置默认中文字体:复用已嵌入的字体,不再嵌第二份
+          entry.font = cjkFont
+        } else {
+          const bytes = await readSystemFontBytes(face)
+          entry.bytes = bytes
+          entry.kit = fontkit.create(bytes)
+        }
+      } catch (err) {
+        entry.failed = true
+        warnOnce(`字体「${name}」加载失败,相关注释已改用默认字体:${(err as Error).message}`)
+      }
+      customFonts.set(key, entry)
+    }
+    if (entry.failed) return font
+
+    // 先查字符覆盖再嵌入:若首条注释就是「Arial + 中文」,嵌入后才会发现缺字形,
+    // 这会留下一份只有 .notdef 的 CFF 子集(fontkit 在 save() 里可能直接卡死)
+    if (entry.kit && !fontCoversText(entry.kit, text)) {
+      warnOnce(`字体「${name}」缺少内容中的字符,该注释已改用默认字体`)
+      return font
+    }
+
+    if (!entry.font) {
+      if (!entry.bytes || !entry.kit) return font
+      try {
+        const custom = await doc.embedFont(entry.bytes, { subset: true })
+        // 与默认字体一致:子集里至少写入一个真字形,避免零字形 CFF 子集在 save() 里卡死
+        await custom.encodeText(firstVisibleChar(text) ?? ' ')
+        entry.font = custom
+      } catch (err) {
+        entry.failed = true
+        warnOnce(`字体「${name}」嵌入失败,相关注释已改用默认字体:${(err as Error).message}`)
+        return font
+      }
+    }
+
+    return entry.font
+  }
+
+  return {
+    ctx: { font, resolveFont, resolveImage, warnings, images: new Map(), missingImages: new Set() },
+    cjkFont
+  }
 }
 
 /**
@@ -417,9 +529,11 @@ async function drawAnnotation(
       })
       return
     }
-    case 'text':
-      drawTextBlock(page, box, ann.text, ann.fontSize, ctx.font, color, ann.opacity, ann.rotate)
+    case 'text': {
+      const textFont = await ctx.resolveFont(ann.fontFamily, ann.text)
+      drawTextBlock(page, box, ann.text, ann.fontSize, textFont, color, ann.opacity, ann.rotate)
       return
+    }
     case 'note': {
       page.drawRectangle({
         x: box.x,
@@ -459,7 +573,7 @@ async function drawAnnotation(
       return
     }
     case 'stamp':
-      drawStamp(page, ann, ctx.font)
+      drawStamp(page, ann, await ctx.resolveFont(ann.fontFamily, ann.label))
       return
   }
 }
@@ -790,6 +904,10 @@ function isSaneAnnotation(input: unknown): input is Annotation {
   }
   // 路径:refPath 来自不可信文件,限制长度(实际能否读盘另由 images.ts 的授权集合把关)
   if (a.refPath !== undefined && (typeof a.refPath !== 'string' || a.refPath.length > MAX_PATH_LEN)) {
+    return false
+  }
+  // 字体族名:只用作系统字体查找键;限制长度,避免恶意超长字符串拖慢列表匹配
+  if (a.fontFamily !== undefined && (typeof a.fontFamily !== 'string' || a.fontFamily.length > 200)) {
     return false
   }
 

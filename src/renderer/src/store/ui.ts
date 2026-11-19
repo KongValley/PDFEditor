@@ -34,6 +34,8 @@ export interface PageMenuState {
 interface UiState {
   tool: Tool
   stampKey: StampKey
+  /** 新建文字/图章注释使用的字体族名;'' = 默认字体。在属性面板改字体时同步到这里 */
+  fontFamily: string
   searchOpen: boolean
   aboutOpen: boolean
   sideTab: 'annotations' | 'outline'
@@ -80,6 +82,7 @@ export function clearProblems(): void {
 export const ui = reactive<UiState>({
   tool: 'select',
   stampKey: 'approved',
+  fontFamily: '',
   searchOpen: false,
   aboutOpen: false,
   sideTab: 'annotations',

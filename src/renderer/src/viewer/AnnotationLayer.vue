@@ -17,6 +17,7 @@ import {
 } from '../store/annotations'
 import { registerEditorCommit, setTool, showToast, ui } from '../store/ui'
 import { STAMPS, TOOL_DEFAULTS, textPatch, withIdentity } from '../lib/annots'
+import { fontCss } from '../store/fonts'
 
 const props = defineProps<{
   pageNumber: number
@@ -208,7 +209,7 @@ async function onLayerPointerUp(event: PointerEvent): Promise<void> {
     }
     const ann = withIdentity(
       isText
-        ? { kind: 'text', fontSize: style.fontSize, rotate: displayRotation(), ...common }
+        ? { kind: 'text', fontSize: style.fontSize, fontFamily: ui.fontFamily || undefined, rotate: displayRotation(), ...common }
         : { kind: 'note', ...common }
     )
     addAnnotation(ann)
@@ -233,6 +234,7 @@ async function onLayerPointerUp(event: PointerEvent): Promise<void> {
         stampKey: ui.stampKey,
         label: preset.label,
         fontSize: style.fontSize,
+        fontFamily: ui.fontFamily || undefined,
         rotate: displayRotation()
       })
     )
@@ -517,6 +519,14 @@ const editorStyle = computed(() => {
   }
 })
 
+/** 输入框与最终文字注释使用同一字体,避免「编辑时一种、放下后另一种」 */
+const editorFontStyle = computed(() => {
+  const id = editingId.value
+  if (!id) return {}
+  const ann = annotState.items.find((a) => a.id === id)
+  return { fontFamily: fontCss(ann && ann.kind === 'text' ? ann.fontFamily : undefined) }
+})
+
 /* ------------------------------ 预览/选中 ------------------------------ */
 
 const previewRect = computed(() => {
@@ -716,6 +726,7 @@ onBeforeUnmount(() => {
     <textarea
       v-model="editorText"
       class="ann-editor-input"
+      :style="editorFontStyle"
       :placeholder="selected && selected.kind === 'note' ? '便签内容' : '输入文字'"
       autofocus
       @keydown.ctrl.enter.prevent="commitEditor"

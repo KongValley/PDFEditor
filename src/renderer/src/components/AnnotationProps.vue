@@ -15,8 +15,13 @@ import {
   updateAnnotation
 } from '../store/annotations'
 import { KIND_LABEL, PALETTE, STAMPS, textPatch } from '../lib/annots'
+import FontSelect from './FontSelect.vue'
+import { ui } from '../store/ui'
 
 const ann = computed(() => selectedAnnotation())
+
+/** 文字/图章可单独选字体(便签不落页面文字,测量标签沿用默认字体) */
+const canPickFont = computed(() => ann.value?.kind === 'text' || ann.value?.kind === 'stamp')
 
 /** 层级按钮可用性(按同页邻居判定) */
 const zorder = computed(() => {
@@ -38,6 +43,12 @@ const fontSize = computed(() => {
   const a = ann.value
   if (!a) return 0
   return a.kind === 'text' || a.kind === 'stamp' ? a.fontSize : 0
+})
+
+const fontFamily = computed(() => {
+  const a = ann.value
+  if (!a || (a.kind !== 'text' && a.kind !== 'stamp')) return ''
+  return a.fontFamily ?? ''
 })
 
 const text = computed(() => {
@@ -79,6 +90,14 @@ function onThickness(event: Event): void {
 
 function onFontSize(event: Event): void {
   patchLive({ fontSize: Number((event.target as HTMLInputElement).value) } as Partial<Annotation>)
+}
+
+function onFontFamily(value: string): void {
+  const current = ann.value
+  if (!current) return
+  patch({ fontFamily: value || undefined } as Partial<Annotation>)
+  // 记住本次选择:之后新建的文字/图章注释沿用同一字体
+  ui.fontFamily = value
 }
 
 function onText(event: Event): void {
@@ -125,6 +144,11 @@ function onText(event: Event): void {
       <span class="label">字号</span>
       <input type="range" min="8" max="72" step="1" :value="fontSize" @input="onFontSize" @change="commitLive" />
       <span class="value">{{ fontSize }}</span>
+    </div>
+
+    <div v-if="canPickFont" class="row">
+      <span class="label">字体</span>
+      <FontSelect :model-value="fontFamily" title="注释字体(本机已安装字体)" @update:model-value="onFontFamily" />
     </div>
 
     <div v-if="text || ann.kind === 'text' || ann.kind === 'note'" class="row column">

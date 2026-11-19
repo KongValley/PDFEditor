@@ -6,6 +6,7 @@
 import type { PageViewport } from './pdfjs'
 import type { Annotation } from '@shared/types'
 import { pdfPointToScreen, pdfRectToScreen } from './geo'
+import { fontCss } from '../store/fonts'
 import { fitFontSize, pointsToMm, textBlockFrame, textLocalToPdf, wrapText } from '@shared/text'
 
 /** dataUrl → 已解码图片(未加载完成时先跳过,下次导出即命中)。
@@ -39,16 +40,14 @@ function hexToRgba(hex: string, alpha: number): string {
   return `rgba(${(int >> 16) & 255}, ${(int >> 8) & 255}, ${int & 255}, ${alpha})`
 }
 
-const FONT_FAMILY = 'SimHei, "Microsoft YaHei", sans-serif'
-
 /** 上次写入的字体串:wrapText 逐字符 measure 时不必重复重设字体状态 */
 let lastFont = ''
 
-/** CJK 文本测宽(SimHei 优先):overlay 与位图绘制共用模块级 canvas,字体状态经 lastFont 记忆 */
-export function measureCjkText(text: string, size: number): number {
+/** CJK 文本测宽(未指定字体时用内置中文字体栈):overlay 与位图绘制共用模块级 canvas */
+export function measureCjkText(text: string, size: number, family?: string): number {
   const probe = measureTextCtx ?? (measureTextCtx = document.createElement('canvas').getContext('2d'))
   if (!probe) return text.length * size
-  const font = `${size}px ${FONT_FAMILY}`
+  const font = `${size}px ${fontCss(family)}`
   if (font !== lastFont) {
     probe.font = font
     lastFont = font
@@ -148,7 +147,7 @@ export function paintAnnotations(
           ctx.fill()
         }
         const lengthPt = Math.hypot(ann.to.x - ann.from.x, ann.to.y - ann.from.y)
-        ctx.font = `${12 * scale}px ${FONT_FAMILY}`
+        ctx.font = `${12 * scale}px ${fontCss(undefined)}`
         ctx.textAlign = 'center'
         ctx.fillText(`${pointsToMm(lengthPt).toFixed(1)} mm`, (from.x + to.x) / 2, (from.y + to.y) / 2 - 6)
         break
@@ -156,9 +155,11 @@ export function paintAnnotations(
       case 'text': {
         ctx.globalAlpha = ann.opacity
         ctx.fillStyle = ann.color
-        ctx.font = `${ann.fontSize * scale}px ${FONT_FAMILY}`
+        ctx.font = `${ann.fontSize * scale}px ${fontCss(ann.fontFamily)}`
         const frame = textBlockFrame(ann.bbox, ann.rotate)
-        const lines = wrapText(ann.text, Math.max(frame.run, 8), (s) => measureCjkText(s, ann.fontSize))
+        const lines = wrapText(ann.text, Math.max(frame.run, 8), (s) =>
+          measureCjkText(s, ann.fontSize, ann.fontFamily)
+        )
         const angle = (((viewport.rotation - ann.rotate) % 360) + 360) % 360
         lines.forEach((line, index) => {
           const baseline = pdfPointToScreen(
@@ -204,7 +205,7 @@ export function paintAnnotations(
       }
       case 'stamp': {
         const frame = textBlockFrame(ann.bbox, ann.rotate)
-        const fontSize = fitFontSize(ann.label, { w: frame.run, h: frame.stack }, (s, size) => measureCjkText(s, size)) * scale
+        const fontSize = fitFontSize(ann.label, { w: frame.run, h: frame.stack }, (s, size) => measureCjkText(s, size, ann.fontFamily)) * scale
         ctx.fillStyle = hexToRgba(ann.color, 0.08)
         ctx.strokeStyle = ann.color
         ctx.lineWidth = 2 * Math.min(scale, 2)
@@ -213,7 +214,7 @@ export function paintAnnotations(
         ctx.globalAlpha = ann.opacity
         ctx.stroke()
         ctx.fillStyle = ann.color
-        ctx.font = `${fontSize}px ${FONT_FAMILY}`
+        ctx.font = `${fontSize}px ${fontCss(ann.fontFamily)}`
         ctx.textAlign = 'center'
         const center = pdfPointToScreen(viewport, {
           x: ann.bbox.x + ann.bbox.w / 2,

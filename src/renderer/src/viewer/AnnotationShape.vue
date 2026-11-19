@@ -5,6 +5,7 @@ import type { Annotation } from '@shared/types'
 import { measureCjkText } from '../lib/canvasannot'
 import { pdfPointToScreen, pdfRectToScreen } from '../lib/geo'
 import { annotState } from '../store/annotations'
+import { fontCss } from '../store/fonts'
 import { fitFontSize, pointsToMm, textBlockFrame, textLocalToPdf, wrapText } from '@shared/text'
 
 const props = defineProps<{ ann: Annotation; viewport: PageViewport; translate?: string }>()
@@ -18,7 +19,7 @@ const textLines = computed(() => {
   const ann = props.ann
   if (ann.kind !== 'text') return []
   const frame = textBlockFrame(ann.bbox, ann.rotate)
-  const lines = wrapText(ann.text, Math.max(frame.run, 8), (s) => measureCjkText(s, ann.fontSize))
+  const lines = wrapText(ann.text, Math.max(frame.run, 8), (s) => measureCjkText(s, ann.fontSize, ann.fontFamily))
   const screenAngle = ((vp.value.rotation - ann.rotate) % 360 + 360) % 360
   return lines.map((line, index) => {
     const baselinePdf = textLocalToPdf(ann.bbox, ann.rotate, 0, ann.fontSize + index * ann.fontSize * 1.2)
@@ -68,7 +69,7 @@ const stampGeom = computed(() => {
   const ann = props.ann
   if (ann.kind !== 'stamp') return null
   const frame = textBlockFrame(ann.bbox, ann.rotate)
-  const fontSize = fitFontSize(ann.label, { w: frame.run, h: frame.stack }, (s, size) => measureCjkText(s, size))
+  const fontSize = fitFontSize(ann.label, { w: frame.run, h: frame.stack }, (s, size) => measureCjkText(s, size, ann.fontFamily))
   const center = pdfPointToScreen(vp.value, {
     x: ann.bbox.x + ann.bbox.w / 2,
     y: ann.bbox.y + ann.bbox.h / 2
@@ -170,6 +171,7 @@ const imageHref = computed(() => (props.ann.kind === 'image' ? annotState.imageU
         :fill="ann.color"
         :fill-opacity="ann.opacity"
         :transform="`rotate(${line.angle}, ${line.x}, ${line.y})`"
+        :style="{ fontFamily: fontCss(ann.fontFamily) }"
         class="text-ann"
       >
         {{ line.line || ' ' }}
@@ -227,6 +229,7 @@ const imageHref = computed(() => (props.ann.kind === 'image' ? annotState.imageU
         :font-size="stampGeom.fontSize"
         :fill="ann.color"
         text-anchor="middle"
+        :style="{ fontFamily: fontCss(ann.fontFamily) }"
         class="stamp-label"
       >
         {{ ann.label }}

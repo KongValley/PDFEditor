@@ -52,6 +52,7 @@ import { abortOfdExport, addOfdExportPage, commitOfdExport, prepareOfdExport } f
 import { getRecentPage, listRecentFiles, setRecentPage } from './lib/recent'
 import { isSmokeMode } from './smoke'
 import { extractEditorAnnotations, findCjkFontFile, writeAnnotations } from './lib/pdflibwrite'
+import { listSystemFonts } from './lib/fonts'
 import type {
   Annotation,
   ChooseFileResult,
@@ -66,7 +67,8 @@ import type {
   SaveResult,
   SidecarData,
   SplitTask,
-  SplitTaskResult
+  SplitTaskResult,
+  SystemFontInfo
 } from '@shared/types'
 import { getLogDir, getLogLevel, logEvent, setLogLevel } from './lib/logger'
 
@@ -692,6 +694,18 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
 
   ipcMain.handle('app:recentGet', (_e, filePath: string) =>
     guard(async () => ({ ok: true, page: await getRecentPage(String(filePath)) }))
+  )
+
+  // 注释字体下拉框:只返回字族名与本地化显示名,路径留在主进程
+  ipcMain.handle(
+    'fonts:list',
+    async (): Promise<{ ok: boolean; fonts?: SystemFontInfo[]; error?: string }> => {
+      try {
+        return { ok: true, fonts: await listSystemFonts() }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    }
   )
 
   ipcMain.handle('app:recentList', async (): Promise<Array<{ path: string; page: number; at: number }>> => {

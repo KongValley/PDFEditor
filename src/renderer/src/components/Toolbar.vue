@@ -6,6 +6,7 @@ import { canRedo, canUndo, removeSelected, redo, undo } from '../store/annotatio
 import { rotateView } from '../store/viewer'
 import { exportCurrentPageImage, openFileDialog, openImageToPdfDialog, openOfdExportDialog, printPagesDialog, saveDocument, saveDocumentAs } from '../lib/actions'
 import { STAMPS, STAMP_KEYS } from '../lib/annots'
+import FontSelect from './FontSelect.vue'
 
 const TOOLS: Array<{ tool: Tool; label: string; title: string }> = [
   { tool: 'select', label: '选择', title: '选择 / 移动注释' },
@@ -84,6 +85,13 @@ const busy = computed(() => ui.busy !== null)
       <select v-if="ui.tool === 'stamp'" v-model="ui.stampKey" class="stamp-select" title="选择图章">
         <option v-for="key in STAMP_KEYS" :key="key" :value="key">{{ STAMPS[key].label }}</option>
       </select>
+      <FontSelect
+        v-if="ui.tool === 'text' || ui.tool === 'stamp'"
+        v-model="ui.fontFamily"
+        class="font-select"
+        :disabled="!hasDoc"
+        title="新建文字/图章注释使用的字体(本机已安装字体)"
+      />
     </div>
   </header>
 </template>
@@ -122,6 +130,11 @@ const busy = computed(() => ui.busy !== null)
 }
 
 .stamp-select {
+  padding: 3px 4px;
+}
+
+.font-select {
+  max-width: 220px;
   padding: 3px 4px;
 }
 
