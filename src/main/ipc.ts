@@ -121,14 +121,17 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
   ipcMain.handle(
     'app:chooseFile',
     async (_e, payload: { multi?: boolean; allowOfd?: boolean }): Promise<ChooseFileResult> => {
-      // allowOfd 只给主打开入口:合并/拆分选文件只认 PDF(OFD 需先导入转 PDF)
+      // allowOfd 只给主打开入口:合并/拆分选文件只认 PDF(OFD/ODF 需先导入转 PDF)
       const multi = !!payload?.multi
       const allowOfd = !!payload?.allowOfd
       const options: OpenDialogOptions = {
-        title: allowOfd ? '打开 PDF / OFD 文件' : '打开 PDF 文件',
+        title: allowOfd ? '打开 PDF / OFD / ODF 文件' : '打开 PDF 文件',
         filters: [
           allowOfd
-            ? { name: 'PDF / OFD 文件', extensions: ['pdf', 'ofd'] }
+            ? {
+                name: 'PDF / OFD / ODF 文件',
+                extensions: ['pdf', 'ofd', 'odt', 'ods', 'odp', 'fodt', 'fods', 'fodp', 'ott', 'ots', 'otp']
+              }
             : { name: 'PDF 文件', extensions: ['pdf'] }
         ],
         properties: multi ? ['openFile', 'multiSelections'] : ['openFile']
@@ -426,10 +429,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): void {
           targetPath = result.filePath
         }
 
-        // 兜底守卫:OFD 源文档(已转成 PDF 工作)绝不能原地写回 .ofd —— 那会把用户的源文件
-        // 换成一个扩展名不匹配的 PDF。渲染层已强制走另存为,这里防的是直接传 targetPath 的调用方。
-        if (/\.ofd$/i.test(targetPath)) {
-          return { ok: false, error: 'OFD 文件不能原地保存为 PDF,请另存为 .pdf' }
+        // 兜底守卫:OFD/ODF 源文档(已转成 PDF 工作)绝不能原地写回源文件 —— 那会把用户的
+        // 源文件换成一个扩展名不匹配的 PDF。渲染层已强制走另存为,这里防的是直接传 targetPath 的调用方。
+        if (/\.(ofd|odt|ods|odp|fodt|fods|fodp|ott|ots|otp)$/i.test(targetPath)) {
+          return { ok: false, error: 'OFD/ODF 文件不能原地保存为 PDF,请另存为 .pdf' }
         }
 
         await mkdir(dirname(targetPath), { recursive: true })

@@ -44,7 +44,8 @@ const allScripts = [
   'step30-full-flow.js',
   'step31-relaunch.js',
   'step32-ofd.js',
-  'step33-fonts.js'
+  'step33-fonts.js',
+  'step34-odf.js'
 ]
 
 // --only=step30-full-flow,step31-relaunch:只跑指定步骤(名字不带 .js),用于全流程回归。
@@ -74,7 +75,7 @@ if (!existsSync(join(root, 'samples', 'sample-zh.pdf'))) {
 // (step14/15/28 的「保存直存」「另存为」之外的路径),一次崩在中途的运行会把批注留在
 // 样本里,导致下一次跑出「注释多了 2 条」这类与代码无关的假红。这里每次开跑前重生成,
 // samples/ 本就不入版本库(代价 ≈0.2s)。
-for (const script of ['make-samples.mjs', 'make-outline-sample.mjs', 'make-ofd-sample.mjs']) {
+for (const script of ['make-samples.mjs', 'make-outline-sample.mjs', 'make-ofd-sample.mjs', 'make-odf-samples.mjs']) {
   const reset = spawnSync(process.execPath, [join(root, 'scripts', script)], { cwd: root, stdio: 'inherit' })
   if (reset.status !== 0) {
     console.error(`重生成夹具失败:${script}`)
@@ -120,6 +121,7 @@ const e2eDir = join(tmpDir, 'e2e')
 const e2eDialogDir = join(e2eDir, 'dialog')
 // step32 的保存对话框替身目录:每轮清空,保证 <源名>.pdf 是首次落盘(断言默认名不受 -1 干扰)
 rmSync(join(tmpDir, 'dialog-ofd'), { recursive: true, force: true })
+rmSync(join(tmpDir, 'dialog-odf'), { recursive: true, force: true })
 rmSync(e2eDir, { recursive: true, force: true })
 mkdirSync(e2eDialogDir, { recursive: true })
 for (const [source, target] of [
@@ -166,7 +168,8 @@ const STEP_TIMEOUTS = {
   'step29-error-paths.js': '180000',
   'step30-full-flow.js': '240000',
   'step31-relaunch.js': '120000',
-  'step33-fonts.js': '120000'
+  'step33-fonts.js': '120000',
+  'step34-odf.js': '180000'
 }
 
 // 跨进程全流程:step31 复用 step30 的 profile(最近文件、阅读位置、日志)
@@ -178,7 +181,8 @@ const STEP_USERDATA = {
 const STEP_SHOTS = {
   'step30-full-flow.js': join(tmpDir, 'smoke-step30-full-flow.png'),
   'step31-relaunch.js': join(tmpDir, 'smoke-step31-relaunch.png'),
-  'step33-fonts.js': join(tmpDir, 'smoke-step33-fonts.png')
+  'step33-fonts.js': join(tmpDir, 'smoke-step33-fonts.png'),
+  'step34-odf.js': join(tmpDir, 'smoke-step34-odf.png')
 }
 
 // 按步注入的环境变量:只有这两步需要(原生对话框替身 / 强制走「缺中文字体」路径)
@@ -187,6 +191,7 @@ const STEP_ENV = {
   'step29-error-paths.js': { PDF_EDITOR_SMOKE_CJK_FONT: 'none' },
   // step32 的保存语义断言需要保存对话框替身(OFD 源另存为 .pdf)
   'step32-ofd.js': { PDF_EDITOR_SMOKE_DIALOG_DIR: join(tmpDir, 'dialog-ofd') },
+  'step34-odf.js': { PDF_EDITOR_SMOKE_DIALOG_DIR: join(tmpDir, 'dialog-odf') },
   'step30-full-flow.js': {
     PDF_EDITOR_SMOKE_DIALOG_DIR: e2eDialogDir,
     PDF_EDITOR_SMOKE_OPEN_FILE: 'open-me.pdf'

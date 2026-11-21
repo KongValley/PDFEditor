@@ -124,12 +124,13 @@ export async function openPath(path: string): Promise<void> {
     await restoreSidecar()
     if (token !== currentOpenToken()) return
     await maybeRestoreLastPage(docState.filePath ?? path)
-    // OFD 源提示放在最后:恢复阅读位置也会 toast 一条,而「保存必须另存为 .pdf」更该被看见
-    if (docState.sourceKind === 'ofd') {
-      showToast('已把 OFD 转换为 PDF(保存时请另存为 .pdf)')
+    // OFD/ODF 源提示放在最后:恢复阅读位置也会 toast 一条,而「保存必须另存为 .pdf」更该被看见
+    if (docState.sourceKind !== 'pdf') {
+      const label = docState.sourceKind === 'odf' ? 'ODF' : 'OFD'
+      showToast(`已把 ${label} 转换为 PDF(保存时请另存为 .pdf)`)
       if (docState.ofdWarnings.length > 0) {
-        pushProblem({ title: 'OFD 转换提示', detail: docState.ofdWarnings.join('\n') })
-        showToast(`OFD 转换完成,有 ${docState.ofdWarnings.length} 条提示`)
+        pushProblem({ title: `${label} 转换提示`, detail: docState.ofdWarnings.join('\n') })
+        showToast(`${label} 转换完成,有 ${docState.ofdWarnings.length} 条提示`)
       }
     }
   } finally {
@@ -142,9 +143,9 @@ export function confirmDiscardChanges(): boolean {
   return !docState.dirty || window.confirm('当前文档有未保存的更改,确定放弃吗?')
 }
 
-/** 保存:直写当前路径(无路径时回退保存对话框);OFD 源文档永不原地写回,一律走另存为 */
+/** 保存:直写当前路径(无路径时回退保存对话框);OFD/ODF 源文档永不原地写回,一律走另存为 */
 export async function saveDocument(): Promise<void> {
-  await saveTo(docState.sourceKind === 'ofd' ? undefined : (docState.filePath ?? undefined))
+  await saveTo(docState.sourceKind === 'pdf' ? (docState.filePath ?? undefined) : undefined)
 }
 
 /** 另存为:总是弹保存对话框 */
@@ -171,8 +172,8 @@ async function saveTo(targetPath: string | undefined): Promise<void> {
     const version = editVersion()
     const result = (await window.pdfAPI.invoke('save:saveAs', {
       docId,
-      // OFD 源:默认名换成同名 .pdf,绝不把 .ofd 交给保存对话框(否则会覆盖源文件)
-      defaultPath: docState.sourceKind === 'ofd' ? `${fileStem()}.pdf` : (docState.filePath ?? 'document.pdf'),
+      // OFD/ODF 源:默认名换成同名 .pdf,绝不把源文件扩展名交给保存对话框(否则会覆盖源文件)
+      defaultPath: docState.sourceKind === 'pdf' ? (docState.filePath ?? 'document.pdf') : `${fileStem()}.pdf`,
       targetPath,
       annotations: exportAnnotations(),
       formValues: { ...docState.formValues }

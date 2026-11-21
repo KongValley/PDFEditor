@@ -31,7 +31,7 @@ const busy = computed(() => ui.busy !== null)
   <header class="toolbar">
     <div class="toolbar-row">
       <span class="app-title">PDF 编辑器</span>
-      <button :disabled="busy" title="打开 PDF (Ctrl+O)" @click="openFileDialog">打开</button>
+      <button :disabled="busy" title="打开 PDF / OFD / ODF (Ctrl+O)" @click="openFileDialog">打开</button>
       <button :disabled="busy" title="把 PNG/JPEG 图片合并为一份 PDF" @click="openImageToPdfDialog()">图片转 PDF</button>
       <button :disabled="!hasDoc || busy" title="保存 PDF (Ctrl+S)" @click="saveDocument">保存</button>
       <button :disabled="!hasDoc || busy" title="另存为 (Ctrl+Shift+S)" @click="saveDocumentAs">另存为</button>

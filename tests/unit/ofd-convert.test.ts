@@ -6,7 +6,7 @@ import { PDFDocument } from 'pdf-lib'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { writeOfdFromImages } from '../../src/main/lib/ofd/frompdf'
 import { parseOfdPackage } from '../../src/main/lib/ofd/model'
-import { convertOfdToPdf } from '../../src/main/lib/ofd/topdf'
+import { convertOfdToPdf, ctmTransform } from '../../src/main/lib/ofd/topdf'
 import { crc32, readZipEntries, writeZipStored, type ZipWriteEntry } from '../../src/main/lib/ofd/zip'
 
 const NS = 'http://www.ofdspec.org/2016'
@@ -342,8 +342,10 @@ describe('convertOfdToPdf', () => {
     // 填充与描边分别落到 f / S:模板是 Fill=true 无描边,矩形框是 Stroke=true 不填充
     expect(content).toContain('h\nf')
     expect(content).toContain('h\nS')
-    // 不支持的 BMP 只告警不中断
-    expect(result.warnings.some((warning) => warning.includes('不支持的图片格式'))).toBe(true)
+    // 不支持的图片只告警不中断(BMP 会先转 PNG;夹具里是畸形 BMP,应给出 BMP 变体告警)
+    expect(
+      result.warnings.some((warning) => warning.includes('BMP') || warning.includes('不支持的图片格式'))
+    ).toBe(true)
     // 文字描边与渐变填充都不实现:必须如实告警,不能静默丢内容
     expect(result.warnings.some((warning) => warning.includes('文字描边'))).toBe(true)
     expect(result.warnings.some((warning) => warning.includes('渐变/图案填充不支持'))).toBe(true)
@@ -391,5 +393,17 @@ describe('convertOfdToPdf', () => {
     expect(result.ok).toBe(false)
     if (result.ok) throw new Error('不应成功')
     expect(result.error).toContain('OFD')
+  })
+})
+
+describe('ctmTransform', () => {
+  it('普通旋转保留旋转角,镜像矩阵不叠加旋转', () => {
+    expect(ctmTransform({ a: 0, b: 1, c: -1, d: 0, e: 0, f: 0 }).rotationDeg).toBeCloseTo(90)
+    // 水平镜像:行列式为负,不能被 atan2 误判成 180° 旋转
+    expect(ctmTransform({ a: -1, b: 0, c: 0, d: 1, e: 0, f: 0 }).rotationDeg).toBe(0)
+    // 缩放不产生旋转
+    const scaled = ctmTransform({ a: 0.3527778, b: 0, c: 0, d: 0.3527778, e: 0, f: 0 })
+    expect(scaled.rotationDeg).toBe(0)
+    expect(scaled.scaleX).toBeCloseTo(0.3527778)
   })
 })

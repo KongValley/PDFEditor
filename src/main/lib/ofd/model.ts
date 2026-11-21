@@ -6,9 +6,11 @@
  * 单位:页面空间与对象空间都是毫米,原点左上、Y 向下(见规范 8.1.3/8.1.4)。
  */
 import { DOMParser } from '@xmldom/xmldom'
-import { looksLikeZip, readZipEntries, zipEntryNames } from './zip'
+import { detectDocumentKind, type DocKind } from '../documentkind'
+import { readZipEntries } from './zip'
 
-export type DocKind = 'pdf' | 'ofd' | 'other'
+export type { DocKind }
+export { detectDocumentKind }
 
 export interface OfdBox {
   x: number
@@ -176,29 +178,8 @@ export interface OfdPackage {
 }
 
 // ---------------------------------------------------------------------------
-// 格式判定
+// 格式判定(实现已抽到 ../documentkind,OFD/ODF 共用)
 // ---------------------------------------------------------------------------
-
-/**
- * 判源文件格式:
- * - PDF 头 → 'pdf'
- * - ZIP 且包根有 OFD.xml → 'ofd'
- * - 是 ZIP 但没有 OFD.xml(或 ZIP 本身读不了)→ 'other'
- * - 其余 → 'pdf'(沿用现有「无法解析 PDF」报错路径,行为与改造前一致)
- */
-export function detectDocumentKind(buffer: Uint8Array): DocKind {
-  if (buffer.length >= 4 && buffer[0] === 0x25 && buffer[1] === 0x50 && buffer[2] === 0x44 && buffer[3] === 0x46) {
-    return 'pdf'
-  }
-  if (!looksLikeZip(buffer)) return 'pdf'
-  try {
-    const names = zipEntryNames(buffer)
-    if (names.includes('OFD.xml')) return 'ofd'
-    return names.some((name) => !name.includes('/') && name.toLowerCase() === 'ofd.xml') ? 'ofd' : 'other'
-  } catch {
-    return 'other'
-  }
-}
 
 // ---------------------------------------------------------------------------
 // XML 小工具(元素节点用命名空间,属性不用;前缀 ofd: 一律忽略)
@@ -207,13 +188,15 @@ export function detectDocumentKind(buffer: Uint8Array): DocKind {
 const ELEMENT_NODE = 1
 
 /** 取元素本地名并剥掉命名空间前缀(xmldom 是否已解析前缀都适用) */
-function localNameOf(node: { localName?: string | null; nodeName: string }): string {
+export function localNameOf(node: { localName?: string | null; nodeName: string }): string {
   const name = node.localName ?? node.nodeName
   const colon = name.indexOf(':')
   return colon >= 0 ? name.slice(colon + 1) : name
 }
 
 export function parseXml(text: string): Document {
+  // OFD/ODF 的 XML 都不使用 DTD;拒绝 DOCTYPE 可避免实体展开类攻击(XXE/十亿笑声)
+  if (/<!DOCTYPE/i.test(text)) throw new Error('XML 包含不支持的 DOCTYPE 声明')
   const parser = new DOMParser({
     errorHandler: {
       warning: () => undefined,
@@ -228,15 +211,19 @@ export function parseXml(text: string): Document {
   return parser.parseFromString(text, 'text/xml')
 }
 
-/** 直接子元素(按本地名过滤) */
-export function children(el: Element, name: string): Element[] {
+/** 全部直接子元素(按文档顺序) */
+export function elementChildren(el: Element): Element[] {
   const out: Element[] = []
   for (let node = el.firstChild; node; node = node.nextSibling) {
     if (node.nodeType !== ELEMENT_NODE) continue
-    const element = node as unknown as Element
-    if (localNameOf(element) === name) out.push(element)
+    out.push(node as unknown as Element)
   }
   return out
+}
+
+/** 直接子元素(按本地名过滤) */
+export function children(el: Element, name: string): Element[] {
+  return elementChildren(el).filter((element) => localNameOf(element) === name)
 }
 
 export function child(el: Element, name: string): Element | null {

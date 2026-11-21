@@ -5,8 +5,9 @@ import { randomUUID } from 'node:crypto'
 import { PDFDocument } from 'pdf-lib'
 import type { Annotation, OpenResult, SidecarData } from '@shared/types'
 import { extractEditorAnnotations } from './pdflibwrite'
-import { detectDocumentKind } from './ofd/model'
+import { detectDocumentKind } from './documentkind'
 import { convertOfdToPdf } from './ofd/topdf'
+import { convertOdfToPdf } from './odf/topdf'
 
 /**
  * 原子写:先写同目录临时文件再 rename 覆盖。
@@ -206,15 +207,27 @@ export async function openDocument(filePath: string, options: ReadProgress = {})
     return { ok: false, error: 'unknown', errorMessage: `无法读取文件:${(err as Error).message}` }
   }
 
-  // OFD 是 ZIP 容器,不是 PDF:先转成 PDF 字节,后续流程(页数、批注、range 流式加载)完全复用
+  // OFD/ODF 都是 ZIP 容器(ODF 还可能是单文件扁平 XML),不是 PDF:
+  // 先转成 PDF 字节,后续流程(页数、批注、range 流式加载)完全复用
   const kind = detectDocumentKind(buffer)
   if (kind === 'other') {
-    return { ok: false, error: 'corrupt', errorMessage: '不是有效的 PDF 或 OFD 文件' }
+    return { ok: false, error: 'corrupt', errorMessage: '不是有效的 PDF、OFD 或 ODF 文件' }
   }
   const warnings: string[] = []
   let pdfBuffer = buffer
   if (kind === 'ofd') {
     const converted = await convertOfdToPdf(buffer, {
+      onProgress: (done, total) => options.onProgress?.(done, total, 'convert'),
+      signal: options.signal
+    })
+    warnings.push(...converted.warnings)
+    if (!converted.ok) {
+      if (converted.error === 'canceled') return { ok: false, error: 'canceled', errorMessage: '已取消' }
+      return { ok: false, error: 'corrupt', errorMessage: converted.error }
+    }
+    pdfBuffer = Buffer.from(converted.bytes)
+  } else if (kind === 'odf') {
+    const converted = await convertOdfToPdf(buffer, {
       onProgress: (done, total) => options.onProgress?.(done, total, 'convert'),
       signal: options.signal
     })
@@ -265,8 +278,8 @@ export async function openDocument(filePath: string, options: ReadProgress = {})
     pageCount,
     encrypted,
     annotations,
-    // OFD 源没有 PDF 的 sidecar 语义:不读 <源名>.ofdanno.json
-    sidecar: kind === 'ofd' ? null : readSidecar(filePath),
+    // OFD/ODF 源没有 PDF 的 sidecar 语义:不读 <源名>.ofdanno.json
+    sidecar: kind === 'pdf' ? readSidecar(filePath) : null,
     kind,
     warnings
   }

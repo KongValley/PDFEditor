@@ -169,11 +169,11 @@ describe('openDocument 的格式判定', () => {
     if (result.docId) releaseDocument(result.docId)
   })
 
-  it('是 ZIP 但没有 OFD.xml 时给出明确提示', async () => {
+  it('是 ZIP 但没有 OFD.xml/content.xml 时给出明确提示', async () => {
     const target = join(dir, 'not-ofd.zip')
     await writeZipStored(target, [{ name: 'readme.txt', data: 'x' }])
     const result = await openDocument(target)
     expect(result.ok).toBe(false)
-    expect(result.errorMessage).toBe('不是有效的 PDF 或 OFD 文件')
+    expect(result.errorMessage).toBe('不是有效的 PDF、OFD 或 ODF 文件')
   })
 })

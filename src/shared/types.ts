@@ -216,11 +216,16 @@ export interface OpenResult {
   stream?: 'range' | 'buffer'
   /** 文件总字节数(stream='range' 时必需) */
   fileSize?: number
-  /** 源文件格式:'ofd' 表示当前工作文档是由 OFD 转换来的 PDF(保存时必须另存为 .pdf) */
-  kind?: 'pdf' | 'ofd'
+  /** 源文件格式:'ofd'/'odf' 表示当前工作文档是由 OFD/ODF 转换来的 PDF(保存时必须另存为 .pdf) */
+  kind?: 'pdf' | 'ofd' | 'odf'
   /** 转换过程中的提示(缺字体/不支持的图元等),渲染层汇总进「问题」面板 */
   warnings?: string[]
 }
+
+/** ODF(WPS/LibreOffice 的 OpenDocument)转换结果 */
+export type OdfConvertResult =
+  | { ok: true; bytes: Uint8Array; pages: number; warnings: string[] }
+  | { ok: false; error: string; warnings: string[] }
 
 /** PDF → 图片页 OFD 导出的作业结果 */
 export interface OfdExportResult {

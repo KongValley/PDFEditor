@@ -84,9 +84,9 @@ interface DocState {
   dirty: boolean
   /** 打开时从 PDF /Annots 提取的本应用批注(sidecar 兜底前的首选来源) */
   pdfAnnotations: Annotation[]
-  /** 源文件格式:'ofd' = 当前工作文档由 OFD 转换而来(保存时必须另存为 .pdf,不能写回源文件) */
-  sourceKind: 'pdf' | 'ofd'
-  /** OFD 转换提示(缺字体/不支持的图元等),打开后汇总进「问题」面板 */
+  /** 源文件格式:'ofd'/'odf' = 当前工作文档由 OFD/ODF 转换而来(保存时必须另存为 .pdf,不能写回源文件) */
+  sourceKind: 'pdf' | 'ofd' | 'odf'
+  /** OFD/ODF 转换提示(缺字体/不支持的图元等),打开后汇总进「问题」面板 */
   ofdWarnings: string[]
 }
 
@@ -297,7 +297,10 @@ export async function openByPath(path: string, options: OpenOptions = {}): Promi
     const total = info?.total ?? 0
     if (total <= 0) return
     const percent = Math.round(((info?.read ?? 0) / total) * 100)
-    docState.loadProgress = info?.phase === 'convert' ? `正在转换 OFD ${percent}%` : `正在读取文件 ${percent}%`
+    const converting = info?.phase === 'convert'
+    docState.loadProgress = converting
+      ? `正在转换 ${/\.(odt|ods|odp|fodt|fods|fodp|ott|ots|otp)$/i.test(path) ? 'ODF' : 'OFD'} ${percent}%`
+      : `正在读取文件 ${percent}%`
   })
   try {
     const result = (await window.pdfAPI.invoke('doc:open', path)) as OpenResult

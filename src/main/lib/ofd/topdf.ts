@@ -11,12 +11,13 @@
  *  - 文字描边(TextObject Stroke)、裁剪区(Clips)、渐变/底纹/图案、颜色空间与调色板;
  *  - Even-Odd 填充规则(pdf-lib 只支持非零绕数);
  *  - 未内嵌且本机缺失的字体 → 用替代字体或跳过不可编码字符;
- *  - BMP/TIFF/JBIG2 图片资源(只嵌 PNG/JPEG)。
+ *  - TIFF/JBIG2 图片资源(只嵌 PNG/JPEG/BMP;BMP 会先转成 PNG)。
  */
 import { readFileSync } from 'node:fs'
 import { PDFDocument, StandardFonts, degrees, rgb, type Color, type PDFFont, type PDFImage, type PDFPage, type PDFPageDrawTextOptions } from 'pdf-lib'
 import fontkit from '@pdf-lib/fontkit'
 import { findCjkFontFile, savePdf } from '../pdflibwrite'
+import { decodeBmpToPng } from './bmp'
 import {
   parseOfdPackage,
   type OfdBox,
@@ -94,9 +95,10 @@ function pickStandardFont(res: OfdFontRes | undefined): StandardFonts {
 }
 
 /** 图片字节头判定(不复用 images.ts:mimeOf —— 那个模块顶层 import electron) */
-function imageKind(bytes: Uint8Array): 'png' | 'jpeg' | null {
+function imageKind(bytes: Uint8Array): 'png' | 'jpeg' | 'bmp' | null {
   if (bytes.length > 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return 'png'
   if (bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'jpeg'
+  if (bytes.length > 2 && bytes[0] === 0x42 && bytes[1] === 0x4d) return 'bmp'
   return null
 }
 
@@ -114,6 +116,25 @@ function fmt(n: number): string {
 function mapPoint(ctm: OfdMatrix | null, x: number, y: number): [number, number] {
   if (!ctm) return [x, y]
   return [ctm.a * x + ctm.c * y + ctm.e, ctm.b * x + ctm.d * y + ctm.f]
+}
+
+/**
+ * CTM 的缩放与旋转分量。文字尺寸按规范已是页面 mm,不再乘缩放(sample-ofd 里
+ * CTM=0.3528 只把 pt 坐标换算成 mm);但旋转必须叠加到每个字型上,否则
+ * 印章/竖排这类带旋转 CTM 的文字会横着画在旁边。
+ */
+export function ctmTransform(ctm: OfdMatrix | null): { scaleX: number; scaleY: number; rotationDeg: number } {
+  if (!ctm) return { scaleX: 1, scaleY: 1, rotationDeg: 0 }
+  const scaleX = Math.hypot(ctm.a, ctm.b)
+  const scaleY = Math.hypot(ctm.c, ctm.d)
+  // 行列式为负表示镜像,不是纯旋转;atan2 会把它误判成 90°/180° 旋转,
+  // 因此镜像场景不加旋转(保持改动前的正立文字,位置仍按 CTM 映射)
+  const determinant = ctm.a * ctm.d - ctm.b * ctm.c
+  return {
+    scaleX: scaleX > 1e-6 ? scaleX : 1,
+    scaleY: scaleY > 1e-6 ? scaleY : 1,
+    rotationDeg: determinant >= 0 ? (Math.atan2(ctm.b, ctm.a) * 180) / Math.PI : 0
+  }
 }
 
 async function render(
@@ -222,7 +243,11 @@ async function render(
     const color = object.fillColor ?? { r: 0, g: 0, b: 0, alpha: 1 }
     const baseX = object.boundary.x
     const baseY = object.boundary.y
-    const rotate = degrees(-object.charDirection)
+    const ctm = ctmTransform(object.ctm)
+    // 字符方向与 CTM 旋转叠加:CTM 旋转为正表示对象坐标顺时针(OFD y 向下),
+    // PDF 的 rotate 为逆时针,所以整体取负
+    const rotateDegrees = -(object.charDirection + ctm.rotationDeg)
+    const rotate = degrees(rotateDegrees)
 
     for (const code of object.codes) {
       if (code.deltaInvalid && !warnedDelta) {
@@ -234,7 +259,7 @@ async function render(
       if (!text) continue
       const startX = code.x ?? 0
       const startY = code.y ?? 0
-      const simple = object.readDirection === 0 && object.charDirection === 0 && !code.deltaX && !code.deltaY
+      const simple = object.readDirection === 0 && Math.abs(rotateDegrees) < 0.01 && !code.deltaX && !code.deltaY
       if (simple) {
         const [px, py] = mapPoint(object.ctm, startX, startY)
         drawText(page, text, {
@@ -248,7 +273,7 @@ async function render(
         continue
       }
       // 逐字型定位:DeltaX/DeltaY 是「后一字型相对前一字型」的偏移(规范表 46);
-      // 缺失时用字体自然步进。阅读方向决定推进轴,字符方向决定每个字型自身的旋转。
+      // 缺失时用字体自然步进。阅读方向决定推进轴,字符方向/CTM 决定每个字型自身的旋转。
       const glyphs = [...text]
       let cursorX = startX
       let cursorY = startY
@@ -266,7 +291,9 @@ async function render(
         })
         const deltaX = code.deltaX?.[i]
         const deltaY = code.deltaY?.[i]
-        const natural = font.widthOfTextAtSize(glyphs[i], sizePt) / MM_TO_PT
+        // 自然步进是页面 mm;光标在对象坐标里走,CTM 缩放要除掉
+        const natural =
+          font.widthOfTextAtSize(glyphs[i], sizePt) / MM_TO_PT / (vertical ? ctm.scaleY : ctm.scaleX)
         const advance = (vertical ? (deltaY ?? natural) : (deltaX ?? natural)) * object.hScale
         if (vertical) {
           cursorY += object.readDirection === 90 ? advance : -advance
@@ -387,6 +414,13 @@ async function render(
         imageCache.set(object.resourceId, await doc.embedPng(bytes))
       } else if (kind === 'jpeg') {
         imageCache.set(object.resourceId, await doc.embedJpg(bytes))
+      } else if (kind === 'bmp') {
+        const decoded = decodeBmpToPng(bytes)
+        if (decoded) imageCache.set(object.resourceId, await doc.embedPng(decoded.png))
+        else {
+          warnings.push(`BMP 图片变体不受支持(RLE 等):${res.path}`)
+          imageCache.set(object.resourceId, null)
+        }
       } else {
         warnings.push(`不支持的图片格式:${res.format || '未知'}(${res.path})`)
         imageCache.set(object.resourceId, null)

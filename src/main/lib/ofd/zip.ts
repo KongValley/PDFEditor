@@ -21,6 +21,9 @@ const ZIP64_MARK16 = 0xffff
 const ZIP64_MARK32 = 0xffffffff
 const EOCD_MIN = 22
 const EOCD_MAX_COMMENT = 0xffff
+/** 解压上限(防 zip bomb:畸形包声明极小压缩体、解压后几个 GB) */
+const MAX_ENTRY_BYTES = 256 * 1024 * 1024
+const MAX_TOTAL_BYTES = 512 * 1024 * 1024
 
 let crcTable: Int32Array | null = null
 
@@ -88,10 +91,10 @@ function readCentralDirectory(buffer: Uint8Array): ZipEntryMeta[] {
   const cdSize = u32(buffer, eocd + 12)
   const cdOffset = u32(buffer, eocd + 16)
   if (total === ZIP64_MARK16 || cdSize === ZIP64_MARK32 || cdOffset === ZIP64_MARK32) {
-    throw new Error('zip64 不受支持,请用支持 zip64 的工具重新导出 OFD')
+    throw new Error('zip64 不受支持,请用支持 zip64 的工具重新导出文件')
   }
   if (eocd >= 20 && u32(buffer, eocd - 20) === ZIP64_LOCATOR_SIG) {
-    throw new Error('zip64 不受支持,请用支持 zip64 的工具重新导出 OFD')
+    throw new Error('zip64 不受支持,请用支持 zip64 的工具重新导出文件')
   }
   if (cdOffset + cdSize > buffer.length) throw new Error('ZIP 中央目录越界,文件可能已损坏')
 
@@ -122,36 +125,55 @@ export function zipEntryNames(buffer: Uint8Array): string[] {
   return readCentralDirectory(buffer).map((meta) => meta.name)
 }
 
+/** 解出一个中央目录条目(方法 0 / 8);结构损坏时抛中文错误 */
+function extractEntry(buffer: Uint8Array, meta: ZipEntryMeta): Uint8Array {
+  const { localOffset, name, compSize, method } = meta
+  if (localOffset + 30 > buffer.length || u32(buffer, localOffset) !== LOCAL_SIG) {
+    throw new Error(`ZIP 条目损坏:${name}`)
+  }
+  const localNameLen = u16(buffer, localOffset + 26)
+  const localExtraLen = u16(buffer, localOffset + 28)
+  const start = localOffset + 30 + localNameLen + localExtraLen
+  const end = start + compSize
+  if (end > buffer.length) throw new Error(`ZIP 条目越界:${name}`)
+  const raw = buffer.subarray(start, end)
+  if (method === 0) {
+    if (raw.length > MAX_ENTRY_BYTES) throw new Error(`ZIP 条目过大:${name}`)
+    return raw.slice()
+  }
+  if (method === 8) {
+    try {
+      const out = inflateRawSync(raw, { maxOutputLength: MAX_ENTRY_BYTES })
+      return new Uint8Array(out.buffer, out.byteOffset, out.byteLength)
+    } catch (err) {
+      throw new Error(`ZIP 条目解压失败:${name}(${(err as Error).message})`)
+    }
+  }
+  throw new Error(`不支持的压缩方式 ${method}:${name}`)
+}
+
+/**
+ * 只读单个条目(格式判定用):ODF 包的 mimetype 只有几十字节,
+ * 没必要为了判定格式把整包(含图片)inflate 一遍。
+ */
+export function readZipEntry(buffer: Uint8Array, name: string): Uint8Array | null {
+  const meta = readCentralDirectory(buffer).find((entry) => entry.name === name)
+  return meta ? extractEntry(buffer, meta) : null
+}
+
 /**
  * 解包:返回「包内路径 → 原始字节」。目录项(名以 / 结尾)不进结果。
  * 任何结构性问题都抛中文错误,由调用方转成用户可见提示。
  */
 export function readZipEntries(buffer: Uint8Array): Map<string, Uint8Array> {
   const entries = new Map<string, Uint8Array>()
+  let total = 0
   for (const meta of readCentralDirectory(buffer)) {
     if (meta.name.endsWith('/')) continue
-    const { localOffset, name, compSize, method } = meta
-    if (localOffset + 30 > buffer.length || u32(buffer, localOffset) !== LOCAL_SIG) {
-      throw new Error(`ZIP 条目损坏:${name}`)
-    }
-    const localNameLen = u16(buffer, localOffset + 26)
-    const localExtraLen = u16(buffer, localOffset + 28)
-    const start = localOffset + 30 + localNameLen + localExtraLen
-    const end = start + compSize
-    if (end > buffer.length) throw new Error(`ZIP 条目越界:${name}`)
-    const raw = buffer.subarray(start, end)
-    if (method === 0) {
-      entries.set(name, raw.slice())
-    } else if (method === 8) {
-      try {
-        const out = inflateRawSync(raw)
-        entries.set(name, new Uint8Array(out.buffer, out.byteOffset, out.byteLength))
-      } catch (err) {
-        throw new Error(`ZIP 条目解压失败:${name}(${(err as Error).message})`)
-      }
-    } else {
-      throw new Error(`不支持的压缩方式 ${method}:${name}`)
-    }
+    const bytes = extractEntry(buffer, meta)
+    total += bytes.length
+    if (total > MAX_TOTAL_BYTES) throw new Error('ZIP 解压后体积过大,已中止')
+    entries.set(meta.name, bytes)
   }
   return entries
 }
